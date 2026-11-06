@@ -29,10 +29,13 @@ PaneScroll :: struct {
 UiState :: struct {
 	dark:         bool,
 	hwnd:         windows.HWND,
+	tray_hwnd:    windows.HWND,
+	tray_menu_open: bool,
 	tray_added:   bool,
 	taskbar_created: u32,
 	edit:         windows.HWND,
 	date_picker:  windows.HWND,
+	date_popup, date_calendar: windows.HWND,
 	mem_dc:       windows.HDC,
 	mem_bmp:      windows.HBITMAP,
 	mem_bmp_old:  windows.HGDIOBJ,
@@ -80,24 +83,10 @@ HIT_THEME       :: 8
 HIT_TAB_BASE    :: 10 // +0..2
 HIT_LANE_BASE   :: 20 // +0..3
 
-// Native date picker (SysDateTimePick32) values missing from core:sys/windows.
-DTM_FIRST          :: 0x1000
-DTM_SETSYSTEMTIME  :: DTM_FIRST + 2
-DTM_GETSYSTEMTIME  :: DTM_FIRST + 3
-DTN_FIRST2         :: ~windows.DWORD(753 - 1)
-DTN_DATETIMECHANGE :: DTN_FIRST2 - 6 // -759, per WinSDK CommCtrl.h
-GDT_VALID          :: 0
-
-// tagNMDATETIMECHANGE: payload of DTN_DATETIMECHANGE (same process, in-proc).
-NMDATETIMECHANGE :: struct {
-	nmhdr:   windows.NMHDR,
-	dwFlags: windows.DWORD, // GDT_VALID in this app (no DTS_SHOWNONE)
-	st:      windows.SYSTEMTIME,
-}
-
 WNDC_CLASS :: "aika_window_class"
 APP_TIMER_ID :: 1
 TRAY_MESSAGE :: windows.WM_APP + 1
+TRAY_SHOW_MENU :: windows.WM_APP + 2
 TRAY_ICON_ID :: 1
 TRAY_OPEN :: 1001
 TRAY_EXIT :: 1002
@@ -105,8 +94,9 @@ TRAY_EXIT :: 1002
 // Keep the icon available even while the window is visible. Use the legacy
 // callback format (uID in wParam, mouse message in lParam).
 ui_add_tray :: proc() -> bool {
+	if ui.tray_hwnd == nil { return false }
 	data := windows.NOTIFYICONDATAW{
-		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.hwnd,
+		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.tray_hwnd,
 		uID = TRAY_ICON_ID, uFlags = windows.NIF_MESSAGE | windows.NIF_ICON | windows.NIF_TIP,
 		uCallbackMessage = TRAY_MESSAGE,
 		hIcon = windows.LoadIconW(nil, transmute(cstring16)(u64(32512))), // IDI_APPLICATION (shared)
@@ -119,7 +109,7 @@ ui_add_tray :: proc() -> bool {
 ui_remove_tray :: proc() {
 	if !ui.tray_added { return }
 	data := windows.NOTIFYICONDATAW{
-		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.hwnd, uID = TRAY_ICON_ID,
+		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.tray_hwnd, uID = TRAY_ICON_ID,
 	}
 	windows.Shell_NotifyIconW(windows.NIM_DELETE, &data)
 	ui.tray_added = false
@@ -132,10 +122,14 @@ ui_restore :: proc() {
 		windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
 	}
 	windows.SetForegroundWindow(ui.hwnd)
+	if tag_ui.popup != nil { windows.SetForegroundWindow(tag_ui.popup) }
 	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
 }
 
 ui_tray_menu :: proc() {
+	if ui.tray_menu_open { return }
+	ui.tray_menu_open = true
+	defer { ui.tray_menu_open = false }
 	menu := windows.CreatePopupMenu()
 	if menu == nil { return }
 	defer windows.DestroyMenu(menu)
@@ -144,10 +138,36 @@ ui_tray_menu :: proc() {
 	p: windows.POINT
 	windows.GetCursorPos(&p)
 	// Foreground ownership and WM_NULL let clicking elsewhere dismiss the menu.
-	windows.SetForegroundWindow(ui.hwnd)
-	command := windows.TrackPopupMenu(menu, 0x0102, p.x, p.y, 0, ui.hwnd, nil)
-	windows.PostMessageW(ui.hwnd, windows.WM_NULL, 0, 0)
+	windows.SetForegroundWindow(ui.tray_hwnd)
+	command := windows.TrackPopupMenu(menu, 0x0102, p.x, p.y, 0, ui.tray_hwnd, nil)
+	windows.PostMessageW(ui.tray_hwnd, windows.WM_NULL, 0, 0)
 	if command != 0 { windows.SendMessageW(ui.hwnd, windows.WM_COMMAND, windows.WPARAM(command), 0) }
+}
+
+// Keep shell callbacks independent of main-window capture and modal pickers.
+// Defer menu tracking until after the shell's mouse callback has returned.
+tray_wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
+	context = rt.default_context()
+	if ui.taskbar_created != 0 && msg == ui.taskbar_created {
+		ui.tray_added = false
+		if !ui_add_tray() { ui_restore() }
+		return 0
+	}
+	switch msg {
+	case TRAY_MESSAGE:
+		if wp != TRAY_ICON_ID { return 0 }
+		switch u32(lp) {
+		case windows.WM_LBUTTONUP, windows.WM_LBUTTONDBLCLK:
+			ui_restore()
+		case windows.WM_RBUTTONUP, windows.WM_CONTEXTMENU:
+			windows.PostMessageW(hwnd, TRAY_SHOW_MENU, 0, 0)
+		}
+		return 0
+	case TRAY_SHOW_MENU:
+		ui_tray_menu()
+		return 0
+	}
+	return windows.DefWindowProcW(hwnd, msg, wp, lp)
 }
 
 // --- UTF-8 -> UTF-16 helpers for GDI text calls ---
@@ -289,13 +309,17 @@ ui_resize_date_picker :: proc(w, h: i32) {
 	windows.MoveWindow(ui.date_picker, r.left, r.top, r.right - r.left, r.bottom - r.top, windows.TRUE)
 }
 
-// Push app.date into the native picker (used when date changes via buttons).
+// Keep the date button label and calendar selection synchronized.
 sync_date_picker :: proc(app: ^App) {
 	if ui.date_picker == nil {
 		return
 	}
 	st := date_systemtime(app.date)
-	windows.SendMessageW(ui.date_picker, DTM_SETSYSTEMTIME, GDT_VALID, windows.LPARAM(uintptr(&st)))
+	windows.SetWindowTextW(ui.date_picker, wtext(date_label(app.date)))
+	if ui.date_calendar != nil {
+		windows.SendMessageW(ui.date_calendar, 0x1002, 0, windows.LPARAM(uintptr(&st))) // MCM_SETCURSEL
+	}
+	windows.InvalidateRect(ui.date_picker, nil, windows.TRUE)
 }
 
 // --- WndProc ---
@@ -381,13 +405,6 @@ draw_themed_control :: proc(dc: windows.HDC, theme: Theme_Handle, part, state: i
 wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lparam: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
 	app := global_app
-	if ui.taskbar_created != 0 && msg == ui.taskbar_created {
-		// Explorer restarted: re-register the icon, or reveal the window so
-		// a hidden app is never left without a way back in.
-		ui.tray_added = false
-		if !ui_add_tray() { ui_restore() }
-		return 0
-	}
 	switch msg {
 	case windows.WM_CLOSE:
 		// Never hide if the shell cannot provide a way to reopen/exit.
@@ -398,13 +415,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case TRAY_MESSAGE:
-		if wparam != TRAY_ICON_ID { return 0 }
-		switch u32(lparam) {
-		case windows.WM_LBUTTONUP, windows.WM_LBUTTONDBLCLK:
-			ui_restore()
-		case windows.WM_RBUTTONUP, windows.WM_CONTEXTMENU:
-			ui_tray_menu()
-		}
+		windows.PostMessageW(ui.tray_hwnd, msg, wparam, lparam)
 		return 0
 	case 0x031A: // WM_THEMECHANGED: cached theme handles are no longer valid.
 		ui_open_themes()
@@ -627,10 +638,17 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			return 0
 		}
 	case windows.WM_COMMAND:
+		if windows.HWND(uintptr(lparam)) == ui.date_picker && (u32(wparam) >> 16) == 0 {
+			date_calendar_open()
+			return 0
+		}
 		if lparam == 0 && (u32(wparam) >> 16) == 0 {
 			switch u32(wparam) & 0xFFFF {
 			case TRAY_OPEN: ui_restore(); return 0
-			case TRAY_EXIT: windows.DestroyWindow(hwnd); return 0
+			case TRAY_EXIT:
+				if tag_ui.popup != nil { tag_picker_close() }
+				windows.DestroyWindow(hwnd)
+				return 0
 			}
 		}
 		// Filter edit: HIWORD notification = EN_CHANGE, LOWORD = control id.
@@ -640,20 +658,11 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		}
 		return 0
-	case windows.WM_NOTIFY:
-		// Date picker change: DTN_DATETIMECHANGE carries the new date itself
-		// (re-querying DTM_GETSYSTEMTIME mid-change can be transiently
-		// invalid), so trust the notification payload.
-		nm := transmute(^windows.NMHDR)(lparam)
-		if nm != nil && nm.hwndFrom == ui.date_picker && nm.code == DTN_DATETIMECHANGE {
-			ch := transmute(^NMDATETIMECHANGE)(lparam)
-			if ch.dwFlags == GDT_VALID {
-				d := date_int_from_systemtime(ch.st)
-				if d != app.date {
-					app.date = d
-					load_day(app)
-				}
-			}
+	case windows.WM_DRAWITEM:
+		item := transmute(^Draw_Item)(lparam)
+		if item != nil && item.hwndItem == ui.date_picker {
+			draw_date_button(item)
+			return 1
 		}
 		return 0
 	case windows.WM_GETMINMAXINFO:
@@ -799,7 +808,7 @@ ui_bootstrap :: proc() -> bool {
 
 	ui_create_fonts()
 
-	// Common controls (ICC_DATE_CLASSES) for the native date picker.
+	// Common controls (ICC_DATE_CLASSES) for the native month calendar.
 	icc := windows.INITCOMMONCONTROLSEX{
 		dwSize = windows.DWORD(size_of(windows.INITCOMMONCONTROLSEX)),
 		dwICC  = windows.ICC_DATE_CLASSES,
@@ -827,6 +836,12 @@ ui_bootstrap :: proc() -> bool {
 		return false
 	}
 	ui_open_themes()
+	tray_class := windows.WNDCLASSEXW{cbSize = size_of(windows.WNDCLASSEXW),
+		lpfnWndProc = tray_wnd_proc, hInstance = windows.HINSTANCE(hinstance),
+		lpszClassName = wtext("aika_tray_window_class")}
+	windows.RegisterClassExW(&tray_class)
+	ui.tray_hwnd = windows.CreateWindowExW(0, tray_class.lpszClassName, wtext("aika tray"),
+		windows.WS_POPUP, 0, 0, 0, 0, nil, nil, windows.HINSTANCE(hinstance), nil)
 	ui.taskbar_created = windows.RegisterWindowMessageW(wtext("TaskbarCreated"))
 	ui_add_tray()
 
@@ -853,14 +868,13 @@ ui_bootstrap :: proc() -> bool {
 		windows.SendMessageW(ui.edit, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	}
 
-	// Native date picker in the toolbar. DTN_DATETIMECHANGE (handled in
-	// wnd_proc) navigates to the chosen day; button navigation writes back
-	// from sync_date_picker.
+	// Native owner-drawn button keeps keyboard activation and accessibility,
+	// while allowing the face to use the same palette as the rest of the UI.
 	ui.date_picker = windows.CreateWindowExW(
 		windows.DWORD(0),
-		windows.LPCWSTR(windows.utf8_to_wstring(windows.DATETIMEPICK_CLASS, context.temp_allocator)),
+		wtext("BUTTON"),
 		nil,
-		windows.WS_CHILD | windows.WS_VISIBLE,
+		windows.WS_CHILD | windows.WS_VISIBLE | windows.WS_TABSTOP | 0xB, // BS_OWNERDRAW
 		0, 0, 120, 26,
 		ui.hwnd, nil, windows.HINSTANCE(hinstance), nil,
 	)
@@ -893,6 +907,7 @@ ui_bootstrap :: proc() -> bool {
 
 ui_shutdown :: proc() {
 	ui_remove_tray()
+	if ui.tray_hwnd != nil { windows.DestroyWindow(ui.tray_hwnd); ui.tray_hwnd = nil }
 	ui_close_themes()
 	if ui.mem_valid {
 		windows.SelectObject(ui.mem_dc, ui.mem_bmp_old)

@@ -44,6 +44,9 @@ LASTINPUTINFO :: struct {
 
 @(default_calling_convention = "system")
 foreign aika_u32 {
+	MonitorFromWindow :: proc(hwnd: windows.HWND, flags: u32) -> windows.HANDLE ---
+	GetMonitorInfoW :: proc(monitor: windows.HANDLE, info: ^Monitor_Info) -> windows.BOOL ---
+	DrawFocusRect :: proc(dc: windows.HDC, rect: ^windows.RECT) -> windows.BOOL ---
 	GetLastInputInfo :: proc(plii: ^LASTINPUTINFO) -> windows.BOOL ---
 	SetScrollInfo :: proc(hwnd: windows.HWND, bar: i32, info: ^Scroll_Info, redraw: windows.BOOL) -> i32 ---
 	GetScrollInfo :: proc(hwnd: windows.HWND, bar: i32, info: ^Scroll_Info) -> windows.BOOL ---
@@ -55,6 +58,20 @@ Scroll_Info :: struct {
 	nMin, nMax: i32,
 	nPage: u32,
 	nPos, nTrackPos: i32,
+}
+
+Draw_Item :: struct {
+	CtlType, CtlID, itemID, itemAction, itemState: u32,
+	hwndItem: windows.HWND,
+	hDC: windows.HDC,
+	rcItem: windows.RECT,
+	itemData: uintptr,
+}
+
+Monitor_Info :: struct {
+	cbSize: u32,
+	rcMonitor, rcWork: windows.RECT,
+	dwFlags: u32,
 }
 
 PROCESS_QUERY_LIMITED_INFORMATION :: 0x1000

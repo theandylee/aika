@@ -72,11 +72,8 @@ theme_apply_native :: proc() {
 	// Supported on Windows 10 20H1+; older systems ignore this attribute.
 	DwmSetWindowAttribute(ui.hwnd, 20, &dark, size_of(dark))
 	if ui.date_picker != nil {
-		SetWindowTheme(ui.date_picker, wtext("") if ui.dark else nil, wtext("") if ui.dark else nil)
-		// Calendar popup background, text, title background/text and month background.
-		for color, i in ([6]windows.COLORREF{C_BG, C_TXT, C_HEAD_BG, C_TXT, C_PANEL, C_DIM}) {
-			windows.SendMessageW(ui.date_picker, DTM_FIRST + 6, windows.WPARAM(i), windows.LPARAM(color))
-		}
+		theme_date_calendar()
+		windows.InvalidateRect(ui.date_picker, nil, windows.TRUE)
 	}
 	for hwnd in ([3]windows.HWND{ui.edit, ui.list_scroll.hwnd, ui.totals_scroll.hwnd}) {
 		if hwnd != nil {
@@ -85,6 +82,25 @@ theme_apply_native :: proc() {
 		}
 	}
 	windows.InvalidateRect(ui.hwnd, nil, windows.TRUE)
+}
+
+// The custom date button opens a native month calendar with palette colors.
+theme_date_calendar :: proc() {
+	// utf8_to_wstring("") returns nil, which RESETS styling instead of disabling
+	// it. Pass an actual non-null, NUL-terminated empty string to UxTheme.
+	empty: [1]u16
+	no_theme := transmute(cstring16)(&empty[0])
+	calendar := ui.date_calendar
+	if calendar != nil {
+		SetWindowTheme(calendar, no_theme if ui.dark else nil, no_theme if ui.dark else nil)
+	}
+	// MCSC_BACKGROUND, TEXT, TITLEBK, TITLETEXT, MONTHBK, TRAILINGTEXT.
+	for color, i in ([6]windows.COLORREF{C_BG, C_TXT, C_HEAD_BG, C_TXT, C_PANEL, C_DIM}) {
+		if calendar != nil {
+			windows.SendMessageW(calendar, 0x100A, windows.WPARAM(i), windows.LPARAM(color)) // MCM_SETCOLOR
+		}
+	}
+	if calendar != nil { windows.InvalidateRect(calendar, nil, windows.TRUE) }
 }
 
 theme_toggle :: proc() {

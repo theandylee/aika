@@ -92,7 +92,9 @@ draw_zoom_bar :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_en
 	width := bar.right - bar.left
 	left := bar.left + i32(ui.zoom_start * f64(width))
 	right := bar.left + i32(ui.zoom_end * f64(width))
-	fill_rect(dc, left, bar.top + 1, max(1, right - left), 24, rgb(255, 221, 168))
+	// Keep the selection compatible with the theme's timestamp text color.
+	selection := rgb(90, 65, 32) if ui.dark else rgb(255, 221, 168)
+	fill_rect(dc, left, bar.top + 1, max(1, right - left), 24, selection)
 	// A thin activity strip makes the overview useful when zoomed far in.
 	for a in app.activities {
 		if a.timeline_id != TIMELINE_APPS { continue }

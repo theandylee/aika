@@ -102,8 +102,14 @@ before touching it:
   light mode. `src/theme.odin` manages the palette and native control colors;
   dark buttons/tabs use the GDI fallback rather than light UxTheme rendering.
   Activity/tag colors are preserved, with contrasting text on tag blocks.
-  Native menus and picker buttons retain Windows styling.
-  `python tools/test-theme-ui.py build/aika.exe` checks switching and persistence
+  Native menus and tag-picker buttons retain Windows styling.
+  `src/date_picker.odin` provides an owner-drawn native date button with the
+  weekday/date label and a small GDI calendar icon. Its face and native calendar
+  popup both follow the palette. The popup accepts a clicked date or Enter;
+  Escape or clicking outside cancels. This replaces editable date segments and
+  removes the duplicate weekday/date label beside the task button.
+  `python tools/test-theme-ui.py build/aika.exe` checks switching, date-button and
+  calendar colors, keyboard selection/cancellation, and theme persistence
   with an isolated database.
 - All paint-time allocations use `context.temp_allocator`; the `free_all` after
   each dispatched message in `main` releases them. Per-object deletes of

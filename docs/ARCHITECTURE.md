@@ -192,6 +192,11 @@ The GUI is split across two files:
   (prev/next/Today, Start/Stop task, Day start / Day end / Duration boxes), a
   full 24 h ruler, four lanes (Tags, Computer Usage, Applications, Documents),
   the details list, the totals panel, tooltips, filter row and status bar.
+- `src/date_picker.odin` — a palette-colored native owner-drawn button showing
+  the selected weekday/date and a calendar icon. It opens a non-modal native
+  month calendar below the button; clicking a day or pressing Enter navigates,
+  while Escape or deactivation dismisses without changing the date. The calendar
+  selection is synchronized on open and after prev/next/Today navigation.
 
 Layout constants (`TAB_H`, `TOOLBAR_H`, `LANE_*`, `LIST_*`, ...) live at the top
 of `src/ui.odin`; `compute_layout()` derives every rect from the client size, so
@@ -215,6 +220,10 @@ Click the tray icon or choose **Open aika** to restore it. The tray menu's
 **Exit** destroys the window, removes the icon and flushes tracking through the
 normal shutdown path. Explorer restart notifications re-register the icon.
 If icon registration fails, the window stays accessible instead of hiding.
+The icon uses a separate hidden top-level window for shell callbacks and menu
+ownership, so its menu remains available while the main window is active,
+hidden, or disabled by the tag picker. Menu tracking is deferred until the
+shell callback returns; Open restores the picker too when one is open.
 
 `draw_day()`:
 

@@ -22,6 +22,38 @@ u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
 u.SendMessageW.restype = c.c_ssize_t
 u.IsWindowVisible.argtypes = [w.HWND]
 u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
+u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+u.SetForegroundWindow.argtypes = [w.HWND]
+
+
+def windows_for(pid, class_name):
+    found = []
+
+    @callback
+    def visit(hwnd, _):
+        owner = w.DWORD()
+        u.GetWindowThreadProcessId(hwnd, c.byref(owner))
+        name = c.create_unicode_buffer(256)
+        u.GetClassNameW(hwnd, name, 256)
+        if owner.value == pid and name.value == class_name:
+            found.append(hwnd)
+        return True
+
+    u.EnumWindows(visit, 0)
+    return found
+
+
+def check_menu(process, tray):
+    u.PostMessageW(tray, 0x8001, 1, 0x0205)  # Shell right-button-up callback
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if any(u.IsWindowVisible(h) for h in windows_for(process.pid, "#32768")):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("Tray menu did not open")
+    u.SendMessageW(tray, 0x001F, 0, 0)  # WM_CANCELMODE dismisses menu tracking
+    time.sleep(0.1)
 
 exe = str(Path(sys.argv[1] if len(sys.argv) > 1 else "build/aika.exe").resolve())
 root = Path(os.environ["LOCALAPPDATA"]) / "Temp" / "opencode"
@@ -48,9 +80,19 @@ with tempfile.TemporaryDirectory(prefix="aika-tray-", dir=root) as folder:
         hwnd = found[0]
         print("Window opened", flush=True)
         assert u.IsWindowVisible(hwnd)
+        tray, = windows_for(process.pid, "aika_tray_window_class")
+        u.SetForegroundWindow(hwnd)
+        check_menu(process, tray)
+        # A modal picker disables the main window, but must not disable the tray.
+        u.SendMessageW(hwnd, 0x0201, 1, (50 << 16) | 450)
+        u.SendMessageW(hwnd, 0x0202, 0, (50 << 16) | 450)
+        picker, = windows_for(process.pid, "aika_tag_picker")
+        check_menu(process, tray)
+        u.SendMessageW(picker, 0x0010, 0, 0)
         u.SendMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
         assert not u.IsWindowVisible(hwnd), "Close did not hide the window"
         assert process.poll() is None, "Close terminated the process"
+        check_menu(process, tray)
         print("Window hidden; checking background tracking", flush=True)
         time.sleep(12)
         with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
@@ -58,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tray-", dir=root) as folder:
             assert end is not None and end > (time.time() - 5) * 1000, "Tracking stopped in tray"
         # Deliver the shell's icon left-click callback.
         print("Background tracking verified; checking restore", flush=True)
-        u.SendMessageW(hwnd, 0x8001, 1, 0x0202)
+        u.SendMessageW(tray, 0x8001, 1, 0x0202)
         assert u.IsWindowVisible(hwnd), "Tray click did not restore the window"
         u.SendMessageW(hwnd, 0x0010, 0, 0)
         assert not u.IsWindowVisible(hwnd)
@@ -72,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tray-", dir=root) as folder:
         with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
             end = conn.execute("SELECT MAX(EndUtcMs) FROM Activity WHERE TimelineId=2").fetchone()[0]
             assert end >= before_exit - 1000, "Exit did not flush tracking"
-        print("PASS: close hides, tracking continues, tray restores, Exit flushes and terminates")
+        print("PASS: tray menu with visible/hidden/modal windows, close hides, tracking continues, restore, Exit flush")
     finally:
         if process.poll() is None:
             if hwnd:

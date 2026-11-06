@@ -53,7 +53,7 @@ MIN_LANE_H :: 44
 MIN_LOWER_H :: 100
 MIN_LIST_W :: 300
 MIN_TOTALS_W :: 180
-DATE_PICK_W :: 120 // native date picker (SysDateTimePick32) width
+DATE_PICK_W :: 232 // weekday/date button with calendar icon
 
 // --- Layout ---
 
@@ -282,11 +282,6 @@ draw_toolbar :: proc(app: ^App, dc: windows.HDC, lay: Layout) {
 	label := "Start task"
 	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s", fmt_hms(now_ms() - app.task.start_ms)) }
 	draw_button(dc, lay.btn_track, label, HIT_BTN_TASK)
-
-	date_txt := date_label(app.date)
-	dx := lay.btn_track.right + 12
-	draw_string(dc, date_txt, dx, lay.toolbar_y + 18, ui.font_normal, C_DIM,
-		lay.day_boxes[0].left - 12 - dx)
 
 	// Day start / day end / duration, ManicTime-style.
 	day_start, day_end := day_bounds_ms(app.date)
