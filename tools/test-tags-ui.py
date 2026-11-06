@@ -214,7 +214,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
         send(popup, 0x0010)
 
         # Graceful exit flushes tracking and tags remain in the on-disk DB.
-        send(hwnd, 0x0010)
+        send(hwnd, 0x0111, 1002)  # Tray Exit (WM_CLOSE now hides).
         process.wait(timeout=10)
         assert rows() == remaining
         print("PASS: tagging, non-overlap, resize, double-click gap fill, delete, tag reuse, persistence")
@@ -224,5 +224,5 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
             if popup:
                 send(popup, 0x0010)
             if hwnd:
-                send(hwnd, 0x0010)
+                send(hwnd, 0x0111, 1002)
             process.wait(timeout=10)

@@ -207,6 +207,12 @@ and are released by the `free_all` after each message in `main`.
 
 ### Timeline
 
+Closing the main window hides it to the system tray; its timer keeps tracking.
+Click the tray icon or choose **Open aika** to restore it. The tray menu's
+**Exit** destroys the window, removes the icon and flushes tracking through the
+normal shutdown path. Explorer restart notifications re-register the icon.
+If icon registration fails, the window stays accessible instead of hiding.
+
 `draw_day()`:
 
 - Uses the full local day 00:00–24:00 as the fixed axis (ManicTime-style);

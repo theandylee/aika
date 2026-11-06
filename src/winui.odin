@@ -28,6 +28,8 @@ PaneScroll :: struct {
 
 UiState :: struct {
 	hwnd:         windows.HWND,
+	tray_added:   bool,
+	taskbar_created: u32,
 	edit:         windows.HWND,
 	date_picker:  windows.HWND,
 	mem_dc:       windows.HDC,
@@ -92,6 +94,58 @@ NMDATETIMECHANGE :: struct {
 
 WNDC_CLASS :: "aika_window_class"
 APP_TIMER_ID :: 1
+TRAY_MESSAGE :: windows.WM_APP + 1
+TRAY_ICON_ID :: 1
+TRAY_OPEN :: 1001
+TRAY_EXIT :: 1002
+
+// Keep the icon available even while the window is visible. Use the legacy
+// callback format (uID in wParam, mouse message in lParam).
+ui_add_tray :: proc() -> bool {
+	data := windows.NOTIFYICONDATAW{
+		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.hwnd,
+		uID = TRAY_ICON_ID, uFlags = windows.NIF_MESSAGE | windows.NIF_ICON | windows.NIF_TIP,
+		uCallbackMessage = TRAY_MESSAGE,
+		hIcon = windows.LoadIconW(nil, transmute(cstring16)(u64(32512))), // IDI_APPLICATION (shared)
+	}
+	copy(data.szTip[:], windows.utf8_to_utf16("aika", context.temp_allocator))
+	ui.tray_added = bool(windows.Shell_NotifyIconW(windows.NIM_ADD, &data))
+	return ui.tray_added
+}
+
+ui_remove_tray :: proc() {
+	if !ui.tray_added { return }
+	data := windows.NOTIFYICONDATAW{
+		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.hwnd, uID = TRAY_ICON_ID,
+	}
+	windows.Shell_NotifyIconW(windows.NIM_DELETE, &data)
+	ui.tray_added = false
+}
+
+ui_restore :: proc() {
+	if windows.IsIconic(ui.hwnd) {
+		windows.ShowWindow(ui.hwnd, windows.SW_RESTORE)
+	} else {
+		windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
+	}
+	windows.SetForegroundWindow(ui.hwnd)
+	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+}
+
+ui_tray_menu :: proc() {
+	menu := windows.CreatePopupMenu()
+	if menu == nil { return }
+	defer windows.DestroyMenu(menu)
+	windows.AppendMenuW(menu, 0, TRAY_OPEN, wtext("Open aika"))
+	windows.AppendMenuW(menu, 0, TRAY_EXIT, wtext("Exit"))
+	p: windows.POINT
+	windows.GetCursorPos(&p)
+	// Foreground ownership and WM_NULL let clicking elsewhere dismiss the menu.
+	windows.SetForegroundWindow(ui.hwnd)
+	command := windows.TrackPopupMenu(menu, 0x0102, p.x, p.y, 0, ui.hwnd, nil)
+	windows.PostMessageW(ui.hwnd, windows.WM_NULL, 0, 0)
+	if command != 0 { windows.SendMessageW(ui.hwnd, windows.WM_COMMAND, windows.WPARAM(command), 0) }
+}
 
 // --- UTF-8 -> UTF-16 helpers for GDI text calls ---
 
@@ -320,7 +374,31 @@ draw_themed_control :: proc(dc: windows.HDC, theme: Theme_Handle, part, state: i
 wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lparam: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
 	app := global_app
+	if ui.taskbar_created != 0 && msg == ui.taskbar_created {
+		// Explorer restarted: re-register the icon, or reveal the window so
+		// a hidden app is never left without a way back in.
+		ui.tray_added = false
+		if !ui_add_tray() { ui_restore() }
+		return 0
+	}
 	switch msg {
+	case windows.WM_CLOSE:
+		// Never hide if the shell cannot provide a way to reopen/exit.
+		if ui.tray_added || ui_add_tray() {
+			windows.ShowWindow(hwnd, windows.SW_HIDE)
+		} else {
+			message_box("Could not create the system tray icon. aika will stay open.", "aika", 0x30)
+		}
+		return 0
+	case TRAY_MESSAGE:
+		if wparam != TRAY_ICON_ID { return 0 }
+		switch u32(lparam) {
+		case windows.WM_LBUTTONUP, windows.WM_LBUTTONDBLCLK:
+			ui_restore()
+		case windows.WM_RBUTTONUP, windows.WM_CONTEXTMENU:
+			ui_tray_menu()
+		}
+		return 0
 	case 0x031A: // WM_THEMECHANGED: cached theme handles are no longer valid.
 		ui_open_themes()
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
@@ -540,6 +618,12 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			return 0
 		}
 	case windows.WM_COMMAND:
+		if lparam == 0 && (u32(wparam) >> 16) == 0 {
+			switch u32(wparam) & 0xFFFF {
+			case TRAY_OPEN: ui_restore(); return 0
+			case TRAY_EXIT: windows.DestroyWindow(hwnd); return 0
+			}
+		}
 		// Filter edit: HIWORD notification = EN_CHANGE, LOWORD = control id.
 		hi := i32((u32(wparam) >> 16) & 0xFFFF)
 		if hi == windows.EN_CHANGE {
@@ -568,6 +652,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		mmi.ptMinTrackSize = windows.POINT{x = 720, y = 480}
 		return 0
 	case windows.WM_DESTROY:
+		ui_remove_tray()
 		windows.KillTimer(hwnd, windows.UINT_PTR(APP_TIMER_ID))
 		windows.PostQuitMessage(0)
 		return 0
@@ -726,6 +811,8 @@ ui_bootstrap :: proc() -> bool {
 		return false
 	}
 	ui_open_themes()
+	ui.taskbar_created = windows.RegisterWindowMessageW(wtext("TaskbarCreated"))
+	ui_add_tray()
 
 	// Independent native scrollbars, initially hidden until row counts are known.
 	for s in ([2]^PaneScroll{&ui.list_scroll, &ui.totals_scroll}) {
@@ -788,6 +875,7 @@ ui_bootstrap :: proc() -> bool {
 }
 
 ui_shutdown :: proc() {
+	ui_remove_tray()
 	ui_close_themes()
 	if ui.mem_valid {
 		windows.SelectObject(ui.mem_dc, ui.mem_bmp_old)

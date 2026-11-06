@@ -203,8 +203,9 @@ build\aika-cli.exe --db data\import-test.db --import tools\manictime-today.json 
 
 Expected: exit code 0, 202 activities for the sample file, 2745 groups.
 
-7. Close the app via the window close button (not Task Manager) and verify the
-   current activity is flushed.
+7. Close the window to hide it in the system tray; verify tracking continues.
+   Restore via the tray icon, then choose its right-click **Exit** option and
+   verify the current activity is flushed.
 
 ---
 
@@ -212,7 +213,7 @@ Expected: exit code 0, 202 activities for the sample file, 2745 groups.
 
 - Session lock and power-off events are not implemented; only idle `Away`.
 - Documents/URLs are not tracked.
-- Folders, statistics, general activity editing, tray icon, and autostart are missing.
+- Folders, statistics, general activity editing, and autostart are missing.
 - Tags support range creation, border resizing and right-click block deletion;
   tag-name deletion/renaming is not implemented.
 - The UI draws Tags, ComputerUsage and Applications; Documents are not tracked.

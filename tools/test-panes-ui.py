@@ -94,7 +94,7 @@ root = Path(os.environ["LOCALAPPDATA"]) / "Temp" / "opencode"
 with tempfile.TemporaryDirectory(prefix="aika-panes-", dir=root) as folder:
     db = Path(folder) / "test.db"
     process, hwnd = launch(exe, db)
-    send(hwnd, 0x0010)
+    send(hwnd, 0x0111, 1002)  # Tray Exit (WM_CLOSE now hides).
     process.wait(timeout=10)
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     day = (today - datetime(2000, 1, 1)).days
@@ -147,5 +147,5 @@ with tempfile.TemporaryDirectory(prefix="aika-panes-", dir=root) as folder:
         assert all(r[3] > r[1] for r in small)
         print("PASS: timeline height, list/totals width, Escape, capture loss, window resize")
     finally:
-        send(hwnd, 0x0010)
+        send(hwnd, 0x0111, 1002)
         process.wait(timeout=10)

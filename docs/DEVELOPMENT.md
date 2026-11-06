@@ -321,7 +321,10 @@ the UI and tracker:
 7. Pause tracking; verify no new rows. Resume; verify rows resume.
 8. Navigate dates; verify the timeline reloads.
 9. Import the sample JSON into a fresh DB; verify 202 activities / 2745 groups.
-10. Close via the window close button; verify the current activity is flushed.
+10. Close via the window close button; verify the window hides and tracking continues.
+    Click the tray icon to restore; choose **Exit** from its right-click menu and
+    verify the current activity is flushed. `python tools/test-tray-ui.py build/aika.exe`
+    checks this with an isolated database.
 
 ---
 
