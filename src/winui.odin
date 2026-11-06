@@ -37,7 +37,7 @@ UiState :: struct {
 
 	filter:      string,
 	tab:         i32,  // 0 = Day, 1 = Timesheet, 2 = Statistics
-	lane:        i32,  // selected timeline lane (0..3)
+	lane:        i32,  // selected timeline lane (0..2)
 	list_scroll: i32,
 }
 
@@ -317,13 +317,36 @@ handle_click :: proc(app: ^App, x, y: i32) {
 		ui.tab = 1
 	case id == HIT_TAB_BASE + 2:
 		ui.tab = 2
-	case id >= HIT_LANE_BASE && id < HIT_LANE_BASE + 4:
+	case id >= HIT_LANE_BASE && id < HIT_LANE_BASE + 3:
 		if ui.lane != i32(id - HIT_LANE_BASE) {
 			ui.lane = i32(id - HIT_LANE_BASE)
 			ui.list_scroll = 0
 		}
 	}
 	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+}
+
+// --- Fonts ---
+
+// Height is the em height in pixels (negative height in CreateFontW means
+// "cell height", here expressed directly). Same face for everything.
+ui_make_font :: proc(h_px, weight: i32) -> windows.HFONT {
+	return windows.CreateFontW(
+		-h_px, 0, 0, 0, windows.INT(weight),
+		0, 0, 0, // not italic / underlined / struck out
+		windows.DEFAULT_CHARSET,
+		0, 0, // OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS
+		windows.CLEARTYPE_QUALITY,
+		0, // DEFAULT_PITCH | FF_DONTCARE
+		windows.LPCWSTR(windows.utf8_to_wstring("Segoe UI", context.temp_allocator)),
+	)
+}
+
+ui_create_fonts :: proc() {
+	ui.font_normal = ui_make_font(12, 400)
+	ui.font_bold   = ui_make_font(12, windows.FW_BOLD)
+	ui.font_small  = ui_make_font(11, 400)
+	ui.font_title  = ui_make_font(20, windows.FW_BOLD)
 }
 
 // --- Window bootstrap ---
@@ -341,6 +364,8 @@ ui_bootstrap :: proc() -> bool {
 	if windows.RegisterClassExW(&wc) == 0 {
 		return false
 	}
+
+	ui_create_fonts()
 
 	title := windows.utf8_to_wstring("aika", context.temp_allocator)
 	// WS_CLIPCHILDREN keeps our BitBlt from painting over the filter EDIT.

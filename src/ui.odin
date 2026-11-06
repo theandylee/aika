@@ -6,8 +6,8 @@ import "core:strings"
 import "core:sys/windows"
 
 // ManicTime-style Day view, drawn with GDI into the winui backbuffer.
-// Light theme, full 24h axis, four timeline lanes (Tags / Computer Usage /
-// Applications / Documents), details list + totals panel below.
+// Light theme, full 24h axis, three timeline lanes (Tags / Computer Usage /
+// Applications), details list + totals panel below.
 //
 // Memory note: everything allocated during a paint uses context.temp_allocator
 // and is released by the free_all(context.temp_allocator) call after each
@@ -87,10 +87,10 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay.chart_w = w - MARGIN * 2 - 1
 
 	// Lane heights: leave room for a ~120px list area, cap lanes at 96px.
-	lane_area := bottom_limit - (lay.ruler_y + RULER_H) - 120 - LIST_HDR - 3 * LANE_GAP
-	lay.lane_h = min(96, max(44, lane_area / 4))
+	lane_area := bottom_limit - (lay.ruler_y + RULER_H) - 120 - LIST_HDR - 2 * LANE_GAP
+	lay.lane_h = min(96, max(44, lane_area / 3))
 	lay.lane_y = lay.ruler_y + RULER_H
-	lay.lanes_bottom = lay.lane_y + 4 * lay.lane_h + 3 * LANE_GAP
+	lay.lanes_bottom = lay.lane_y + 3 * lay.lane_h + 2 * LANE_GAP
 	lay.list_top = lay.lanes_bottom + 8
 	lay.list_bottom = bottom_limit
 	lay.sidebar_x = w - SIDEBAR_W - MARGIN - 1
@@ -141,12 +141,11 @@ lane_name :: proc(i: i32) -> string {
 	case 0: return "Tags"
 	case 1: return "Computer Usage"
 	case 2: return "Applications"
-	case 3: return "Documents"
 	}
 	return ""
 }
 
-// 0 when the lane has no data yet (Tags / Documents).
+// 0 when the lane has no data yet (Tags).
 lane_timeline :: proc(i: i32) -> i64 {
 	switch i {
 	case 1: return TIMELINE_COMPUTER
@@ -314,7 +313,7 @@ draw_day :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	for hour := i32(0); hour <= 24; hour += 1 {
 		x := lay.chart_x + hour * hour_w
 		if hour < 24 {
-			line_v(dc, x, lay.ruler_y, RULER_H + 4 * (lay.lane_h + LANE_GAP), C_BORDER_SOFT)
+			line_v(dc, x, lay.ruler_y, RULER_H + 3 * (lay.lane_h + LANE_GAP), C_BORDER_SOFT)
 		}
 		if hour % label_every_h == 0 || hour == 24 {
 			s := fmt.tprintf("%02d", hour % 24)
@@ -324,7 +323,7 @@ draw_day :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	}
 
 	// Lanes
-	for i := 0; i < 4; i += 1 {
+	for i := 0; i < 3; i += 1 {
 		ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
 		draw_lane(app, dc, lay, i32(i), lay.chart_x, ly, lay.chart_w, lay.lane_h, day_start, day_end)
 	}
@@ -390,9 +389,7 @@ draw_lane :: proc(app: ^App, dc: windows.HDC, lay: Layout, idx, x, y, w, h: i32,
 }
 
 bar_rect_for_lane :: proc(idx: i32, x, y, w, h: i32) -> windows.RECT {
-	bh := h * 62 / 100
-	by := y + (h - bh) / 2
-	return windows.RECT{left = x, top = by, right = x + w, bottom = by + bh}
+	return windows.RECT{left = x, top = y, right = x + w, bottom = y + h}
 }
 
 draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y, w, h: i32, day_start, day_end: i64) {
@@ -546,7 +543,7 @@ draw_list :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i
 
 	tl := lane_timeline(i32(ui.lane))
 	if tl == 0 {
-		msg := "No tags recorded yet." if ui.lane == 0 else "Documents are not tracked yet."
+		msg := "No tags recorded yet." if ui.lane == 0 else "No data for this lane."
 		draw_string(dc, msg, x + 8, lay.list_top + LIST_HDR + 8, ui.font_normal, C_DIM)
 		return
 	}
