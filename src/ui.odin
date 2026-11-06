@@ -128,9 +128,9 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	bh := i32(26)
 	by := lay.toolbar_y + 12
 	lay.btn_prev = windows.RECT{left = MARGIN, top = by, right = MARGIN + 26, bottom = by + bh}
-	lay.btn_next = windows.RECT{left = MARGIN + 30, top = by, right = MARGIN + 56, bottom = by + bh}
-	lay.date_pick = windows.RECT{left = MARGIN + 64, top = by, right = MARGIN + 64 + DATE_PICK_W, bottom = by + bh}
-	lay.btn_today = windows.RECT{left = MARGIN + 72 + DATE_PICK_W, top = by, right = MARGIN + 140 + DATE_PICK_W, bottom = by + bh}
+	lay.btn_today = windows.RECT{left = MARGIN + 30, top = by, right = MARGIN + 98, bottom = by + bh}
+	lay.btn_next = windows.RECT{left = MARGIN + 102, top = by, right = MARGIN + 128, bottom = by + bh}
+	lay.date_pick = windows.RECT{left = MARGIN + 140, top = by, right = MARGIN + 140 + DATE_PICK_W, bottom = by + bh}
 	lay.btn_track = windows.RECT{left = MARGIN + 148 + DATE_PICK_W, top = by, right = MARGIN + 280 + DATE_PICK_W, bottom = by + bh}
 
 	// Day start / day end / duration boxes anchored to the right.
@@ -334,8 +334,7 @@ draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: int) {
 	}
 	fill_rect(dc, r.left + 1, r.top + 1, w - 2, h - 2, bg)
 	fill_frame(dc, r.left, r.top, w, h, C_BTN_BORDER)
-	tw := text_pixel_width(label, ui.font_normal)
-	draw_string(dc, label, r.left + (w - tw) / 2, r.top + (h - 15) / 2, ui.font_normal, C_TXT)
+	draw_button_text(dc, label, r)
 }
 
 // --- Day view ---

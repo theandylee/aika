@@ -244,6 +244,20 @@ draw_string :: proc(dc: windows.HDC, s: string, x, y: i32, font: windows.HFONT, 
 	windows.DrawTextW(dc, c, i32(len(s)), &r, flags)
 }
 
+// Button captions use the actual font metrics rather than a fixed baseline.
+draw_button_text :: proc(dc: windows.HDC, label: string, bounds: windows.RECT, centered: bool = true) {
+	if len(label) == 0 { return }
+	r := bounds
+	old := windows.SelectObject(dc, windows.HGDIOBJ(ui.font_normal))
+	defer windows.SelectObject(dc, old)
+	windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
+	windows.SetTextColor(dc, C_TXT)
+	flags := windows.DrawTextFormat.DT_SINGLELINE | windows.DrawTextFormat.DT_VCENTER |
+		windows.DrawTextFormat.DT_NOPREFIX | windows.DrawTextFormat.DT_END_ELLIPSIS
+	if centered { flags |= windows.DrawTextFormat.DT_CENTER }
+	windows.DrawTextW(dc, wtext(label), -1, &r, flags)
+}
+
 // --- Timer tick (2 Hz timer, tracker still samples at 1 Hz internally) ---
 
 app_tick :: proc(app: ^App) {

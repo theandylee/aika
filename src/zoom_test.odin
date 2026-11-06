@@ -78,6 +78,11 @@ zoom_layout_and_ticks :: proc(t: ^testing.T) {
 		bar, minus, plus, reset := zoom_rects(lay)
 		testing.expect(t, bar.right > bar.left)
 		testing.expect(t, bar.bottom < lay.list_top)
+		testing.expect(t, lay.btn_prev.right < lay.btn_today.left)
+		testing.expect(t, lay.btn_today.right < lay.btn_next.left)
+		testing.expect(t, lay.btn_next.right < lay.date_pick.left)
+		testing.expect(t, lay.date_pick.right < lay.btn_track.left)
+		testing.expect(t, lay.btn_prev.top == lay.btn_today.top && lay.btn_today.top == lay.btn_next.top)
 		testing.expect(t, bar.right < minus.left && minus.right < plus.left && plus.right < reset.left)
 	}
 	testing.expect(t, zoom_tick_step(0, 24 * 3600_000, 1320) == 3600_000)

@@ -20,8 +20,8 @@ draw_date_button :: proc(item: ^Draw_Item) {
 	line_v(dc, x + 10, y - 2, 4, C_TXT)
 	fill_rect(dc, x + 4, y + 7, 2, 2, C_TXT)
 	fill_rect(dc, x + 8, y + 7, 2, 2, C_TXT)
-	draw_string(dc, date_label(global_app.date), r.left + 32, r.top + 7,
-		ui.font_normal, C_TXT, r.right - r.left - 40)
+	text_rect := windows.RECT{r.left + 32, r.top, r.right - 8, r.bottom}
+	draw_button_text(dc, date_label(global_app.date), text_rect, false)
 	if item.itemState & 0x10 != 0 { // ODS_FOCUS
 		focus := windows.RECT{r.left + 3, r.top + 3, r.right - 3, r.bottom - 3}
 		DrawFocusRect(dc, &focus)
