@@ -145,10 +145,23 @@ ui_tray_menu :: proc() {
 	windows.AppendMenuW(menu, 0, TRAY_EXIT, wtext("Exit"))
 	p: windows.POINT
 	windows.GetCursorPos(&p)
-	// Foreground ownership and WM_NULL let clicking elsewhere dismiss the menu.
-	windows.SetForegroundWindow(ui.tray_hwnd)
-	command := windows.TrackPopupMenu(menu, 0x0102, p.x, p.y, 0, ui.tray_hwnd, nil)
-	windows.PostMessageW(ui.tray_hwnd, windows.WM_NULL, 0, 0)
+	// Keep the visible, enabled app window as the menu owner. Activating the
+	// hidden callback window while our main window is active steals activation
+	// from it and can cause shell/menu focus handling to dismiss the popup.
+	// A modal picker owns its menu instead of its disabled parent; when hidden
+	// to the tray the independent callback window remains the fallback owner.
+	owner := ui.tray_hwnd
+	if windows.IsWindowVisible(ui.hwnd) && windows.IsWindowEnabled(ui.hwnd) { owner = ui.hwnd }
+	if tag_ui.popup != nil && windows.IsWindowVisible(tag_ui.popup) { owner = tag_ui.popup }
+	if settings_ui.hwnd != nil && windows.IsWindowVisible(settings_ui.hwnd) { owner = settings_ui.hwnd }
+	// Drop any in-progress drag before entering the native menu loop.
+	if capture := windows.GetCapture(); capture != nil {
+		windows.SendMessageW(capture, windows.WM_CANCELMODE, 0, 0)
+		windows.ReleaseCapture()
+	}
+	windows.SetForegroundWindow(owner)
+	command := windows.TrackPopupMenu(menu, 0x0102, p.x, p.y, 0, owner, nil)
+	windows.PostMessageW(owner, windows.WM_NULL, 0, 0)
 	if command != 0 { windows.SendMessageW(ui.hwnd, windows.WM_COMMAND, windows.WPARAM(command), 0) }
 }
 

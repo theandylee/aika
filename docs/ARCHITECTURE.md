@@ -227,10 +227,14 @@ Click the tray icon or choose **Open aika** to restore it. The tray menu's
 **Exit** destroys the window, removes the icon and flushes tracking through the
 normal shutdown path. Explorer restart notifications re-register the icon.
 If icon registration fails, the window stays accessible instead of hiding.
-The icon uses a separate hidden top-level window for shell callbacks and menu
-ownership, so its menu remains available while the main window is active,
-hidden, or disabled by the tag picker. Menu tracking is deferred until the
-shell callback returns; Open restores the picker too when one is open.
+The icon uses a separate hidden top-level window for shell callbacks. Menu
+tracking is deferred until the shell callback returns. The menu uses the visible,
+enabled main window as its owner, or the Settings/tag-picker window when open;
+only tray-only mode uses the hidden callback window as owner. This avoids
+transferring activation to an invisible window while the app is visible. Mouse
+capture is released before menu tracking. Open restores any open picker/settings
+window too, and the menu stays available with the main window visible, hidden or
+disabled by a picker.
 
 `draw_day()`:
 
