@@ -112,6 +112,11 @@ before touching it:
   pointer; headers and the grand total stay fixed. Each scrollbar is hidden
   when its rows fit, and positions are clamped after filtering or resizing.
   `pane_scroll_update` synchronizes the native range with each rendered list.
+- Drag the divider below the zoom bar to resize the timeline, or the divider
+  between list and totals to change their widths. Minimum sizes keep the panes
+  usable; sizes are session-only. Escape or capture loss cancels a drag.
+  `python tools/test-panes-ui.py build/aika.exe` checks native splitter input,
+  cancellation, and resizing using a temporary database.
 - The timeline zoom overview (`src/zoom.odin`) sits below the lanes. Drag its
   orange edges to resize the visible range, drag inside to pan, or click outside
   to center the selection there. `+` / `-` zoom around the center; `Full day`

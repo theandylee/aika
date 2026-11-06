@@ -262,6 +262,12 @@ scrolling. `build_totals()` aggregates timeline activities by `group_id` for the
 selected lane, sorted by duration; `draw_totals()` renders the totals panel with
 color chips and a pinned `Total: h:mm:ss` line.
 
+`src/panes.odin` provides captured drag splitters below the timeline zoom bar
+and between the list and totals. The horizontal divider changes all three lane
+heights together; the vertical divider trades list width for totals width.
+Sizes are retained for the current session and clamped to usable minimums on
+window resize. Escape or capture loss restores the sizes from before the drag.
+
 ### Header and footer
 
 - Date navigation (`<`, Today, `>`).

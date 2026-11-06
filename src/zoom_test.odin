@@ -10,6 +10,7 @@ zoom_behavior :: proc(t: ^testing.T) {
 	zoom_bounds_uses_actual_day_length(t)
 	zoom_pan_and_edges_clamp(t)
 	zoom_layout_and_ticks(t)
+	pane_resize_behavior(t)
 	tag_drag_behavior(t)
 }
 

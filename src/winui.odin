@@ -55,6 +55,10 @@ UiState :: struct {
 	zoom_start, zoom_end: f64,
 	zoom_drag: i32, // 0 = idle, 1/2 = resize edges, 3 = pan
 	zoom_drag_anchor, zoom_drag_start, zoom_drag_end: f64,
+	pane_lane_h, pane_totals_w: i32, // zero = default; retained for this session
+	pane_drag: i32, // 1 = timeline height, 2 = list/totals width
+	pane_drag_offset: i32,
+	pane_saved_lane_h, pane_saved_totals_w: i32,
 }
 
 ui: UiState
@@ -353,6 +357,12 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 	case windows.WM_MOUSEMOVE:
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
+		if ui.pane_drag != 0 {
+			w, h := client_size(hwnd)
+			pane_pointer_move(win_x, win_y, compute_layout(w, h))
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		if tag_ui.drag != 0 {
 			w, h := client_size(hwnd)
 			tag_pointer_move(win_x, compute_layout(w, h), app.activities)
@@ -377,6 +387,13 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		if ui.tab == 0 && (u32(lparam) & 0xFFFF) == 1 { // HTCLIENT
 			_update_mouse_client()
 			w, h := client_size(hwnd)
+			split := ui.pane_drag
+			if split == 0 { split = pane_split_hit(ui.mouse.x, ui.mouse.y, compute_layout(w, h)) }
+			if split != 0 {
+				cursor := u64(32645) if split == 1 else u64(32644) // IDC_SIZENS / IDC_SIZEWE
+				windows.SetCursor(windows.LoadCursorW(nil, transmute(cstring16)(cursor)))
+				return 1
+			}
 			_, edge := tag_edge_hit(app, ui.mouse.x, ui.mouse.y, compute_layout(w, h))
 			if edge != 0 || tag_ui.drag >= 2 {
 				windows.SetCursor(windows.LoadCursorW(nil, transmute(cstring16)(u64(32644))))
@@ -396,7 +413,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			}
 		}
 	case windows.WM_MOUSEWHEEL:
-		if ui.tab != 0 || tag_ui.drag != 0 { return 0 }
+		if ui.tab != 0 || tag_ui.drag != 0 || ui.pane_drag != 0 { return 0 }
 		delta := i32(i16((u32(wparam) >> 16) & 0xFFFF))
 		// WM_MOUSEWHEEL coordinates are screen-relative, including on other monitors.
 		p := windows.POINT{i32(i16(u32(lparam) & 0xFFFF)), i32(i16((u32(lparam) >> 16) & 0xFFFF))}
@@ -440,6 +457,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
 		w, h := client_size(hwnd)
+		if pane_pointer_down(win_x, win_y, compute_layout(w, h)) { return 0 }
 		if msg == windows.WM_LBUTTONDBLCLK && tag_gap_double_click(app, win_x, win_y, compute_layout(w, h)) {
 			return 0
 		}
@@ -461,6 +479,16 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_LBUTTONUP:
+		if ui.pane_drag != 0 {
+			w, h := client_size(hwnd)
+			x := i32(i16(u32(lparam) & 0xFFFF))
+			y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
+			pane_pointer_move(x, y, compute_layout(w, h))
+			ui.pane_drag = 0
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		if tag_ui.drag != 0 {
 			w, h := client_size(hwnd)
 			x := i32(i16(u32(lparam) & 0xFFFF))
@@ -484,13 +512,27 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		}
 		return 0
+	case windows.WM_CANCELMODE:
+		if ui.pane_drag != 0 {
+			pane_drag_cancel()
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 	case windows.WM_CAPTURECHANGED:
+		pane_drag_cancel()
 		tag_ui.drag = 0
 		ui.pressed_hit = HIT_NONE
 		ui.zoom_drag = 0
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_KEYDOWN:
+		if wparam == 0x1B && ui.pane_drag != 0 {
+			pane_drag_cancel()
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		if wparam == 0x1B && tag_ui.drag != 0 {
 			tag_ui.drag = 0
 			windows.ReleaseCapture()

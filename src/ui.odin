@@ -48,6 +48,11 @@ FILTER_H  :: 30
 STATUS_H  :: 22
 SIDEBAR_W :: 320
 MARGIN    :: 8
+SPLITTER_W :: 8
+MIN_LANE_H :: 44
+MIN_LOWER_H :: 100
+MIN_LIST_W :: 300
+MIN_TOTALS_W :: 180
 DATE_PICK_W :: 120 // native date picker (SysDateTimePick32) width
 
 // --- Layout ---
@@ -70,6 +75,7 @@ Layout :: struct {
 	filter_edit_x, filter_edit_y: i32,
 	filter_edit_w, filter_edit_h: i32,
 	status_y:      i32,
+	timeline_split, totals_split: windows.RECT,
 	btn_prev:      windows.RECT,
 	btn_next:      windows.RECT,
 	date_pick:     windows.RECT,
@@ -89,16 +95,28 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay.chart_x = MARGIN
 	lay.chart_w = w - MARGIN * 2 - 1
 
-	// Lane heights: leave room for a ~120px list area, cap lanes at 96px.
+	// Start with the original layout; user sizes are clamped, not overwritten,
+	// when the window shrinks so they return when it grows again.
 	lane_area := bottom_limit - (lay.ruler_y + RULER_H) - 120 - LIST_HDR - 2 * LANE_GAP - ZOOM_H
-	lay.lane_h = min(96, max(44, lane_area / 3))
+	wanted_lane_h := ui.pane_lane_h
+	if wanted_lane_h == 0 { wanted_lane_h = min(96, max(MIN_LANE_H, lane_area / 3)) }
+	max_lane_h := max(MIN_LANE_H, (bottom_limit - (lay.ruler_y + RULER_H) -
+		2 * LANE_GAP - 4 - ZOOM_H - SPLITTER_W - MIN_LOWER_H) / 3)
+	lay.lane_h = clamp(wanted_lane_h, MIN_LANE_H, max_lane_h)
 	lay.lane_y = lay.ruler_y + RULER_H
 	lay.lanes_bottom = lay.lane_y + 3 * lay.lane_h + 2 * LANE_GAP
 	lay.zoom_y = lay.lanes_bottom + 4
-	lay.list_top = lay.zoom_y + ZOOM_H + 4
+	lay.list_top = lay.zoom_y + ZOOM_H + SPLITTER_W
 	lay.list_bottom = bottom_limit
-	lay.sidebar_x = w - SIDEBAR_W - MARGIN - 1
-	lay.sidebar_w = SIDEBAR_W
+	wanted_totals_w := ui.pane_totals_w
+	if wanted_totals_w == 0 { wanted_totals_w = SIDEBAR_W }
+	lay.sidebar_w = clamp(wanted_totals_w, MIN_TOTALS_W,
+		max(MIN_TOTALS_W, lay.chart_w - SPLITTER_W - MIN_LIST_W))
+	lay.sidebar_x = lay.chart_x + lay.chart_w - lay.sidebar_w
+	lay.timeline_split = windows.RECT{lay.chart_x, lay.list_top - SPLITTER_W,
+		lay.chart_x + lay.chart_w, lay.list_top}
+	lay.totals_split = windows.RECT{lay.sidebar_x - SPLITTER_W, lay.list_top,
+		lay.sidebar_x, lay.list_bottom}
 
 	lay.filter_y = bottom_limit
 	lay.filter_edit_x = 56
@@ -361,6 +379,7 @@ draw_day :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	draw_zoom_bar(app, dc, lay, day_start, day_end)
 	draw_list(app, dc, lay, day_start, day_end)
 	draw_totals(app, dc, lay, day_start, day_end)
+	draw_pane_splitters(dc, lay)
 }
 
 // fraction of the day, 0..1
@@ -783,7 +802,7 @@ hit_test :: proc(x, y, w, h: i32) -> int {
 // --- Tooltip ---
 
 draw_tooltip :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
-	if !ui.mouse_valid || ui.tab != 0 || tag_ui.drag != 0 || tag_ui.popup != nil || tag_ui.menu_open { return }
+	if !ui.mouse_valid || ui.tab != 0 || ui.pane_drag != 0 || tag_ui.drag != 0 || tag_ui.popup != nil || tag_ui.menu_open { return }
 	mx, my := ui.mouse.x, ui.mouse.y
 	lay := compute_layout(w, h)
 	if mx < lay.chart_x || mx >= lay.chart_x + lay.chart_w { return }
