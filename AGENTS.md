@@ -1,7 +1,7 @@
 # AGENTS.md — aika
 
 This is the entry point for any agent working on **aika**, a Windows activity
-tracker and timeline viewer written in **Odin + raylib/raygui**.
+tracker and timeline viewer written in **Odin + raylib**.
 
 Read this file first, then the focused docs it links to.
 
@@ -115,7 +115,7 @@ src/
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
   db.odin         SQLite schema, repository, activity/group queries, import helpers
   sqlite.odin     SQLite C bindings
-  ui.odin         raygui/raylib header, timeline, summary, tooltips
+  ui.odin         scaled UI drawing (UI_S), custom header buttons, timeline, summary, tooltips
   importer.odin   JSON import command
 tools/
   export-manictime.ps1   Read ManicTime.sdf and write JSON

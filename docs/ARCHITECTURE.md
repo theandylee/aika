@@ -179,7 +179,11 @@ The UI currently loads **2** and **3** only.
 
 ## UI
 
-`src/ui.odin` is immediate-mode raygui plus raylib drawing.
+`src/ui.odin` is immediate-mode raylib drawing. Font sizes and layout are
+multiplied by a `UI_S` scale factor (see `docs/DEVELOPMENT.md` → "UI scale,
+fonts, and buttons"). Header buttons use a custom `gui_button` helper;
+raygui is linked only because it ships with the Odin vendor package and is not
+otherwise used.
 
 ### Timeline
 
@@ -241,4 +245,4 @@ timezone.
   SQLite is embedded, stable, and easy to query.
 - **One-way import instead of `.sdf` writes.** Writing SQL CE without its engine
   is not realistic.
-- **Odin + raygui.** Small native binary, immediate-mode UI, no .NET runtime.
+- **Odin + raylib.** Small native binary, immediate-mode UI, no .NET runtime.

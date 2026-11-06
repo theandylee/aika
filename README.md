@@ -1,6 +1,6 @@
 # aika
 
-A small Windows activity tracker and timeline viewer built with **Odin + raylib/raygui**.
+A small Windows activity tracker and timeline viewer built with **Odin + raylib**.
 
 It follows the same core design as ManicTime:
 
@@ -162,7 +162,7 @@ src/
   win32.odin      Win32 bindings, time helpers, version info, group identity
   db.odin         SQLite schema/repository, ManicTime-compatible dates
   sqlite.odin     SQLite C bindings
-  ui.odin         raygui/raylib timeline and summary
+  ui.odin         scaled text/drawing helpers, custom header buttons, timeline, summary
   importer.odin   JSON import command
 tools/
   export-manictime.ps1

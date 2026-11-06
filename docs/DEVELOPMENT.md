@@ -5,7 +5,7 @@
 | Tool | Tested version / path |
 |---|---|
 | Odin | `dev-2025-11-nightly:e5153a9` |
-| raylib/raygui | bundled with Odin under `vendor:raylib` (raylib 5.5, raygui 4.0) |
+| raylib/raygui | bundled with Odin under `vendor:raylib` (raylib 5.5; raygui 4.0 still linked but unused — see below) |
 | SQLite | 3.54.1 amalgamation, statically linked |
 | C compiler for SQLite | MSVC 2022 (`cl.exe` 14.38) |
 | PowerShell | Windows PowerShell 5.1 for the exporter |
@@ -74,6 +74,81 @@ vendor\raylib\raylib.dll
 
 This file should match the Odin vendor version. If you upgrade Odin, copy the
 new `vendor\raylib\windows\raylib.dll` into `vendor\raylib\`.
+
+---
+
+## UI scale, fonts, and buttons
+
+### The `UI_S` scale factor
+
+Everything readable in the UI is multiplied by `UI_S :: 1.4`, defined at the top
+of `src/ui.odin`. The rules that keep it consistent:
+
+- `draw_text` / `measure_text` / `truncate_to_width` multiply the *authored*
+  font size by `UI_S` internally. Never pre-scale font sizes at call sites —
+  pass the unscaled size (e.g. `15`, `22`) and let the helper scale it.
+- Coordinates, paddings, lane heights, button rectangles etc. must be scaled
+  explicitly at each call site (`24 * UI_S`, `32 * UI_S`, ...). The scale is
+  applied to positions manually because most coordinates are relative to panel
+  bounds, which auto-adapt to the window size.
+- If you add new `draw_text` calls or layout constants, follow the same pattern.
+  A missing `* UI_S` on a position shows up as overlapping text at larger
+  scale; a double-scaled font size shows up as gigantic text.
+
+### Font atlas size
+
+`load_ui_font` loads `segoeui.ttf` with `LoadFontEx(path, 48, ...)`. The base
+size should be **>= the largest rendered size** (`32 * UI_S ≈ 45 px` for the
+header). With a base size smaller than the drawn size, glyphs are upscaled and
+look blurry. Raising it also increases the atlas; the codepoint range
+(32..0x500, needed for Cyrillic in process names) still fits.
+
+### Buttons are custom, not raygui
+
+The four header buttons use `gui_button` in `src/ui.odin` (raylib rectangle
+drawing + hit test), not `rl.GuiButton`. Reason: see "Invisible raygui captions"
+below. `vendor:raygui` is still linked because it ships with the Odin vendor
+package, but no calls remain — do not reintroduce raygui controls without
+re-testing text rendering.
+
+---
+
+## Invisible raygui captions (post-mortem)
+
+While scaling the UI, all `GuiButton` captions stopped rendering — the buttons
+drew as plain gray rectangles, with glyph pixels entirely absent (verified by
+screenshot pixel analysis, not by eyeballing).
+
+Findings, usefully accurate for anyone touching UI text:
+
+1. **Symptom was conditional and weird.** With `.DEFAULT` style writes
+   (`TEXT_SIZE`) captions rendered; adding **any control-level style write**
+   (`GuiSetStyle(.BUTTON, ...)`) made them vanish. Same `TEXT_SIZE`.
+2. **The cause lives in the prebuilt static `raygui.lib`** shipped with the
+   Odin vendor package. It is opaque (no source in the repo), so behavior can
+   only be established empirically. Root cause was never fully pinned down;
+   a real suspect is raygui 4.0's `GuiDrawText`, which leaves `glyphWidth`
+   uninitialized in the `TEXT_WRAP_NONE` path (fixed upstream after 4.0, but
+   the vendored build may predate the fix) — a garbage `glyphWidth` would skip
+   every glyph via the
+   `textOffsetX <= textBounds.width - glyphWidth` check.
+3. **Bisect empirically, but beware stale binaries.** The biggest time sink was
+   results from *old* executables: `taskkill` without `/F` fails silently, a
+   rename onto a running exe fails, and `Start-Process` then launches the
+   previous build. When iterating on a GUI repro: `taskkill /F`, wait for the
+   file lock, `Remove-Item -Force` the copy target, and check the build output
+   before launching.
+4. **Verify pixels, not impressions.** A screenshot crop plus a color histogram
+   (`System.Drawing` in PowerShell) distinguishes "text drawn in wrong color"
+   (extra color clusters) from "text not drawn at all" (only fill/border
+   colors). The failing case was the latter.
+5. **Fix:** stop using raygui controls. `gui_button` gives the same
+   functionality for the four buttons in use, with the app font and theme
+   colors, and no raygui state involved.
+
+If raygui is ever needed again (e.g. settings panel in the roadmap), test text
+rendering first with a minimal `GuiButton` + custom font + one style write,
+before building anything on top.
 
 ---
 
@@ -254,6 +329,9 @@ There is no automated test suite yet. Use this manual checklist:
 | `LNK2005 CloseWindow already defined` | raylib static; build with `RAYLIB_SHARED=true` |
 | `LNK2019 ___chkstk_ms` | SQLite built with MinGW; rebuild with MSVC |
 | White window / no draw | font temp-allocator hang or stale exe |
+| Raygui button captions invisible | prebuilt `raygui.lib` stops drawing text after control-level style writes; see "Invisible raygui captions" — buttons are custom now, don't reintroduce raygui |
+| Blurry text | font atlas base size smaller than drawn size; see "Font atlas size" |
+| Uniformly too-small UI | missing `* UI_S` scaling; see "The `UI_S` scale factor" |
 | `Access to the database file is not allowed` | SQL CE needs `Temp Path`; close ManicTime |
 | `there was an error parsing the query ... Key` | quote `[Key]` or `"Key"` / use `"Group"` |
 | Dates off by decades | used `yyyyMMdd` instead of days since 2000-01-01 |

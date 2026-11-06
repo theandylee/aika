@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import "core:c"
 import "core:fmt"
@@ -107,15 +107,12 @@ main :: proc() {
 	load_day(&app)
 
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
-	rl.InitWindow(1320, 860, "aika — activity timeline")
+	rl.InitWindow(1320, 860, "aika вЂ” activity timeline")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
 	app.default_font = rl.GetFontDefault()
 	app.font = load_ui_font()
-	rl.GuiSetFont(app.font)
-	rl.GuiSetStyle(.DEFAULT, c.int(rl.GuiDefaultProperty.TEXT_SIZE), c.int(18 * UI_S))
-	rl.GuiSetStyle(.DEFAULT, c.int(rl.GuiDefaultProperty.BACKGROUND_COLOR), 0x1A1A20FF)
 
 	for !rl.WindowShouldClose() {
 		now := now_ms()
@@ -140,3 +137,15 @@ main :: proc() {
 		delete(app.db_path)
 	}
 }
+
+
+
+
+
+
+
+
+
+
+
+

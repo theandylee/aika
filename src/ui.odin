@@ -17,6 +17,12 @@ COL_DIM :: rl.Color{146, 146, 160, 255}
 COL_ACCENT :: rl.Color{110, 190, 255, 255}
 COL_GREEN :: rl.Color{76, 201, 135, 255}
 COL_ORANGE :: rl.Color{240, 160, 80, 255}
+COL_BTN :: rl.Color{37, 37, 44, 255}
+COL_BTN_HOVER :: rl.Color{45, 45, 56, 255}
+COL_BTN_PRESSED :: rl.Color{58, 58, 68, 255}
+COL_BTN_BORDER :: rl.Color{64, 64, 76, 255}
+COL_BTN_BORDER_HOVER :: rl.Color{106, 106, 122, 255}
+COL_BTN_TEXT :: rl.Color{205, 205, 214, 255}
 
 cstring_temp :: proc(s: string) -> cstring {
 	c, _ := strings.clone_to_cstring(s, context.temp_allocator)
@@ -441,6 +447,25 @@ draw_summary :: proc(app: ^App, bounds: rl.Rectangle) {
 	}
 }
 
+gui_button :: proc(app: ^App, bounds: rl.Rectangle, label: string) -> bool {
+	hover := rect_contains(bounds, rl.GetMousePosition())
+	if hover {
+		rl.DrawRectangleRec(bounds, COL_BTN_HOVER)
+		rl.DrawRectangleLinesEx(bounds, 1, COL_BTN_BORDER_HOVER)
+	} else {
+		rl.DrawRectangleRec(bounds, COL_BTN)
+		rl.DrawRectangleLinesEx(bounds, 1, COL_BTN_BORDER)
+	}
+	if rl.IsMouseButtonPressed(.LEFT) && hover {
+		rl.DrawRectangleRec(bounds, COL_BTN_PRESSED)
+	}
+	text_size: f32 = 15
+	w := measure_text(app.font, label, text_size)
+	line_h := text_size * UI_S * 0.72
+	draw_text(app.font, label, bounds.x + (bounds.width - w) / 2, bounds.y + (bounds.height - line_h) / 2, text_size, COL_BTN_TEXT)
+	return hover && rl.IsMouseButtonReleased(.LEFT)
+}
+
 draw_header :: proc(app: ^App, width: f32) {
 	font := app.font
 	h: f32 = 72 * UI_S
@@ -451,21 +476,21 @@ draw_header :: proc(app: ^App, width: f32) {
 	btn_y: f32 = 20 * UI_S
 	// Buttons are anchored to the left; widths follow the scaled font.
 	btn_x: f32 = 24 * UI_S
-	if rl.GuiButton({btn_x, btn_y, 38 * UI_S, btn_h}, "<") {
+	if gui_button(app, {btn_x, btn_y, 38 * UI_S, btn_h}, "<") {
 		app.date = add_days(app.date, -1)
 		load_day(app)
 	}
-	if rl.GuiButton({btn_x + 44 * UI_S, btn_y, 78 * UI_S, btn_h}, "Today") {
+	if gui_button(app, {btn_x + 44 * UI_S, btn_y, 78 * UI_S, btn_h}, "Today") {
 		app.date = today_date_int()
 		load_day(app)
 	}
-	if rl.GuiButton({btn_x + 128 * UI_S, btn_y, 38 * UI_S, btn_h}, ">") {
+	if gui_button(app, {btn_x + 128 * UI_S, btn_y, 38 * UI_S, btn_h}, ">") {
 		app.date = add_days(app.date, 1)
 		load_day(app)
 	}
 
 	label := "Tracking: ON" if app.tracker.enabled else "Tracking: OFF"
-	if rl.GuiButton({btn_x + 188 * UI_S, btn_y, 150 * UI_S, btn_h}, cstring_temp(label)) {
+	if gui_button(app, {btn_x + 188 * UI_S, btn_y, 150 * UI_S, btn_h}, label) {
 		if app.tracker.enabled {
 			tracker_pause(app)
 		} else {
