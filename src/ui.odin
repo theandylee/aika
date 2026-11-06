@@ -48,6 +48,7 @@ FILTER_H  :: 30
 STATUS_H  :: 22
 SIDEBAR_W :: 320
 MARGIN    :: 8
+DATE_PICK_W :: 120 // native date picker (SysDateTimePick32) width
 
 // --- Layout ---
 
@@ -70,6 +71,7 @@ Layout :: struct {
 	status_y:      i32,
 	btn_prev:      windows.RECT,
 	btn_next:      windows.RECT,
+	date_pick:     windows.RECT,
 	btn_today:     windows.RECT,
 	btn_track:     windows.RECT,
 	day_boxes:     [3]windows.RECT,
@@ -107,8 +109,9 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	by := lay.toolbar_y + 12
 	lay.btn_prev = windows.RECT{left = MARGIN, top = by, right = MARGIN + 26, bottom = by + bh}
 	lay.btn_next = windows.RECT{left = MARGIN + 30, top = by, right = MARGIN + 56, bottom = by + bh}
-	lay.btn_today = windows.RECT{left = MARGIN + 64, top = by, right = MARGIN + 132, bottom = by + bh}
-	lay.btn_track = windows.RECT{left = MARGIN + 140, top = by, right = MARGIN + 272, bottom = by + bh}
+	lay.date_pick = windows.RECT{left = MARGIN + 64, top = by, right = MARGIN + 64 + DATE_PICK_W, bottom = by + bh}
+	lay.btn_today = windows.RECT{left = MARGIN + 72 + DATE_PICK_W, top = by, right = MARGIN + 140 + DATE_PICK_W, bottom = by + bh}
+	lay.btn_track = windows.RECT{left = MARGIN + 148 + DATE_PICK_W, top = by, right = MARGIN + 280 + DATE_PICK_W, bottom = by + bh}
 
 	// Day start / day end / duration boxes anchored to the right.
 	bw := i32(108)

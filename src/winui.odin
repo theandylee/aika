@@ -21,6 +21,7 @@ import rt "base:runtime"
 UiState :: struct {
 	hwnd:         windows.HWND,
 	edit:         windows.HWND,
+	date_picker:  windows.HWND,
 	mem_dc:       windows.HDC,
 	mem_bmp:      windows.HBITMAP,
 	mem_bmp_old:  windows.HGDIOBJ,
@@ -51,6 +52,21 @@ HIT_BTN_NEXT    :: 3
 HIT_BTN_TRACK   :: 4
 HIT_TAB_BASE    :: 10 // +0..2
 HIT_LANE_BASE   :: 20 // +0..3
+
+// Native date picker (SysDateTimePick32) values missing from core:sys/windows.
+DTM_FIRST          :: 0x1000
+DTM_SETSYSTEMTIME  :: DTM_FIRST + 2
+DTM_GETSYSTEMTIME  :: DTM_FIRST + 3
+DTN_FIRST2         :: ~windows.DWORD(753 - 1)
+DTN_DATETIMECHANGE :: DTN_FIRST2 - 6 // -759, per WinSDK CommCtrl.h
+GDT_VALID          :: 0
+
+// tagNMDATETIMECHANGE: payload of DTN_DATETIMECHANGE (same process, in-proc).
+NMDATETIMECHANGE :: struct {
+	nmhdr:   windows.NMHDR,
+	dwFlags: windows.DWORD, // GDT_VALID in this app (no DTS_SHOWNONE)
+	st:      windows.SYSTEMTIME,
+}
 
 WNDC_CLASS :: "aika_window_class"
 APP_TIMER_ID :: 1
@@ -163,7 +179,7 @@ recreate_backbuffer :: proc(w, h: i32) {
 	ui.mem_h = h
 
 	// Move the filter edit control to the bottom of the client area.
-	if ui_edit_valid() {
+	if ui.edit != nil {
 		lay := compute_layout(w, h)
 		windows.MoveWindow(
 			ui.edit,
@@ -172,11 +188,31 @@ recreate_backbuffer :: proc(w, h: i32) {
 			windows.TRUE,
 		)
 	}
+	ui_resize_date_picker(w, h)
 	ui.mem_valid = true
 }
 
 ui_edit_valid :: proc() -> bool {
 	return ui.edit != nil
+}
+
+// Keep the date picker aligned with the toolbar layout on resize.
+ui_resize_date_picker :: proc(w, h: i32) {
+	if ui.date_picker == nil {
+		return
+	}
+	lay := compute_layout(w, h)
+	r := lay.date_pick
+	windows.MoveWindow(ui.date_picker, r.left, r.top, r.right - r.left, r.bottom - r.top, windows.TRUE)
+}
+
+// Push app.date into the native picker (used when date changes via buttons).
+sync_date_picker :: proc(app: ^App) {
+	if ui.date_picker == nil {
+		return
+	}
+	st := date_systemtime(app.date)
+	windows.SendMessageW(ui.date_picker, DTM_SETSYSTEMTIME, GDT_VALID, windows.LPARAM(uintptr(&st)))
 }
 
 // --- WndProc ---
@@ -245,6 +281,22 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		}
 		return 0
+	case windows.WM_NOTIFY:
+		// Date picker change: DTN_DATETIMECHANGE carries the new date itself
+		// (re-querying DTM_GETSYSTEMTIME mid-change can be transiently
+		// invalid), so trust the notification payload.
+		nm := transmute(^windows.NMHDR)(lparam)
+		if nm != nil && nm.hwndFrom == ui.date_picker && nm.code == DTN_DATETIMECHANGE {
+			ch := transmute(^NMDATETIMECHANGE)(lparam)
+			if ch.dwFlags == GDT_VALID {
+				d := date_int_from_systemtime(ch.st)
+				if d != app.date {
+					app.date = d
+					load_day(app)
+				}
+			}
+		}
+		return 0
 	case windows.WM_GETMINMAXINFO:
 		mmi := transmute(^windows.MINMAXINFO)(lparam)
 		mmi.ptMinTrackSize = windows.POINT{x = 720, y = 480}
@@ -297,12 +349,15 @@ handle_click :: proc(app: ^App, x, y: i32) {
 	switch {
 	case id == HIT_BTN_PREV:
 		app.date = add_days(app.date, -1)
+		sync_date_picker(app)
 		load_day(app)
 	case id == HIT_BTN_NEXT:
 		app.date = add_days(app.date, 1)
+		sync_date_picker(app)
 		load_day(app)
 	case id == HIT_BTN_TODAY:
 		app.date = today_date_int()
+		sync_date_picker(app)
 		load_day(app)
 	case id == HIT_BTN_TRACK:
 		if app.tracker.enabled {
@@ -367,6 +422,13 @@ ui_bootstrap :: proc() -> bool {
 
 	ui_create_fonts()
 
+	// Common controls (ICC_DATE_CLASSES) for the native date picker.
+	icc := windows.INITCOMMONCONTROLSEX{
+		dwSize = windows.DWORD(size_of(windows.INITCOMMONCONTROLSEX)),
+		dwICC  = windows.ICC_DATE_CLASSES,
+	}
+	windows.InitCommonControlsEx(&icc)
+
 	title := windows.utf8_to_wstring("aika", context.temp_allocator)
 	// WS_CLIPCHILDREN keeps our BitBlt from painting over the filter EDIT.
 	style := windows.WS_OVERLAPPEDWINDOW | windows.WS_CLIPCHILDREN
@@ -404,6 +466,26 @@ ui_bootstrap :: proc() -> bool {
 		windows.SendMessageW(ui.edit, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	}
 
+	// Native date picker in the toolbar. DTN_DATETIMECHANGE (handled in
+	// wnd_proc) navigates to the chosen day; button navigation writes back
+	// from sync_date_picker.
+	ui.date_picker = windows.CreateWindowExW(
+		windows.DWORD(0),
+		windows.LPCWSTR(windows.utf8_to_wstring(windows.DATETIMEPICK_CLASS, context.temp_allocator)),
+		nil,
+		windows.WS_CHILD | windows.WS_VISIBLE,
+		0, 0, 120, 26,
+		ui.hwnd, nil, windows.HINSTANCE(hinstance), nil,
+	)
+	if ui.date_picker != nil {
+		if ui.font_normal != nil {
+			windows.SendMessageW(ui.date_picker, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
+		}
+		if global_app != nil {
+			sync_date_picker(global_app)
+		}
+	}
+
 	// Position the filter edit explicitly: the first WM_SIZE can arrive before
 	// the control exists.
 	cw, ch := client_size(ui.hwnd)
@@ -414,6 +496,7 @@ ui_bootstrap :: proc() -> bool {
 		lay.filter_edit_w, lay.filter_edit_h,
 		windows.TRUE,
 	)
+	ui_resize_date_picker(cw, ch)
 
 	windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
 	windows.SetTimer(ui.hwnd, windows.UINT_PTR(APP_TIMER_ID), 500, nil)
