@@ -341,6 +341,12 @@ tag_picker_accept :: proc(create: bool) {
 tag_picker_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
 	switch msg {
+	case windows.WM_ERASEBKGND:
+		w, h := client_size(hwnd)
+		fill_rect(windows.HDC(wp), 0, 0, w, h, C_PANEL)
+		return 1
+	case windows.WM_CTLCOLOREDIT, windows.WM_CTLCOLORSTATIC, windows.WM_CTLCOLORLISTBOX:
+		return theme_control_colors(wp)
 	case windows.WM_CLOSE:
 		tag_picker_close()
 		return 0

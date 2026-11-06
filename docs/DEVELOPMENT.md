@@ -96,12 +96,20 @@ before touching it:
   reopened on `WM_THEMECHANGED` and released at shutdown. Toolbar buttons use
   mouse capture for pressed feedback and activate on release inside the button.
   These remain custom hit targets, not native keyboard-accessible controls.
+- The top-right **moon / sun** icon button switches immediately (moon for dark,
+  sun for light), with a hover tooltip describing the action. It
+  saves the choice in `<database path>.theme`. Missing/invalid preferences use
+  light mode. `src/theme.odin` manages the palette and native control colors;
+  dark buttons/tabs use the GDI fallback rather than light UxTheme rendering.
+  Activity/tag colors are preserved, with contrasting text on tag blocks.
+  Native menus and picker buttons retain Windows styling.
+  `python tools/test-theme-ui.py build/aika.exe` checks switching and persistence
+  with an isolated database.
 - All paint-time allocations use `context.temp_allocator`; the `free_all` after
   each dispatched message in `main` releases them. Per-object deletes of
   temp memory crash (allocator mismatch) — don't add them.
-- Colors are `COLORREF` literals (`0x00BBGGRR`); a hex `::` constant is
-  compile-time, while the `rgb()` proc is runtime — palette constants at the
-  top of `src/ui.odin` must remain literals.
+- Colors are `COLORREF` literals (`0x00BBGGRR`); mutable UI palette variables
+  are assigned by `theme_set_palette`. Semantic activity colors remain constants.
 - `i32` vs `int` matters: loop counters and rectangle coordinates are `i32`,
   while `len()` and array literals produce `int`. Cast with `i32(...)` at
   call sites.

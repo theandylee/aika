@@ -9,12 +9,19 @@ import "core:sys/windows"
 foreign import aika_k32 "system:kernel32.lib"
 foreign import aika_u32 "system:user32.lib"
 foreign import aika_theme "system:uxtheme.lib"
+foreign import aika_dwm "system:dwmapi.lib"
+
+@(default_calling_convention = "system")
+foreign aika_dwm {
+	DwmSetWindowAttribute :: proc(hwnd: windows.HWND, attribute: u32, value: rawptr, size: u32) -> i32 ---
+}
 
 // UxTheme paints into our GDI backbuffer; no extra UI framework is required.
 Theme_Handle :: distinct rawptr
 
 @(default_calling_convention = "system")
 foreign aika_theme {
+	SetWindowTheme :: proc(hwnd: windows.HWND, app_name, id_list: windows.LPCWSTR) -> i32 ---
 	OpenThemeData :: proc(hwnd: windows.HWND, class_list: windows.LPCWSTR) -> Theme_Handle ---
 	CloseThemeData :: proc(theme: Theme_Handle) -> i32 ---
 	DrawThemeBackground :: proc(theme: Theme_Handle, dc: windows.HDC, part, state: i32, rect, clip: ^windows.RECT) -> i32 ---

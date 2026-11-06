@@ -27,6 +27,7 @@ PaneScroll :: struct {
 }
 
 UiState :: struct {
+	dark:         bool,
 	hwnd:         windows.HWND,
 	tray_added:   bool,
 	taskbar_created: u32,
@@ -42,6 +43,7 @@ UiState :: struct {
 	font_bold:   windows.HFONT, // 12px bold
 	font_small:  windows.HFONT, // 11px
 	font_title:  windows.HFONT, // 20px bold (day header)
+	font_icons:  windows.HFONT, // standard monochrome sun/moon symbols
 	theme_button: Theme_Handle,
 	theme_tab:    Theme_Handle,
 	pressed_hit:  int,
@@ -74,6 +76,7 @@ HIT_BTN_TASK    :: 4
 HIT_ZOOM_OUT    :: 5
 HIT_ZOOM_IN     :: 6
 HIT_ZOOM_RESET  :: 7
+HIT_THEME       :: 8
 HIT_TAB_BASE    :: 10 // +0..2
 HIT_LANE_BASE   :: 20 // +0..3
 
@@ -363,7 +366,7 @@ ui_open_themes :: proc() {
 
 // Return false when visual styles are unavailable so callers can use GDI.
 draw_themed_control :: proc(dc: windows.HDC, theme: Theme_Handle, part, state: i32, r: windows.RECT, label: string) -> bool {
-	if theme == nil { return false }
+	if ui.dark || theme == nil { return false }
 	rc := r
 	if DrawThemeBackground(theme, dc, part, state, &rc, nil) < 0 { return false }
 	old := windows.SelectObject(dc, windows.HGDIOBJ(ui.font_normal))
@@ -409,6 +412,8 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		return 0
 	case windows.WM_ERASEBKGND:
 		return 1 // no flicker: everything is drawn in WM_PAINT
+	case windows.WM_CTLCOLOREDIT, windows.WM_CTLCOLORSTATIC, windows.WM_CTLCOLORLISTBOX:
+		return theme_control_colors(wparam)
 	case windows.WM_PAINT:
 		ps: windows.PAINTSTRUCT
 		dc := windows.BeginPaint(hwnd, &ps)
@@ -552,7 +557,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			return 0
 		}
 		id := hit_test(win_x, win_y, w, h)
-		if id >= HIT_BTN_PREV && id <= HIT_ZOOM_RESET {
+		if id >= HIT_BTN_PREV && id <= HIT_THEME {
 			ui.pressed_hit = id
 			windows.SetCapture(hwnd)
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
@@ -703,6 +708,8 @@ handle_click :: proc(app: ^App, x, y: i32) {
 	w, h := client_size(ui.hwnd)
 	id := hit_test(x, y, w, h)
 	switch {
+	case id == HIT_THEME:
+		theme_toggle()
 	case id == HIT_ZOOM_OUT:
 		zoom_scale(1.5, 0.5)
 	case id == HIT_ZOOM_IN:
@@ -751,7 +758,7 @@ handle_click :: proc(app: ^App, x, y: i32) {
 
 // Height is the em height in pixels (negative height in CreateFontW means
 // "cell height", here expressed directly). Same face for everything.
-ui_make_font :: proc(h_px, weight: i32) -> windows.HFONT {
+ui_make_font :: proc(h_px, weight: i32, face: string = "Segoe UI") -> windows.HFONT {
 	return windows.CreateFontW(
 		-h_px, 0, 0, 0, windows.INT(weight),
 		0, 0, 0, // not italic / underlined / struck out
@@ -759,7 +766,7 @@ ui_make_font :: proc(h_px, weight: i32) -> windows.HFONT {
 		0, 0, // OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS
 		windows.CLEARTYPE_QUALITY,
 		0, // DEFAULT_PITCH | FF_DONTCARE
-		windows.LPCWSTR(windows.utf8_to_wstring("Segoe UI", context.temp_allocator)),
+		windows.LPCWSTR(windows.utf8_to_wstring(face, context.temp_allocator)),
 	)
 }
 
@@ -768,11 +775,13 @@ ui_create_fonts :: proc() {
 	ui.font_bold   = ui_make_font(12, windows.FW_BOLD)
 	ui.font_small  = ui_make_font(11, 400)
 	ui.font_title  = ui_make_font(20, windows.FW_BOLD)
+	ui.font_icons  = ui_make_font(16, 400, "Segoe UI Symbol")
 }
 
 // --- Window bootstrap ---
 
 ui_bootstrap :: proc() -> bool {
+	theme_load()
 	ui.zoom_end = 1
 	hinstance := windows.GetModuleHandleW(nil)
 	class_name := windows.utf8_to_wstring(WNDC_CLASS, context.temp_allocator)
@@ -876,6 +885,7 @@ ui_bootstrap :: proc() -> bool {
 	)
 	ui_resize_date_picker(cw, ch)
 
+	theme_apply_native()
 	windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
 	windows.SetTimer(ui.hwnd, windows.UINT_PTR(APP_TIMER_ID), 500, nil)
 	return true
@@ -894,6 +904,7 @@ ui_shutdown :: proc() {
 	if ui.font_bold != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_bold)) }
 	if ui.font_small != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_small)) }
 	if ui.font_title != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_title)) }
+	if ui.font_icons != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_icons)) }
 	if ui.filter != "" {
 		delete(ui.filter)
 		ui.filter = ""

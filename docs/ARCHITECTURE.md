@@ -197,8 +197,11 @@ Layout constants (`TAB_H`, `TOOLBAR_H`, `LANE_*`, `LIST_*`, ...) live at the top
 of `src/ui.odin`; `compute_layout()` derives every rect from the client size, so
 the window resizes correctly. Repaints are on-demand: the timer invalidates
 every 500 ms (which also drives the 1 Hz tracker sampling inside
-`tracker_tick`), and mouse movement/hover invalidates too. Palette constants
-are `COLORREF` literals (`0x00BBGGRR`).
+`tracker_tick`), and mouse movement/hover invalidates too. Palette values
+are `COLORREF` literals (`0x00BBGGRR`). `src/theme.odin` switches the mutable
+UI palette between light and dark via the top-right toggle, saving the choice
+beside the selected database as `<database path>.theme`. Dark buttons and tabs
+use GDI rather than light UxTheme drawing; stored activity colors are unchanged.
 
 Odin note: `wnd_proc` uses a non-default calling convention, which makes it
 contextless; it starts with `context = rt.default_context()`. All paint-time

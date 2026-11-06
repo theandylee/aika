@@ -6,7 +6,7 @@ import "core:strings"
 import "core:sys/windows"
 
 // ManicTime-style Day view, drawn with GDI into the winui backbuffer.
-// Light theme, full 24h axis, three timeline lanes (Tags / Computer Usage /
+// Switchable light/dark theme, full 24h axis, three timeline lanes (Tags / Computer Usage /
 // Applications), details list + totals panel below.
 //
 // Memory note: everything allocated during a paint uses context.temp_allocator
@@ -15,28 +15,28 @@ import "core:sys/windows"
 
 // --- Palette (COLORREF = 0x00BBGGRR; comments show rgb(R,G,B)) ---
 
-C_BG          :: 0x00FAF7F5 // rgb(245,247,250)
-C_PANEL       :: 0x00FFFFFF
-C_BORDER      :: 0x00C0AF9C // rgb(156,175,192)
-C_BORDER_SOFT :: 0x00E2D8CD // rgb(205,216,226)
-C_LANE_BG     :: 0x00F4ECE2 // rgb(226,236,244)
-C_LANE_GRID   :: 0x00E4D8CB // rgb(203,216,228)
-C_LANE_TXT    :: 0x00746658 // rgb(88,102,116)
-C_TXT         :: 0x0028221E // rgb(30,34,40)
-C_DIM         :: 0x00908478 // rgb(120,132,144)
+C_BG:          windows.COLORREF = 0x00FAF7F5
+C_PANEL:       windows.COLORREF = 0x00FFFFFF
+C_BORDER:      windows.COLORREF = 0x00C0AF9C
+C_BORDER_SOFT: windows.COLORREF = 0x00E2D8CD
+C_LANE_BG:     windows.COLORREF = 0x00F4ECE2
+C_LANE_GRID:   windows.COLORREF = 0x00E4D8CB
+C_LANE_TXT:    windows.COLORREF = 0x00746658
+C_TXT:         windows.COLORREF = 0x0028221E
+C_DIM:         windows.COLORREF = 0x00908478
 C_ACCENT      :: 0x0030A0F0 // rgb(240,160,48) - selected lane, ManicTime orange
 C_GREEN       :: 0x0087C94C // rgb(76,201,135)
 C_ORANGE      :: 0x0050A0F0 // rgb(240,160,80)
 C_RED         :: 0x005A5ADE // rgb(222,90,90)
-C_TAB_BG      :: 0x00F5EFE8 // rgb(232,239,245)
-C_TAB_ACTIVE  :: 0x00FFFFFF
-C_BTN_FACE    :: 0x00FFFFFF
-C_BTN_BORDER  :: 0x00EAB47E // rgb(126,180,234)
-C_BTN_HOVER   :: 0x00FCE0E4 // rgb(228,240,252)
-C_HEAD_BG     :: 0x00F8F4EF // rgb(239,244,248)
-C_ROW_ALT     :: 0x00FCF9F6 // rgb(246,249,252)
-C_TIP_BG      :: 0x00E1FFFF // rgb(255,255,225)
-C_TIP_BORDER  :: 0x008C8278 // rgb(120,130,140)
+C_TAB_BG:      windows.COLORREF = 0x00F5EFE8
+C_TAB_ACTIVE:  windows.COLORREF = 0x00FFFFFF
+C_BTN_FACE:    windows.COLORREF = 0x00FFFFFF
+C_BTN_BORDER:  windows.COLORREF = 0x00EAB47E
+C_BTN_HOVER:   windows.COLORREF = 0x00FCE0E4
+C_HEAD_BG:     windows.COLORREF = 0x00F8F4EF
+C_ROW_ALT:     windows.COLORREF = 0x00FCF9F6
+C_TIP_BG:      windows.COLORREF = 0x00E1FFFF
+C_TIP_BORDER:  windows.COLORREF = 0x008C8278
 
 TAB_H     :: 26
 TOOLBAR_H :: 52
@@ -226,6 +226,7 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	if ui.tab == 0 {
 		draw_tooltip(app, dc, w, h)
 	}
+	draw_theme_tooltip(dc, w)
 }
 
 draw_placeholder :: proc(dc: windows.HDC, w, h: i32, title, note: string) {
@@ -244,6 +245,7 @@ draw_tabs :: proc(dc: windows.HDC) {
 	w := ui.mem_w
 	fill_rect(dc, 0, 0, w, TAB_H, C_TAB_BG)
 	line_h(dc, 0, TAB_H - 1, w, C_BORDER_SOFT)
+	draw_theme_switch(dc, w)
 	for i := i32(0); i < 3; i += 1 {
 		t := compute_tabs(i32(i))
 		active := ui.tab == i
@@ -256,7 +258,7 @@ draw_tabs :: proc(dc: windows.HDC) {
 		}
 		bg: windows.COLORREF = C_TAB_ACTIVE if active else C_TAB_BG
 		if !active && ui.mouse_valid && rect_hit(t, ui.mouse.x, ui.mouse.y) {
-			bg = rgb(244, 248, 252)
+			bg = C_BTN_HOVER
 		}		fill_rect(dc, t.left + 1, t.top, t.right - t.left - 1, TAB_H, bg)
 		if active {
 			line_h(dc, t.left + 1, t.top, t.right - t.left - 2, C_ACCENT)
@@ -333,7 +335,7 @@ draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: int) {
 	h := r.bottom - r.top
 	bg: windows.COLORREF = C_BTN_FACE
 	if ui.mouse_valid && rect_hit(r, ui.mouse.x, ui.mouse.y) {
-		bg = C_BTN_HOVER
+		bg = C_BORDER_SOFT if ui.pressed_hit == hit else C_BTN_HOVER
 	}
 	fill_rect(dc, r.left + 1, r.top + 1, w - 2, h - 2, bg)
 	fill_frame(dc, r.left, r.top, w, h, C_BTN_BORDER)
@@ -466,7 +468,7 @@ draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y,
 		fill_rect(dc, x1, bar_y, bw, bar_h, color)
 		if tl == TIMELINE_TAGS {
 			fill_frame(dc, x1, bar_y, bw, bar_h, C_BORDER)
-			draw_string(dc, a.display_name, x1 + 6, bar_y + 8, ui.font_bold, C_TXT, bw - 12)
+			draw_string(dc, a.display_name, x1 + 6, bar_y + 8, ui.font_bold, bar_text_color(color), bw - 12)
 			line_v(dc, x1 + 2, bar_y + bar_h / 2 - 5, 10, C_PANEL)
 			if bw > 6 { line_v(dc, x2 - 3, bar_y + bar_h / 2 - 5, 10, C_PANEL) }
 		}
@@ -773,6 +775,7 @@ rect_hit :: proc(r: windows.RECT, x, y: i32) -> bool {
 }
 
 hit_test :: proc(x, y, w, h: i32) -> int {
+	if rect_hit(theme_switch_rect(w), x, y) { return HIT_THEME }
 	for i := 0; i < 3; i += 1 {
 		if rect_hit(compute_tabs(i32(i)), x, y) {
 			return HIT_TAB_BASE + i
