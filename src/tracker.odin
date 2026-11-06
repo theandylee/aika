@@ -207,7 +207,7 @@ poll_focus :: proc(app: ^App, now: i64) {
 
 tracker_init :: proc(app: ^App) {
 	app.tracker.enabled = true
-	app.tracker.idle_threshold_ms = 10 * 60 * 1000
+	app.tracker.idle_threshold_ms = i64(settings_load_minutes(app.db_path)) * 60_000
 	app.tracker.last_tick_ms = 0
 	now := now_ms()
 	start_usage(app, .Active, now)

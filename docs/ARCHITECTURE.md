@@ -64,7 +64,14 @@ desired := .Away if idle >= idle_threshold_ms else .Active
 ```
 
 `idle_ms()` uses `GetLastInputInfo` plus `GetTickCount64` and handles the 32-bit
-tick-count wrap.
+tick-count wrap. The default idle threshold is 60 seconds without keyboard or mouse
+input. `src/settings.odin` provides a native Settings window (top-right button or
+tray menu) with a Tracking page and a validated 1–500 minute timeout. OK saves the
+integer minute value in `<database path>.settings` and applies it on the next
+tracker tick; Cancel, Escape and window close discard edits. Missing or invalid
+preferences fall back to one minute. The owner is disabled while settings is open,
+but its timer continues tracking. Tab, Enter and Escape are handled through the
+main message loop, without a separate modal loop. The window follows the palette.
 
 ### Active state
 

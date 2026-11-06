@@ -255,7 +255,8 @@ Past causes:
 Check:
 
 1. Is `tracker.enabled` true? The header button toggles it.
-2. Is the user idle? `idle_ms() >= 10 min` switches to Away and stops app rows.
+2. Is the user idle? `idle_ms() >= configured timeout` switches to Away and stops
+   app rows (default 1 minute; change it in Settings → Tracking).
 3. Is the window title changing every couple of seconds? The 5 s rule discards
    short activities, so a rapidly changing title can produce no rows.
 4. Is the app window itself foreground? aika records itself too.
@@ -322,6 +323,9 @@ Check:
 ## Testing checklist
 
 Run `odin test src -vet` for zoom/tag interaction and tag persistence tests.
+`python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
+and dark modes: validation, save/cancel/close, restart persistence, invalid-file
+fallback and continued activity tracking while open, using an isolated database.
 `python tools/test-tags-ui.py build/aika.exe` runs a native UI smoke test with
 its own temporary database (create, reverse drag, search/reuse, resize both
 edges, cancel, non-overlap, context-menu delete, tag reuse, persistence).
@@ -336,7 +340,8 @@ the UI and tracker:
 3. Start GUI; verify the window draws.
 4. Focus different apps; verify new rows in timeline 3 after 5 s.
 5. Wait 10 s; verify the last row's `EndLocalTime` advances.
-6. Switch away from the keyboard for >10 min; verify an `Away` row in timeline 2
+6. Leave both keyboard and mouse untouched beyond the configured timeout (default
+   1 minute); verify an `Away` row in timeline 2
    and a gap in timeline 3.
 7. Pause tracking; verify no new rows. Resume; verify rows resume.
 8. Navigate dates; verify the timeline reloads.

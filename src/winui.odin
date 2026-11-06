@@ -84,6 +84,7 @@ HIT_ZOOM_RESET  :: 7
 HIT_THEME       :: 8
 HIT_TOTALS_TREE :: 9
 HIT_TOTALS_ROW  :: 30
+HIT_SETTINGS    :: 31
 HIT_TAB_BASE    :: 10 // +0..2
 HIT_LANE_BASE   :: 20 // +0..3
 
@@ -94,6 +95,7 @@ TRAY_SHOW_MENU :: windows.WM_APP + 2
 TRAY_ICON_ID :: 1
 TRAY_OPEN :: 1001
 TRAY_EXIT :: 1002
+TRAY_SETTINGS :: 1003
 
 // Keep the icon available even while the window is visible. Use the legacy
 // callback format (uID in wParam, mouse message in lParam).
@@ -127,6 +129,7 @@ ui_restore :: proc() {
 	}
 	windows.SetForegroundWindow(ui.hwnd)
 	if tag_ui.popup != nil { windows.SetForegroundWindow(tag_ui.popup) }
+	if settings_ui.hwnd != nil { windows.SetForegroundWindow(settings_ui.hwnd) }
 	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
 }
 
@@ -138,6 +141,7 @@ ui_tray_menu :: proc() {
 	if menu == nil { return }
 	defer windows.DestroyMenu(menu)
 	windows.AppendMenuW(menu, 0, TRAY_OPEN, wtext("Open aika"))
+	windows.AppendMenuW(menu, 0, TRAY_SETTINGS, wtext("Settings..."))
 	windows.AppendMenuW(menu, 0, TRAY_EXIT, wtext("Exit"))
 	p: windows.POINT
 	windows.GetCursorPos(&p)
@@ -663,7 +667,9 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		if lparam == 0 && (u32(wparam) >> 16) == 0 {
 			switch u32(wparam) & 0xFFFF {
 			case TRAY_OPEN: ui_restore(); return 0
+			case TRAY_SETTINGS: ui_restore(); settings_open(); return 0
 			case TRAY_EXIT:
+				settings_close()
 				if tag_ui.popup != nil { tag_picker_close() }
 				windows.DestroyWindow(hwnd)
 				return 0
@@ -742,6 +748,8 @@ handle_click :: proc(app: ^App, x, y: i32) {
 		totals_tree_click(app, y, compute_layout(w, h))
 	case id == HIT_THEME:
 		theme_toggle()
+	case id == HIT_SETTINGS:
+		settings_open()
 	case id == HIT_ZOOM_OUT:
 		zoom_scale(1.5, 0.5)
 	case id == HIT_ZOOM_IN:

@@ -227,6 +227,7 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 		draw_tooltip(app, dc, w, h)
 	}
 	draw_theme_tooltip(dc, w)
+	draw_settings_tooltip(dc, w)
 	draw_totals_mode_tooltip(dc, compute_layout(w, h))
 }
 
@@ -247,6 +248,7 @@ draw_tabs :: proc(dc: windows.HDC) {
 	fill_rect(dc, 0, 0, w, TAB_H, C_TAB_BG)
 	line_h(dc, 0, TAB_H - 1, w, C_BORDER_SOFT)
 	draw_theme_switch(dc, w)
+	draw_settings_switch(dc, w)
 	for i := i32(0); i < 3; i += 1 {
 		t := compute_tabs(i32(i))
 		active := ui.tab == i
@@ -780,6 +782,7 @@ rect_hit :: proc(r: windows.RECT, x, y: i32) -> bool {
 
 hit_test :: proc(x, y, w, h: i32) -> int {
 	if rect_hit(theme_switch_rect(w), x, y) { return HIT_THEME }
+	if rect_hit(settings_switch_rect(w), x, y) { return HIT_SETTINGS }
 	for i := 0; i < 3; i += 1 {
 		if rect_hit(compute_tabs(i32(i)), x, y) {
 			return HIT_TAB_BASE + i

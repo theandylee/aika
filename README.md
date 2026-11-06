@@ -23,7 +23,8 @@ PowerShell exporter used to read ManicTime's proprietary `.sdf` file.
 Working MVP:
 
 - Foreground-window tracking at 1 Hz
-- Idle/away detection (`GetLastInputInfo`, 10 min threshold)
+- Idle/away detection (`GetLastInputInfo`, default 1 min without keyboard or mouse input)
+- Tracking settings (top-right Settings button or tray menu): 1–500 minute idle timeout, saved per database
 - ManicTime-style day view: tab strip, date navigation, full 24 h timeline with
   Tags / Computer Usage / Applications / Documents lanes
 - Application timeline with live current-activity bar

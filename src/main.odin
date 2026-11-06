@@ -106,7 +106,7 @@ main :: proc() {
 	// (text conversions, paint structures) are released after dispatch.
 	msg: windows.MSG
 	for windows.GetMessageW(&msg, nil, 0, 0) > 0 {
-		if !date_picker_key(&msg) && !tag_picker_key(&msg) {
+		if !settings_key(&msg) && !date_picker_key(&msg) && !tag_picker_key(&msg) {
 			windows.TranslateMessage(&msg)
 			windows.DispatchMessageW(&msg)
 		}
