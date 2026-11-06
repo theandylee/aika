@@ -756,10 +756,6 @@ draw_status_bar :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	dot := C_GREEN if app.tracker.enabled else rgb(200, 204, 208)
 	dot_x := 8 + text_pixel_width(clock, ui.font_normal) + 6
 	fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, dot)
-
-	version := "aika (native ui)"
-	tw := text_pixel_width(version, ui.font_normal)
-	draw_string(dc, version, w - 8 - tw, lay.status_y + 4, ui.font_normal, C_DIM)
 }
 
 // --- Hit testing ---
