@@ -295,6 +295,16 @@ scrolling. `build_totals()` aggregates timeline activities by `group_id` for the
 selected lane, sorted by duration; `draw_totals()` renders the totals panel with
 color chips and a pinned `Total: h:mm:ss` line.
 
+The small tree icon in the Totals header toggles a hierarchical view provided
+by `src/totals_tree.odin`. Slash-separated names create nested groups; segment
+whitespace and empty separators are ignored. Each group rolls up all descendant
+time (plus any item named exactly like that group), with siblings sorted by
+duration. Groups start folded; clicking a group row toggles it. Fold state is
+retained per lane for the session, including across date changes and flat/tree
+switches. Only visible rows count toward scrolling; the grand total always uses
+the original flat totals so parent/child rows are never double-counted. Stored
+names and activities are not modified.
+
 `src/panes.odin` provides captured drag splitters below the timeline zoom bar
 and between the list and totals. The horizontal divider changes all three lane
 heights together; the vertical divider trades list width for totals width.

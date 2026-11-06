@@ -126,6 +126,12 @@ before touching it:
   pointer; headers and the grand total stay fixed. Each scrollbar is hidden
   when its rows fit, and positions are clamped after filtering or resizing.
   `pane_scroll_update` synchronizes the native range with each rendered list.
+- The Totals header's tree icon toggles slash-separated name grouping. Click
+  group rows to expand/fold them; groups initially start folded. Expansion state
+  is session-only and lane-specific. `src/totals_tree.odin` builds a temporary
+  hierarchy without changing stored names. `odin test src -vet` checks rollups,
+  normalization and nested visibility; `python tools/test-totals-tree-ui.py
+  build/aika.exe` checks the native toggle, folding and scrollbar row counts.
 - Drag the divider below the zoom bar to resize the timeline, or the divider
   between list and totals to change their widths. Minimum sizes keep the panes
   usable; sizes are session-only. Escape or capture loss cancels a drag.

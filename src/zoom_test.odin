@@ -12,6 +12,7 @@ zoom_behavior :: proc(t: ^testing.T) {
 	zoom_layout_and_ticks(t)
 	pane_resize_behavior(t)
 	tag_drag_behavior(t)
+	totals_tree_behavior(t)
 }
 
 zoom_scale_keeps_anchor :: proc(t: ^testing.T) {

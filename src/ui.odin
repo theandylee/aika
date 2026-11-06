@@ -227,6 +227,7 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 		draw_tooltip(app, dc, w, h)
 	}
 	draw_theme_tooltip(dc, w)
+	draw_totals_mode_tooltip(dc, compute_layout(w, h))
 }
 
 draw_placeholder :: proc(dc: windows.HDC, w, h: i32, title, note: string) {
@@ -696,18 +697,31 @@ draw_totals :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end:
 	}
 
 	draw_string(dc, "Totals", x + 8, lay.list_top + 6, ui.font_bold, C_TXT)
+	draw_totals_mode(dc, lay)
 	line_h(dc, x + 1, lay.list_top + 24, w - 2, C_BORDER_SOFT)
 
 	view_h := max(0, total_h - 52)
 	visible := max(1, view_h / LIST_ROW)
-	bar_w := pane_scroll_update(&ui.totals_scroll, i32(len(totals)), visible,
+	tree_rows: []^Totals_Node
+	row_count := len(totals)
+	if ui.totals_tree {
+		tree_rows = totals_tree_rows(totals)
+		row_count = len(tree_rows)
+	}
+	bar_w := pane_scroll_update(&ui.totals_scroll, i32(row_count), visible,
 		x + w - 1, lay.list_top + 32, lay.list_bottom - 20)
 	row_w := w - bar_w
 	skip := ui.totals_scroll.pos
 
 	y := lay.list_top + 32
-	n_totals := i32(len(totals))
-	for i := skip; i < n_totals && i < skip + visible; i += 1 {		t := totals[i]
+	n_totals := i32(row_count)
+	for i := skip; i < n_totals && i < skip + visible; i += 1 {
+		if ui.totals_tree {
+			draw_totals_tree_row(dc, tree_rows[i], x, y, row_w)
+			y += LIST_ROW
+			continue
+		}
+		t := totals[i]
 		color := argb_to_colorref(t.color)
 		if color == 0 {
 			color = activity_colorref(Activity{group_id = t.group_id})
@@ -773,6 +787,12 @@ hit_test :: proc(x, y, w, h: i32) -> int {
 	}
 	lay := compute_layout(w, h)
 	if ui.tab == 0 {
+		if rect_hit(totals_mode_rect(lay), x, y) { return HIT_TOTALS_TREE }
+		visible := max(1, max(0, lay.list_bottom - lay.list_top - 52) / LIST_ROW)
+		if ui.totals_tree && x >= lay.sidebar_x && x < lay.sidebar_x + lay.sidebar_w &&
+		   y >= lay.list_top + 32 && y < lay.list_top + 32 + visible * LIST_ROW {
+			return HIT_TOTALS_ROW
+		}
 		_, minus, plus, reset := zoom_rects(lay)
 		if rect_hit(minus, x, y) { return HIT_ZOOM_OUT }
 		if rect_hit(plus, x, y) { return HIT_ZOOM_IN }

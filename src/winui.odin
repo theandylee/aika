@@ -58,6 +58,8 @@ UiState :: struct {
 	tab:         i32,  // 0 = Day, 1 = Timesheet, 2 = Statistics
 	lane:        i32,  // selected timeline lane (0..2)
 	list_scroll, totals_scroll: PaneScroll,
+	totals_tree: bool,
+	totals_expanded: map[string]bool,
 	scroll_date: int,
 	zoom_start, zoom_end: f64,
 	zoom_drag: i32, // 0 = idle, 1/2 = resize edges, 3 = pan
@@ -80,6 +82,8 @@ HIT_ZOOM_OUT    :: 5
 HIT_ZOOM_IN     :: 6
 HIT_ZOOM_RESET  :: 7
 HIT_THEME       :: 8
+HIT_TOTALS_TREE :: 9
+HIT_TOTALS_ROW  :: 30
 HIT_TAB_BASE    :: 10 // +0..2
 HIT_LANE_BASE   :: 20 // +0..3
 
@@ -582,7 +586,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			return 0
 		}
 		id := hit_test(win_x, win_y, w, h)
-		if id >= HIT_BTN_PREV && id <= HIT_THEME {
+		if id >= HIT_BTN_PREV && id <= HIT_TOTALS_TREE {
 			ui.pressed_hit = id
 			windows.SetCapture(hwnd)
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
@@ -731,6 +735,11 @@ handle_click :: proc(app: ^App, x, y: i32) {
 	w, h := client_size(ui.hwnd)
 	id := hit_test(x, y, w, h)
 	switch {
+	case id == HIT_TOTALS_TREE:
+		ui.totals_tree = !ui.totals_tree
+		ui.totals_scroll.pos = 0
+	case id == HIT_TOTALS_ROW:
+		totals_tree_click(app, y, compute_layout(w, h))
 	case id == HIT_THEME:
 		theme_toggle()
 	case id == HIT_ZOOM_OUT:
@@ -920,6 +929,7 @@ ui_bootstrap :: proc() -> bool {
 }
 
 ui_shutdown :: proc() {
+	totals_tree_shutdown()
 	ui_remove_tray()
 	if ui.tray_hwnd != nil { windows.DestroyWindow(ui.tray_hwnd); ui.tray_hwnd = nil }
 	ui_close_themes()
