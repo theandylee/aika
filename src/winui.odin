@@ -950,6 +950,10 @@ ui_bootstrap :: proc() -> bool {
 	if ui.font_normal != nil {
 		windows.SendMessageW(ui.edit, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	}
+	if ui.edit != nil {
+		previous := windows.SetWindowLongPtrW(ui.edit, -4, transmute(windows.LONG_PTR)(windows.WNDPROC(filter_edit_proc))) // GWLP_WNDPROC
+		filter_edit_original = transmute(windows.WNDPROC)(previous)
+	}
 
 	// Native owner-drawn button keeps keyboard activation and accessibility,
 	// while allowing the face to use the same palette as the rest of the UI.
