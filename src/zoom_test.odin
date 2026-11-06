@@ -9,6 +9,7 @@ zoom_behavior :: proc(t: ^testing.T) {
 	zoom_limits(t)
 	zoom_bounds_uses_actual_day_length(t)
 	zoom_pan_and_edges_clamp(t)
+	zoom_middle_pan(t)
 	zoom_layout_and_ticks(t)
 	pane_resize_behavior(t)
 	tag_drag_behavior(t)
@@ -71,6 +72,34 @@ zoom_pan_and_edges_clamp :: proc(t: ^testing.T) {
 	ui.zoom_drag = 2
 	zoom_pointer_move(bar.left, lay)
 	testing.expect(t, abs(ui.zoom_end - ui.zoom_start - ZOOM_MIN_SPAN) < 0.000001)
+}
+
+zoom_middle_pan :: proc(t: ^testing.T) {
+	old := ui
+	defer ui = old
+	ui.tab, ui.zoom_drag, ui.pane_drag, ui.pressed_hit = 0, 0, 0, HIT_NONE
+	lay := compute_layout(1320, 860)
+	x := lay.chart_x + lay.chart_w / 2
+	ui.zoom_start, ui.zoom_end = 0.25, 0.75
+	testing.expect(t, !zoom_pan_down(x, lay.zoom_y, lay))
+	testing.expect(t, !zoom_pan_down(lay.chart_x - 1, lay.ruler_y, lay))
+	testing.expect(t, zoom_pan_down(x, lay.ruler_y, lay))
+	zoom_pointer_move(x + lay.chart_w / 4, lay)
+	expected := 0.25 - f64(lay.chart_w / 4) / f64(lay.chart_w) * 0.5
+	testing.expect(t, abs(ui.zoom_start - expected) < 0.000001)
+	testing.expect(t, abs(ui.zoom_end - ui.zoom_start - 0.5) < 0.000001)
+	zoom_pointer_move(lay.chart_x + lay.chart_w * 3, lay)
+	testing.expect(t, ui.zoom_start == 0 && ui.zoom_end == 0.5)
+	zoom_pointer_move(lay.chart_x - lay.chart_w * 3, lay)
+	testing.expect(t, ui.zoom_start == 0.5 && ui.zoom_end == 1)
+	zoom_pointer_move(x, lay)
+	testing.expect(t, ui.zoom_start == 0.25 && ui.zoom_end == 0.75)
+	testing.expect(t, !zoom_pan_down(x, lay.lane_y, lay)) // no nested drag
+	ui.zoom_drag = 0
+	ui.zoom_start, ui.zoom_end = 0, 1
+	testing.expect(t, zoom_pan_down(x, lay.lane_y, lay))
+	zoom_pointer_move(x + 200, lay)
+	testing.expect(t, ui.zoom_start == 0 && ui.zoom_end == 1)
 }
 
 zoom_layout_and_ticks :: proc(t: ^testing.T) {

@@ -53,6 +53,7 @@ UiState :: struct {
 
 	mouse:       windows.POINT, // client coords, refreshed each paint
 	mouse_valid: bool,
+	grab_cursor: windows.HCURSOR,
 
 	filter:      string,
 	tab:         i32,  // 0 = Day, 1 = Timesheet, 2 = Statistics
@@ -62,7 +63,7 @@ UiState :: struct {
 	totals_expanded: map[string]bool,
 	scroll_date: int,
 	zoom_start, zoom_end: f64,
-	zoom_drag: i32, // 0 = idle, 1/2 = resize edges, 3 = pan
+	zoom_drag: i32, // 0 = idle, 1/2 = resize edges, 3 = overview pan, 4 = middle-button timeline pan
 	zoom_drag_anchor, zoom_drag_start, zoom_drag_end: f64,
 	pane_lane_h, pane_totals_w: i32, // zero = default; retained for this session
 	pane_drag: i32, // 1 = timeline height, 2 = list/totals width
@@ -518,6 +519,10 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		return 0
 	case windows.WM_SETCURSOR:
 		if ui.tab == 0 && (u32(lparam) & 0xFFFF) == 1 { // HTCLIENT
+			if ui.zoom_drag == 4 {
+				windows.SetCursor(ui_grab_cursor())
+				return 1
+			}
 			_update_mouse_client()
 			w, h := client_size(hwnd)
 			split := ui.pane_drag
@@ -546,7 +551,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			}
 		}
 	case windows.WM_MOUSEWHEEL:
-		if ui.tab != 0 || tag_ui.drag != 0 || ui.pane_drag != 0 { return 0 }
+		if ui.tab != 0 || tag_ui.drag != 0 || ui.pane_drag != 0 || ui.zoom_drag != 0 { return 0 }
 		delta := i32(i16((u32(wparam) >> 16) & 0xFFFF))
 		// WM_MOUSEWHEEL coordinates are screen-relative, including on other monitors.
 		p := windows.POINT{i32(i16(u32(lparam) & 0xFFFF)), i32(i16((u32(lparam) >> 16) & 0xFFFF))}
@@ -586,7 +591,27 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			tag_context_menu(app, p)
 			return 0
 		}
+	case windows.WM_MBUTTONDOWN:
+		x := i32(i16(u32(lparam) & 0xFFFF))
+		y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
+		w, h := client_size(hwnd)
+		if zoom_pan_down(x, y, compute_layout(w, h)) {
+			windows.SetCapture(hwnd)
+			windows.SetCursor(ui_grab_cursor())
+		}
+		return 0
+	case windows.WM_MBUTTONUP:
+		if ui.zoom_drag == 4 {
+			w, h := client_size(hwnd)
+			x := i32(i16(u32(lparam) & 0xFFFF))
+			zoom_pointer_move(x, compute_layout(w, h))
+			ui.zoom_drag = 0
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		}
+		return 0
 	case windows.WM_LBUTTONDOWN, windows.WM_LBUTTONDBLCLK:
+		if ui.zoom_drag == 4 { return 0 }
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
 		w, h := client_size(hwnd)
@@ -612,6 +637,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_LBUTTONUP:
+		if ui.zoom_drag == 4 { return 0 }
 		if ui.pane_drag != 0 {
 			w, h := client_size(hwnd)
 			x := i32(i16(u32(lparam) & 0xFFFF))
@@ -646,6 +672,12 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_CANCELMODE:
+		if ui.zoom_drag == 4 {
+			ui.zoom_drag = 0
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		if ui.pane_drag != 0 {
 			pane_drag_cancel()
 			windows.ReleaseCapture()
@@ -660,6 +692,13 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_KEYDOWN:
+		if wparam == 0x1B && ui.zoom_drag == 4 {
+			ui.zoom_start, ui.zoom_end = ui.zoom_drag_start, ui.zoom_drag_end
+			ui.zoom_drag = 0
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		if wparam == 0x1B && ui.pane_drag != 0 {
 			pane_drag_cancel()
 			windows.ReleaseCapture()
@@ -950,6 +989,7 @@ ui_bootstrap :: proc() -> bool {
 }
 
 ui_shutdown :: proc() {
+	if ui.grab_cursor != nil { windows.DestroyCursor(ui.grab_cursor); ui.grab_cursor = nil }
 	totals_tree_shutdown()
 	ui_remove_tray()
 	if ui.tray_hwnd != nil { windows.DestroyWindow(ui.tray_hwnd); ui.tray_hwnd = nil }

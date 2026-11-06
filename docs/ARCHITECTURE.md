@@ -248,6 +248,11 @@ disabled by a picker.
 - Draws a red "now" line when the selected date is today.
 - Shows a tooltip for the innermost bar under the mouse.
 
+Middle-button dragging on the timeline ruler or lanes pans the visible time
+range without changing its zoom level. Content follows the pointer and stays
+within the selected day; the full-day view cannot pan. Capture keeps the drag
+working outside the window. Release finishes; Escape restores the previous view.
+
 ### Time tags
 
 `src/tags.odin` owns drag state and the native tag-picker window. Dragging in the

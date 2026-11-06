@@ -61,7 +61,28 @@ zoom_pointer_down :: proc(x, y: i32, lay: Layout) -> bool {
 	return true
 }
 
+// Grab the ruler or lanes, not the whole-day overview or its controls.
+zoom_pan_down :: proc(x, y: i32, lay: Layout) -> bool {
+	if ui.tab != 0 || ui.zoom_drag != 0 || ui.pane_drag != 0 ||
+	   tag_ui.drag != 0 || ui.pressed_hit != HIT_NONE { return false }
+	if x < lay.chart_x || x >= lay.chart_x + lay.chart_w ||
+	   y < lay.ruler_y || y >= lay.lanes_bottom { return false }
+	ui.zoom_drag = 4
+	ui.zoom_drag_anchor = f64(x - lay.chart_x) / f64(max(1, lay.chart_w))
+	ui.zoom_drag_start, ui.zoom_drag_end = ui.zoom_start, ui.zoom_end
+	return true
+}
+
 zoom_pointer_move :: proc(x: i32, lay: Layout) {
+	if ui.zoom_drag == 4 {
+		// Move the content with the pointer, at the current zoom's pixel scale.
+		// Leave the pointer unclamped so capture also works outside the window.
+		f := f64(x - lay.chart_x) / f64(max(1, lay.chart_w))
+		span := ui.zoom_drag_end - ui.zoom_drag_start
+		ui.zoom_start = clamp(ui.zoom_drag_start - (f - ui.zoom_drag_anchor) * span, 0.0, 1.0 - span)
+		ui.zoom_end = ui.zoom_start + span
+		return
+	}
 	bar, _, _, _ := zoom_rects(lay)
 	f := clamp(f64(x - bar.left) / f64(max(1, bar.right - bar.left)), 0.0, 1.0)
 	switch ui.zoom_drag {
