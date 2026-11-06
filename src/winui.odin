@@ -18,6 +18,14 @@ import rt "base:runtime"
 
 // --- UI state ---
 
+PaneScroll :: struct {
+	hwnd: windows.HWND,
+	pos, rows, page: i32, // row units, not pixels
+	wheel_delta: i32,
+	visible: bool,
+	bounds: windows.RECT,
+}
+
 UiState :: struct {
 	hwnd:         windows.HWND,
 	edit:         windows.HWND,
@@ -42,7 +50,8 @@ UiState :: struct {
 	filter:      string,
 	tab:         i32,  // 0 = Day, 1 = Timesheet, 2 = Statistics
 	lane:        i32,  // selected timeline lane (0..2)
-	list_scroll: i32,
+	list_scroll, totals_scroll: PaneScroll,
+	scroll_date: int,
 }
 
 ui: UiState
@@ -220,6 +229,57 @@ sync_date_picker :: proc(app: ^App) {
 
 // --- WndProc ---
 
+pane_scroll_show :: proc(s: ^PaneScroll, show: bool) {
+	if s.hwnd != nil && s.visible != show {
+		s.visible = show
+		windows.ShowWindow(s.hwnd, windows.SW_SHOW if show else windows.SW_HIDE)
+	}
+}
+
+// A native scrollbar sits beside the rows, leaving headers and totals fixed.
+// Returns the width reserved for the scrollbar (zero when all rows fit).
+pane_scroll_update :: proc(s: ^PaneScroll, rows, page: i32, right, top, bottom: i32) -> i32 {
+	s.rows = rows
+	s.page = max(1, page)
+	s.pos = clamp(s.pos, 0, max(0, rows - s.page))
+	show := ui.tab == 0 && rows > s.page && bottom > top
+	width := i32(windows.GetSystemMetrics(windows.SM_CXVSCROLL))
+	if show {
+		r := windows.RECT{right - width, top, right, bottom}
+		if s.bounds != r {
+			s.bounds = r
+			windows.MoveWindow(s.hwnd, r.left, r.top, width, bottom - top, windows.TRUE)
+		}
+	}
+	info := Scroll_Info{cbSize = size_of(Scroll_Info), fMask = 7, // SIF_RANGE | SIF_PAGE | SIF_POS
+		nMax = max(0, rows - 1), nPage = u32(s.page), nPos = s.pos}
+	SetScrollInfo(s.hwnd, 2, &info, windows.TRUE) // SB_CTL
+	pane_scroll_show(s, show)
+	return width if show else 0
+}
+
+pane_scroll_message :: proc(s: ^PaneScroll, command: i32) {
+	switch command {
+	case 0: s.pos -= 1 // SB_LINEUP
+	case 1: s.pos += 1 // SB_LINEDOWN
+	case 2: s.pos -= s.page
+	case 3: s.pos += s.page
+	case 4, 5: // SB_THUMBPOSITION / SB_THUMBTRACK; query the full 32-bit position.
+		info := Scroll_Info{cbSize = size_of(Scroll_Info), fMask = 0x10}
+		if GetScrollInfo(s.hwnd, 2, &info) { s.pos = info.nTrackPos }
+	case 6: s.pos = 0
+	case 7: s.pos = s.rows - s.page
+	}
+	s.pos = clamp(s.pos, 0, max(0, s.rows - s.page))
+}
+
+pane_scroll_wheel :: proc(s: ^PaneScroll, delta: i32) {
+	s.wheel_delta += delta
+	steps := s.wheel_delta / 120
+	s.wheel_delta %= 120
+	s.pos = clamp(s.pos - steps * 3, 0, max(0, s.rows - s.page))
+}
+
 ui_close_themes :: proc() {
 	if ui.theme_button != nil { CloseThemeData(ui.theme_button) }
 	if ui.theme_tab != nil { CloseThemeData(ui.theme_tab) }
@@ -298,8 +358,30 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		ui.mouse_valid = false
 		return 0
 	case windows.WM_MOUSEWHEEL:
-		delta := i16((u32(wparam) >> 16) & 0xFFFF)
-		ui.list_scroll -= i32(delta) / 6
+		if ui.tab != 0 { return 0 }
+		delta := i32(i16((u32(wparam) >> 16) & 0xFFFF))
+		// WM_MOUSEWHEEL coordinates are screen-relative, including on other monitors.
+		p := windows.POINT{i32(i16(u32(lparam) & 0xFFFF)), i32(i16((u32(lparam) >> 16) & 0xFFFF))}
+		windows.ScreenToClient(hwnd, &p)
+		w, h := client_size(hwnd)
+		lay := compute_layout(w, h)
+		if p.y >= lay.list_top && p.y < lay.list_bottom {
+			if p.x >= lay.chart_x && p.x < lay.sidebar_x - 8 {
+				pane_scroll_wheel(&ui.list_scroll, delta)
+			} else if p.x >= lay.sidebar_x && p.x < lay.sidebar_x + lay.sidebar_w {
+				pane_scroll_wheel(&ui.totals_scroll, delta)
+			}
+		}
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return 0
+	case windows.WM_VSCROLL:
+		source := windows.HWND(uintptr(lparam))
+		command := i32(u32(wparam) & 0xFFFF)
+		if source == ui.list_scroll.hwnd {
+			pane_scroll_message(&ui.list_scroll, command)
+		} else if source == ui.totals_scroll.hwnd {
+			pane_scroll_message(&ui.totals_scroll, command)
+		}
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_LBUTTONDOWN:
@@ -399,6 +481,7 @@ read_filter :: proc() {
 		delete(ui.filter)
 	}
 	ui.filter = strings.to_lower(s)
+	ui.list_scroll.pos = 0
 }
 
 handle_click :: proc(app: ^App, x, y: i32) {
@@ -433,7 +516,8 @@ handle_click :: proc(app: ^App, x, y: i32) {
 	case id >= HIT_LANE_BASE && id < HIT_LANE_BASE + 3:
 		if ui.lane != i32(id - HIT_LANE_BASE) {
 			ui.lane = i32(id - HIT_LANE_BASE)
-			ui.list_scroll = 0
+			ui.list_scroll.pos = 0
+			ui.totals_scroll.pos = 0
 		}
 	}
 	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
@@ -508,6 +592,13 @@ ui_bootstrap :: proc() -> bool {
 		return false
 	}
 	ui_open_themes()
+
+	// Independent native scrollbars, initially hidden until row counts are known.
+	for s in ([2]^PaneScroll{&ui.list_scroll, &ui.totals_scroll}) {
+		s.hwnd = windows.CreateWindowExW(0, wtext("SCROLLBAR"), nil,
+			windows.WS_CHILD | windows.WS_TABSTOP | 1, // SBS_VERT
+			0, 0, 0, 0, ui.hwnd, nil, windows.HINSTANCE(hinstance), nil)
+	}
 
 	// Start with the Applications lane selected, like a fresh ManicTime day.
 	ui.lane = 2

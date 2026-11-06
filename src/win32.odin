@@ -38,6 +38,16 @@ LASTINPUTINFO :: struct {
 @(default_calling_convention = "system")
 foreign aika_u32 {
 	GetLastInputInfo :: proc(plii: ^LASTINPUTINFO) -> windows.BOOL ---
+	SetScrollInfo :: proc(hwnd: windows.HWND, bar: i32, info: ^Scroll_Info, redraw: windows.BOOL) -> i32 ---
+	GetScrollInfo :: proc(hwnd: windows.HWND, bar: i32, info: ^Scroll_Info) -> windows.BOOL ---
+}
+
+Scroll_Info :: struct {
+	cbSize: u32,
+	fMask: u32,
+	nMin, nMax: i32,
+	nPage: u32,
+	nPos, nTrackPos: i32,
 }
 
 PROCESS_QUERY_LIMITED_INFORMATION :: 0x1000

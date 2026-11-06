@@ -107,6 +107,11 @@ before touching it:
   call sites.
 - Layout is computed by `compute_layout(w, h)`; the filter EDIT control is a
   real child window positioned in `recreate_backbuffer` on resize.
+- Activity rows and totals have separate row-based scroll positions and native
+  vertical SCROLLBAR children. Wheel input targets only the pane under the
+  pointer; headers and the grand total stay fixed. Each scrollbar is hidden
+  when its rows fit, and positions are clamped after filtering or resizing.
+  `pane_scroll_update` synchronizes the native range with each rendered list.
 - When iterating on GUI builds, beware stale binaries: `taskkill /F`, wait for
   the file lock, `Remove-Item -Force` the copy target, and confirm the build
   output before launching.

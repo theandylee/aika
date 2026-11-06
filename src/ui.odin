@@ -182,6 +182,15 @@ fmt_hms :: proc(ms: i64) -> string {
 // --- Top-level frame ---
 
 draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	if ui.scroll_date != app.date {
+		ui.scroll_date = app.date
+		ui.list_scroll.pos = 0
+		ui.totals_scroll.pos = 0
+	}
+	if ui.tab != 0 {
+		pane_scroll_show(&ui.list_scroll, false)
+		pane_scroll_show(&ui.totals_scroll, false)
+	}
 	fill_rect(dc, 0, 0, w, h, C_BG)
 	switch ui.tab {
 	case 0:
@@ -545,6 +554,12 @@ draw_list :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i
 	w := lay.sidebar_x - lay.chart_x - 8
 
 	fill_rect(dc, x, lay.list_top, w, lay.list_bottom - lay.list_top, C_PANEL)
+	rows := build_rows(app, day_start, day_end)
+	rows_view_h := max(0, lay.list_bottom - lay.list_top - LIST_HDR)
+	visible := max(1, rows_view_h / LIST_ROW)
+	w -= pane_scroll_update(&ui.list_scroll, i32(len(rows)), visible,
+		x + w, lay.list_top + LIST_HDR, lay.list_bottom)
+	skip := ui.list_scroll.pos
 
 	// Header
 	fill_rect(dc, x, lay.list_top, w, LIST_HDR, C_HEAD_BG)
@@ -564,14 +579,6 @@ draw_list :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i
 		return
 	}
 
-	rows := build_rows(app, day_start, day_end)
-
-	rows_view_h := lay.list_bottom - lay.list_top - LIST_HDR
-	visible := rows_view_h / LIST_ROW
-	max_scroll := max(0, i32(len(rows)) * LIST_ROW - rows_view_h)
-	ui.list_scroll = clamp_scroll(ui.list_scroll, max_scroll)
-	skip := ui.list_scroll / LIST_ROW
-
 	if len(rows) == 0 {
 		draw_string(dc, "No activity recorded for this day.", x + 8, lay.list_top + LIST_HDR + 8, ui.font_normal, C_DIM)
 		return
@@ -589,10 +596,6 @@ draw_list :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i
 		draw_string(dc, fmt_clock_hm(row.end_ms), col_end + 4, ry + 3, ui.font_normal, C_DIM, 60)
 		draw_string(dc, fmt_span_hm(row.end_ms - row.start_ms), col_start + 4, ry + 3, ui.font_normal, C_DIM, 60)
 	}
-}
-
-clamp_scroll :: proc(scroll, max_scroll: i32) -> i32 {
-	return clamp(scroll, 0, max(scroll, 0))
 }
 
 // --- Totals panel (bottom right) ---
@@ -664,11 +667,12 @@ draw_totals :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end:
 	draw_string(dc, "Totals", x + 8, lay.list_top + 6, ui.font_bold, C_TXT)
 	line_h(dc, x + 1, lay.list_top + 24, w - 2, C_BORDER_SOFT)
 
-	view_h := total_h - 52
-	visible := view_h / LIST_ROW
-	max_scroll := max(0, i32(len(totals)) * LIST_ROW - view_h)
-	scroll := clamp_scroll(ui.list_scroll, max_scroll)
-	skip := scroll / LIST_ROW
+	view_h := max(0, total_h - 52)
+	visible := max(1, view_h / LIST_ROW)
+	bar_w := pane_scroll_update(&ui.totals_scroll, i32(len(totals)), visible,
+		x + w - 1, lay.list_top + 32, lay.list_bottom - 20)
+	row_w := w - bar_w
+	skip := ui.totals_scroll.pos
 
 	y := lay.list_top + 32
 	n_totals := i32(len(totals))
@@ -678,10 +682,10 @@ draw_totals :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end:
 			color = activity_colorref(Activity{group_id = t.group_id})
 		}
 		fill_rect(dc, x + 8, y + 4, 10, 10, color)
-		draw_string(dc, t.name, x + 24, y + 2, ui.font_normal, C_TXT, w - 90)
+		draw_string(dc, t.name, x + 24, y + 2, ui.font_normal, C_TXT, row_w - 90)
 		dur := fmt_span_hm(t.ms)
 		dw := text_pixel_width(dur, ui.font_normal)
-		draw_string(dc, dur, x + w - 8 - dw, y + 2, ui.font_normal, C_DIM)
+		draw_string(dc, dur, x + row_w - 8 - dw, y + 2, ui.font_normal, C_DIM)
 		y += LIST_ROW
 	}
 
