@@ -7,11 +7,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from native_ui import windows_for, find_window, window_pid
 
 u = c.WinDLL("user32")
 g = c.WinDLL("gdi32")
-callback = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
-u.EnumWindows.argtypes = [callback, w.LPARAM]
 u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
 u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
 u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
@@ -52,19 +51,7 @@ def pixel(hwnd, x, y):
 def launch(exe, db):
     process = subprocess.Popen([exe, "--db", str(db)])
     assert u.WaitForInputIdle(w.HANDLE(process._handle), 10000) == 0
-    found = []
-
-    @callback
-    def visit(hwnd, _):
-        pid = w.DWORD()
-        u.GetWindowThreadProcessId(hwnd, c.byref(pid))
-        name = c.create_unicode_buffer(256)
-        u.GetClassNameW(hwnd, name, 256)
-        if pid.value == process.pid and name.value == "aika_window_class":
-            found.append(hwnd)
-        return True
-
-    u.EnumWindows(visit, 0)
+    found = windows_for(process.pid, "aika_window_class")
     assert len(found) == 1
     time.sleep(0.6)
     return process, found[0]
@@ -85,7 +72,7 @@ def check_calendar(hwnd, dark):
     for _ in range(2):  # Reopening must preserve the palette.
         send(picker, 0x00F5)  # BM_CLICK opens the custom calendar popup.
         time.sleep(0.15)
-        popup = u.FindWindowExW(None, None, "aika_date_popup", None)
+        popup = find_window(window_pid(hwnd), "aika_date_popup")
         calendar = u.FindWindowExW(popup, None, "SysMonthCal32", None)
         assert calendar, "Calendar did not open"
         u.UpdateWindow(calendar)

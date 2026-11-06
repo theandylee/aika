@@ -134,7 +134,7 @@ verified. References describe the source at audit time; line numbers may drift.
   count. Regression tests compare measurement and rendered pixels against explicit
   UTF-16 references for ASCII, accented text, Japanese, and a surrogate pair.
 
-- [ ] **8. Startup and CLI failures have broken control flow.**
+- [x] **8. Startup and CLI failures have broken control flow.**
   References: `src/main.odin:58–78`, `src/main.odin:90`,
   `src/winui.odin:875–992`.
   `ui_bootstrap()` failure is ignored, potentially leaving a process waiting
@@ -143,9 +143,9 @@ verified. References describe the source at audit time; line numbers may drift.
   are silently ignored.
   Add validated argument parsing, explicit startup stages with cleanup, and
   meaningful failure exit codes.
-  Partial progress: database/import failures now exit nonzero, and missing option
-  values/unknown arguments are rejected. GUI bootstrap failure handling and full
-  staged startup cleanup remain open.
+  Fixed: database/import failures exit nonzero and malformed arguments are rejected.
+  GUI startup now checks bootstrap/timer/required-control/font/buffer failures,
+  unwinds before returning a failing exit code, and handles GetMessage failure.
 
 ## Memory and resource ownership
 
@@ -171,7 +171,7 @@ verified. References describe the source at audit time; line numbers may drift.
   destroyed on success, parse failure, rollback or failed commit. Whole-file
   parsing still has O(input size) memory cost; peak memory has not been benchmarked.
 
-- [ ] **11. Temporary cleanup depends on returning from native modal loops.**
+- [x] **11. Temporary cleanup depends on returning from native modal loops.**
   References: `src/main.odin:108–113`, `src/winui.odin:164`,
   `src/tags.odin:64`.
   Temporary memory is cleared only after outer message dispatch. Native menus,
@@ -179,8 +179,11 @@ verified. References describe the source at audit time; line numbers may drift.
   accumulating allocations until those loops finish.
   Introduce scoped, reentrancy-safe scratch allocation. Do not simply call
   `free_all` in every callback: that can invalidate outer callbacks' live data.
+  Fixed: every native callback owns independent lazy scratch; main key routing has
+  its own per-dispatch scope. Nested callbacks cannot clear suspended callbacks'
+  allocations. Scratch arenas use runtime map-cache-line alignment.
 
-- [ ] **12. Failure-path resource cleanup is incomplete.**
+- [x] **12. Failure-path resource cleanup is incomplete.**
   References: `src/db.odin:128–146`, `src/main.odin:58–64`,
   `src/winui.odin:302–331`.
   Failed DB startup can leave a SQLite handle and cloned path unclosed.
@@ -188,6 +191,12 @@ verified. References describe the source at audit time; line numbers may drift.
   has partial initialization paths without explicit unwinding.
   Make initialization transactional and cleanup safe at every partial stage.
   These are failure-path issues, not evidence of a steady GDI leak.
+  Fixed: failed DB opens return an empty, already-closed owner. GUI bootstrap is
+  staged and cleanup is repeatable; required controls/fonts/timer are checked.
+  Backbuffers are replaced transactionally, with cleanup on DC/bitmap/selection
+  failure and a direct-painted error fallback instead of blitting stale sizes.
+  Settings/tag/calendar partial control failures unwind. Final teardown releases
+  tracker/task metadata without pretending unsaved writes were acknowledged.
 
 ## Performance and scalability
 
@@ -208,6 +217,11 @@ verified. References describe the source at audit time; line numbers may drift.
   Benchmark realistic history and add targeted timeline/start-time indexes.
   Review day-overlap queries separately rather than assuming one index solves
   every access pattern.
+  Step 6: added `(TimelineId, StartUtcMs, ActivityId)` after synthetic-history
+  measurements on bundled SQLite. Latest-row and task-neighbor reads now seek
+  without the old scan/sort. Day reads explicitly retain the local-date index:
+  allowing the new index doubled their cost. General day-overlap scalability
+  remains open; see measurements below.
 
 - [ ] **15. Derived view data is rebuilt on every repaint.**
   References: `src/ui.odin:537–710`, `src/totals_tree.odin:21–74`.
@@ -246,12 +260,18 @@ verified. References describe the source at audit time; line numbers may drift.
   used by the other toolbar buttons.
   Introduce typed interaction states and shared begin/update/commit/cancel
   conventions; split the large window procedure into focused handlers.
+  Step 6 partial: typed zoom states and one idempotent cancellation helper now
+  cover Escape, capture loss and native modal transitions. Overview drags restore
+  their original range too; Settings uses normal press/release feedback. Tag and
+  pane modes remain integers, and a broader handler/state rewrite is deferred.
 
-- [ ] **19. Hidden Day-view controls remain clickable on placeholder tabs.**
+- [x] **19. Hidden Day-view controls remain clickable on placeholder tabs.**
   Reference: `src/ui.odin:783–815`.
   Only some hit targets are gated on `ui.tab == 0`. Date navigation, task
   controls, and lane hit-testing remain active where they are not drawn.
   Derive hit targets from the active view using rendering's visibility rules.
+  Fixed: after shared tab/theme/Settings targets, non-Day views return no hit.
+  Exhaustive sampled hit tests and native hidden-task checks cover placeholders.
 
 - [ ] **20. Persistence logic leaks into UI and task code.**
   References: `src/tags.odin:317–335`, `src/task.odin:9–48`.
@@ -322,6 +342,10 @@ verified. References describe the source at audit time; line numbers may drift.
   foreground idle transitions, and failed live inserts. Failure acknowledgment,
   reconciliation, clock discontinuities and imports were added in steps 2–4;
   shared PID-scoped UI helpers and soak checks remain.
+  Step 6: all native scripts now share PID-scoped window/popup/menu discovery;
+  no desktop-global popup lookups remain. Added deterministic nested scratch,
+  startup-stage unwinding, failed DB open, backbuffer failure and owned-metadata
+  teardown tests, plus a measured native resource soak (below).
   Step 1 verification: `odin check src -vet`, all 16 tests in `odin test src -vet`,
   both builds, and isolated Settings/task UI smoke tests passed. The task script's
   stale toolbar click coordinate was corrected. This does not establish a GDI soak
@@ -393,6 +417,49 @@ verified. References describe the source at audit time; line numbers may drift.
   `build/aika.exe` / `build/aika-cli.exe`.
 - Resource-scope safety during nested native message loops, derived-view caching
   and measured performance/resource work remain step 6, not implied by these tests.
+
+## Follow-up verification — step 6
+
+- `odin check src -vet`, all 64 Odin tests and normal `build.bat` GUI/CLI builds
+  passed. The opt-in benchmark also ran single-threaded with production SQLite.
+  The original GUI was left untouched while running; alternate names were built
+  initially. Normal builds ran only after no aika process remained.
+- All isolated native task, persistence, tags, totals-tree, theme/date, panes,
+  Settings and tray scripts passed sequentially, as did CLI import integration.
+- Resource baseline: a copy of the existing step-5 GUI with 900 synthetic daily
+  app rows grew from 7,446,528 to 104,431,616 private bytes during 300 forced paints
+  inside one suspended tray-menu callback (3.37 s), returning to 7,675,904 after
+  closing the menu. This intentionally failed the new bounded-growth assertion.
+- Final build: 2,000 modal paints over 21.97 s, after 30 resize/Settings/tag-popup
+  cycles, passed. Private bytes went from 7,565,312 to a maximum modal sample of 7,831,552;
+  process handles stayed 169. GDI/USER counts stayed bounded (menu 23/23, after
+  dismissal 22/20). This is a short deterministic stress run, not an overnight
+  leak proof. Other desktop-activation-interrupted attempts are not counted as
+  passing soaks; Windows lazy services can also cause one-time handle plateaus.
+- Measured optimization: 337,990 synthetic rows (365 days × 900 app switches,
+  24 tags, 2 usage rows), 21 executions/query, median prepare+step+finalize time,
+  bundled SQLite 3.54.1, in-memory, single test thread:
+
+  | Query | Before index | After index |
+  |---|---:|---:|
+  | Latest app | 92.962 ms | 0.006 ms |
+  | Next task boundary | 2.319 ms | 0.005 ms |
+  | Recent day, unrestricted planner | 21.091 ms | 30.008 ms |
+  | Recent day, retained date index | 18.773 ms | 18.248 ms |
+
+  The date query deliberately uses `INDEXED BY IX_Activity_Timeline_Date` to avoid
+  the measured regression; no general day-query speedup is claimed. A separate
+  Python SQLite 3.50.4 disk-backed proxy reproduced the same plan tradeoff. Added
+  query-plan regression tests and repeatable opt-in Odin/Python benchmarks.
+- Deferred: executable metadata/resolved identity caching, prepared-statement
+  reuse, snapshot/derived-view caching, write-through array capacity changes,
+  generalized day-overlap indexing and import peak-memory profiling. None was
+  justified by the measurements made here. Index creation is additive on startup
+  and has an upfront disk/time cost on large existing histories; all measurements
+  used synthetic isolated databases, never the user's live history.
+- Failure testing covers each acquired bootstrap stage and DC/bitmap/selection
+  failures, not every possible system/heap OOM or all native API failure codes.
+  No broader DPI/keyboard policy or new tracker/product features were added.
 
 ## Guardrails for follow-up work
 

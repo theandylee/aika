@@ -22,6 +22,9 @@ filter_word_space :: proc(c: u16) -> bool {
 
 filter_edit_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
 	// Ctrl+Backspace translates to DEL, which a plain Win32 EDIT inserts.
 	if msg == windows.WM_CHAR && wp == 0x7F {
 		start, end: u32

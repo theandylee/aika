@@ -12,10 +12,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from native_ui import find_window as find
 
 u = c.WinDLL("user32", use_last_error=True)
-callback = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
-u.EnumWindows.argtypes = [callback, w.LPARAM]
 u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
 u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
 u.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
@@ -27,23 +26,6 @@ u.SendMessageTimeoutW.argtypes = [
     w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT, c.POINTER(c.c_size_t)
 ]
 u.SendMessageTimeoutW.restype = c.c_size_t
-
-
-def find(pid, class_name):
-    found = []
-
-    @callback
-    def visit(hwnd, _):
-        owner = w.DWORD()
-        u.GetWindowThreadProcessId(hwnd, c.byref(owner))
-        name = c.create_unicode_buffer(256)
-        u.GetClassNameW(hwnd, name, len(name))
-        if owner.value == pid and name.value == class_name:
-            found.append(hwnd)
-        return True
-
-    u.EnumWindows(visit, 0)
-    return found[0] if found else None
 
 
 def title(hwnd):

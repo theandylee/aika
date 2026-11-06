@@ -32,12 +32,19 @@ behavior on `dev-2025-11-nightly`, not general Odin documentation.
 
 `make(..., context.temp_allocator)` + `delete(x)` is a **mismatch**: `delete`
 uses `context.allocator` by default. In the paint path we do not free
-temp-allocated row lists at all — `main` runs `free_all(context.temp_allocator)`
-after each dispatched message. Do not add per-object `delete`s of temp memory.
+temp-allocated row lists at all — the owning native callback destroys its private
+scratch arena on return, including callbacks dispatched by modal loops. Do not
+clear a shared temp allocator in nested callbacks or free temp objects with the
+default allocator. Persistent metadata must not borrow callback scratch.
+
+`mem.Dynamic_Arena` ignores per-request alignment and uses its configured value.
+Scratch must use `runtime.MAP_CACHE_LINE_SIZE`, not the default 16-byte alignment:
+snapshot maps otherwise panic with `allocation not aligned to a cache line`.
 
 ## WndProc checklist (winui.odin)
 
 - `proc "std"` → contextless → `context = rt.default_context()` on line 1.
+- Install a local `Scratch` with `scratch_begin` and defer `scratch_end`.
 - `WS_CLIPCHILDREN` on the main window, or the parent's `BitBlt` paints over
   the filter EDIT child.
 - Create the EDIT control **before** the explicit `MoveWindow` layout call —

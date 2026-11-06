@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS Activity (
 );
 
 CREATE INDEX IF NOT EXISTS IX_Activity_Timeline_Date ON Activity (TimelineId, StartLocalDate, EndLocalDate);
+CREATE INDEX IF NOT EXISTS IX_Activity_Timeline_Start ON Activity (TimelineId, StartUtcMs, ActivityId);
 CREATE INDEX IF NOT EXISTS IX_Activity_Updated ON Activity (UpdatedTimestamp);
 
 CREATE TABLE IF NOT EXISTS Document (
@@ -155,24 +156,25 @@ db_exec :: proc(db: ^DB, sql: string) -> bool {
 	return true
 }
 
-db_open :: proc(path: string) -> (DB, bool) {
+db_open :: proc(path: string, init_schema := db_init_schema) -> (DB, bool) {
 	db := DB{path = strings.clone(path)}
+	opened := false
+	defer if !opened { db_close(&db) }
 	path_c := strings.clone_to_cstring(path, context.temp_allocator)
 	flags := SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
 	rc := sqlite3_open_v2(path_c, &db.handle, c.int(flags), nil)
 	if rc != SQLITE_OK {
 		fmt.eprintln("cannot open database:", path, db_error(&db))
-		return db, false
+		return DB{}, false
 	}
 	sqlite3_busy_timeout(db.handle, 5000)
 	if !db_exec(&db, "PRAGMA journal_mode=WAL;") ||
 	   !db_exec(&db, "PRAGMA synchronous=NORMAL;") ||
 	   !db_exec(&db, "PRAGMA foreign_keys=ON;") ||
-	   !db_init_schema(&db) {
-		sqlite3_close_v2(db.handle)
-		db.handle = nil
-		return db, false
+	   !init_schema(&db) {
+		return DB{}, false
 	}
+	opened = true
 	return db, true
 }
 
@@ -537,11 +539,13 @@ Activity :: struct {
 	color:        u32,
 }
 
+// The start-time index helps latest/neighbor reads but regresses this overlap
+// query on representative history. Keep the measured date-index access path.
 LOAD_ACTIVITIES_SQL :: `
 		SELECT a.ActivityId, a.TimelineId, COALESCE(a.DisplayName, ''), COALESCE(a.GroupId, 0),
 		       a.StartUtcMs, a.EndUtcMs, a.StartLocalDate,
 		       COALESCE(g.DisplayName, ''), COALESCE(g.Color, 0)
-		FROM Activity a
+		FROM Activity a INDEXED BY IX_Activity_Timeline_Date
 		LEFT JOIN "Group" g ON g.GroupId = a.GroupId
 		WHERE a.TimelineId IN (1, 2, 3)
 		  AND a.StartLocalDate <= ?1 AND a.EndLocalDate >= ?1

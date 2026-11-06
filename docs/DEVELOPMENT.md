@@ -111,9 +111,14 @@ before touching it:
   `python tools/test-theme-ui.py build/aika.exe` checks switching, date-button and
   calendar colors, keyboard selection/cancellation, and theme persistence
   with an isolated database.
-- All paint-time allocations use `context.temp_allocator`; the `free_all` after
-  each dispatched message in `main` releases them. Per-object deletes of
-  temp memory crash (allocator mismatch) — don't add them.
+- Native callbacks install independent lazy scratch arenas and destroy them on
+  return. Main key routing has a separate per-dispatch scope. Never `free_all` a
+  shared allocator from nested callbacks/modal loops: suspended callers may still
+  hold its data. Scratch uses runtime map-cache-line alignment; persistent data
+  uses the normal allocator. Don't add default-allocator deletes of temp objects.
+- Bootstrap failure unwinds acquired resources and exits nonzero. Backbuffer
+  allocation is transactional: DC/bitmap/selection failure releases only the new
+  partial buffer and paints an error fallback, never a stale-sized BitBlt.
 - Colors are `COLORREF` literals (`0x00BBGGRR`); mutable UI palette variables
   are assigned by `theme_set_palette`. Semantic activity colors remain constants.
 - `i32` vs `int` matters: loop counters and rectangle coordinates are `i32`,
@@ -144,9 +149,9 @@ before touching it:
   Zoom affects the ruler, lanes, now marker, and tooltips, not the day-wide lists.
   The range stays selected when changing dates. `odin test src -vet` checks zoom
   limits, panning, layout, tick spacing, and variable-length local days.
-- When iterating on GUI builds, beware stale binaries: `taskkill /F`, wait for
-  the file lock, `Remove-Item -Force` the copy target, and confirm the build
-  output before launching.
+- Before rebuilding, inspect running aika processes. Never kill a user's tracker
+  to unlock its EXE; use alternate GUI/CLI output names and pass those to tests.
+  Build sequentially because the resource compiler shares `assets/aika.res`.
 
 ### Invalid raygui captions (post-mortem, historical)
 
@@ -332,12 +337,42 @@ updates must not advance acknowledged timestamps. Tests cover completed-write
 ownership, usage retries, queue exhaustion/recovery, and repeatable shutdown.
 `src/text_test.odin` checks UTF-16 GDI measurement/rendering without a window and
 tracks ownership over repeated filter conversions.
+`src/resources_test.odin` checks nested scratch/map alignment, failed DB opens,
+partial native startup at nine acquisition stages, transactional DC/bitmap/select
+failures, repeated cleanup and owned pending/current metadata teardown. Shared UI
+checks run serially inside `zoom_behavior`, including placeholder hit targets and
+all typed zoom cancellation modes. These are not exhaustive heap-OOM tests.
 `src/db_test.odin` checks failed/ignored writes, missing versus empty results,
 interrupted reads after a first row, and cache preservation on load failure.
 `python tools/test-persistence-ui.py build/aika.exe` holds a real SQLite writer
 lock against an isolated DB, checks UI responsiveness and error visibility,
 verifies Exit cancellation while writes are pending, then releases the lock and
 checks recovery and successful Exit. Native UI tests should run sequentially.
+All native scripts use `tools/native_ui.py` for PID-scoped window/popup/menu
+discovery, so another running aika instance cannot be selected by a global popup
+lookup. `python tools/test-resources-ui.py build/aika.exe` seeds 900 synthetic
+daily rows, cycles resize/Settings/tag popups, then measures 2,000 forced paints
+inside a native tray-menu loop (private memory, GDI/USER objects, process handles).
+Leave the desktop focus alone while it runs: activation changes dismiss native
+menus and intentionally invalidate the soak. The script prints JSON measurements
+and uses bounded-growth limits, allowing a small Windows lazy-service plateau;
+it is not an overnight profiler. See `AUDIT.md` for baseline and measured results.
+
+Repeat synthetic-history measurements with the bundled production SQLite:
+
+```powershell
+$env:AIKA_BENCHMARK = '1'
+odin test src -vet -define:ODIN_TEST_THREADS=1
+Remove-Item Env:AIKA_BENCHMARK
+```
+
+The opt-in test seeds 337,990 rows in memory and prints 21-execution medians for
+prepare/step/finalize, before/after the timeline/start index and with/without the
+day-query date-index hint. No speed thresholds are enforced in correctness tests.
+`python tools/benchmark-history.py` provides a disk-backed Python-SQLite query-plan
+proxy; its SQLite version differs, so do not label it an Odin runtime benchmark.
+Neither benchmark reads a user's database. Executable metadata, statement reuse,
+derived-view caching, and broader day-overlap indexing remain deferred.
 `python tools/test-import.py build/aika-cli.exe` tests the sample and renamed
 reimports, source isolation, guarded updates, failure exit codes, and version-0
 schema upgrades, using only temporary databases. `src/importer_test.odin` adds

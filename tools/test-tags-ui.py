@@ -12,16 +12,14 @@ import subprocess
 import sys
 import tempfile
 import time
+from native_ui import windows_for, find_window
 
 u = c.WinDLL("user32", use_last_error=True)
-u.FindWindowW.argtypes = [w.LPCWSTR, w.LPCWSTR]
-u.FindWindowW.restype = w.HWND
 u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
 u.SendMessageW.restype = c.c_ssize_t
 u.GetDlgItem.argtypes = [w.HWND, c.c_int]
 u.GetDlgItem.restype = w.HWND
 u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
-u.EnumWindows.argtypes = [c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM), w.LPARAM]
 u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
 u.IsWindowEnabled.argtypes = [w.HWND]
 u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
@@ -49,19 +47,7 @@ def double_click(hwnd, x):
 
 
 def main_window(pid):
-    found = []
-
-    @c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
-    def visit(hwnd, _):
-        owner = w.DWORD()
-        u.GetWindowThreadProcessId(hwnd, c.byref(owner))
-        buf = c.create_unicode_buffer(256)
-        u.GetClassNameW(w.HWND(hwnd), buf, 256)
-        if owner.value == pid and buf.value == "aika_window_class":
-            found.append(hwnd)
-        return True
-
-    u.EnumWindows(visit, 0)
+    found = windows_for(pid, "aika_window_class")
     assert len(found) == 1, found
     return found[0]
 
@@ -82,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
                                     "FROM Activity WHERE TimelineId=1 ORDER BY ActivityId").fetchall()
 
         def picker():
-            popup = u.FindWindowW("aika_tag_picker", None)
+            popup = find_window(process.pid, "aika_tag_picker")
             assert popup, "Tag picker did not open"
             return popup
 
@@ -116,14 +102,14 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
         send(picker(), 0x0010)  # WM_CLOSE
         assert rows() == after_right
         drag(hwnd, 950, 950)
-        assert not u.FindWindowW("aika_tag_picker", None)
+        assert not find_window(process.pid, "aika_tag_picker")
         assert u.IsWindowEnabled(hwnd)
 
         # An interior drag must not even open the picker, in either direction.
         drag(hwnd, 250, 350)
-        assert not u.FindWindowW("aika_tag_picker", None)
+        assert not find_window(process.pid, "aika_tag_picker")
         drag(hwnd, 350, 250)
-        assert not u.FindWindowW("aika_tag_picker", None)
+        assert not find_window(process.pid, "aika_tag_picker")
         assert rows() == after_right
 
         def use_existing():
@@ -171,9 +157,9 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
         assert filled[:-1] == extended
         extended = filled
         double_click(hwnd, 400)  # Now occupied
-        assert not u.FindWindowW("aika_tag_picker", None)
+        assert not find_window(process.pid, "aika_tag_picker")
         double_click(hwnd, 50)  # No block on the left
-        assert not u.FindWindowW("aika_tag_picker", None)
+        assert not find_window(process.pid, "aika_tag_picker")
         assert rows() == extended
 
         def wait_for(predicate):
@@ -185,7 +171,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
             raise AssertionError("Timed out waiting for native context menu")
 
         def menu_visible():
-            menu = u.FindWindowW("#32768", None)
+            menu = find_window(process.pid, "#32768")
             owner = w.DWORD()
             if menu:
                 u.GetWindowThreadProcessId(menu, c.byref(owner))
@@ -220,7 +206,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
         print("PASS: tagging, non-overlap, resize, double-click gap fill, delete, tag reuse, persistence")
     finally:
         if process.poll() is None:
-            popup = u.FindWindowW("aika_tag_picker", None)
+            popup = find_window(process.pid, "aika_tag_picker")
             if popup:
                 send(popup, 0x0010)
             if hwnd:

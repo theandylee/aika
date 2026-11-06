@@ -391,3 +391,15 @@ tracker_shutdown :: proc(app: ^App) -> bool {
 	}
 	return app.tracker.pending_count == 0
 }
+
+// Final ownership teardown, NOT a persistence acknowledgement. Only called
+// after shutdown/startup failure when this process is leaving the GUI loop.
+tracker_release :: proc(t: ^Tracker) {
+	clear_current(&t.current)
+	for i in 0 ..< t.pending_count {
+		delete(t.pending[i].title)
+		delete(t.pending[i].group_name)
+	}
+	delete(t.spell_rows)
+	t^ = {}
+}

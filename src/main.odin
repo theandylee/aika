@@ -33,6 +33,9 @@ load_day :: proc(app: ^App) -> bool {
 }
 
 main :: proc() {
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
 	args := os.args
 	db_path := "data/aika.db"
 	import_path := ""
@@ -108,12 +111,27 @@ main :: proc() {
 		return
 	}
 
+	if !run_gui(db, db_path) { os.exit(1) }
+}
+
+// Takes ownership of db, even when bootstrap fails. Return before os.exit so
+// partial-startup cleanup actually runs (os.exit does not execute defers).
+run_gui :: proc(db: DB, db_path: string) -> bool {
 	app := App {
 		db = db,
 		date = today_date_int(),
 		db_path = strings.clone(db_path),
 	}
 	global_app = &app
+	defer { global_app = nil }
+	defer {
+		ui_shutdown()
+		tracker_release(&app.tracker)
+		task_clear(&app.task)
+		free_activities(app.activities)
+		db_close(&app.db)
+		delete(app.db_path)
+	}
 	// A GUI operation must not sleep for the CLI/import busy timeout. Tracker
 	// writes retry on subsequent timer ticks on this same thread.
 	sqlite3_busy_timeout(app.db.handle, 0)
@@ -123,7 +141,11 @@ main :: proc() {
 	tracker_init(&app)
 	load_day(&app)
 
-	ui_bootstrap()
+	if !ui_bootstrap() {
+		message_box("Could not initialize the native window. aika will exit.", "aika", 0x10)
+		tracker_shutdown(&app)
+		return false
+	}
 	defer {
 		if !task_stop(&app, now_ms()) {
 			message_box("Could not save the final task time. The last saved time is preserved.", "aika", 0x10)
@@ -131,23 +153,25 @@ main :: proc() {
 		if !tracker_shutdown(&app) {
 			message_box("Tracking writes remain unsaved. Normal Exit should be retried before closing.", "aika", 0x10)
 		}
-		ui_shutdown()
-		free_activities(app.activities)
-		db_close(&app.db)
-		if len(app.db_path) > 0 {
-			delete(app.db_path)
-		}
 	}
 
 	// Message loop. The 500 ms timer drives the tracker (which samples at
-	// 1 Hz internally) and repaints; temp allocations from each message
-	// (text conversions, paint structures) are released after dispatch.
+	// 1 Hz internally) and repaints. Key routing owns scratch too, independently
+	// of callback scratch entered by DispatchMessage and native modal loops.
 	msg: windows.MSG
-	for windows.GetMessageW(&msg, nil, 0, 0) > 0 {
-		if !settings_key(&msg) && !date_picker_key(&msg) && !tag_picker_key(&msg) {
-			windows.TranslateMessage(&msg)
-			windows.DispatchMessageW(&msg)
-		}
-		free_all(context.temp_allocator)
+	for {
+		result := windows.GetMessageW(&msg, nil, 0, 0)
+		if result <= 0 { return result == 0 }
+		dispatch_app_message(&msg)
+	}
+}
+
+dispatch_app_message :: proc(msg: ^windows.MSG) {
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
+	if !settings_key(msg) && !date_picker_key(msg) && !tag_picker_key(msg) {
+		windows.TranslateMessage(msg)
+		windows.DispatchMessageW(msg)
 	}
 }

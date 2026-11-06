@@ -27,6 +27,8 @@ PaneScroll :: struct {
 	bounds: windows.RECT,
 }
 
+Zoom_Drag :: enum { None, Left, Right, Overview, Timeline }
+
 UiState :: struct {
 	dark:         bool,
 	hwnd:         windows.HWND,
@@ -42,6 +44,7 @@ UiState :: struct {
 	mem_bmp_old:  windows.HGDIOBJ,
 	mem_w, mem_h: i32,
 	mem_valid:    bool,
+	main_class, tray_class: bool,
 
 	font_normal: windows.HFONT, // 12px Segoe UI
 	font_bold:   windows.HFONT, // 12px bold
@@ -64,7 +67,7 @@ UiState :: struct {
 	totals_expanded: map[string]bool,
 	scroll_date: int,
 	zoom_start, zoom_end: f64,
-	zoom_drag: i32, // 0 = idle, 1/2 = resize edges, 3 = overview pan, 4 = middle-button timeline pan
+	zoom_drag: Zoom_Drag,
 	zoom_drag_anchor, zoom_drag_start, zoom_drag_end: f64,
 	pane_lane_h, pane_totals_w: i32, // zero = default; retained for this session
 	pane_drag: i32, // 1 = timeline height, 2 = list/totals width
@@ -171,6 +174,9 @@ ui_tray_menu :: proc() {
 // Defer menu tracking until after the shell's mouse callback has returned.
 tray_wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
 	if ui.taskbar_created != 0 && msg == ui.taskbar_created {
 		ui.tray_added = false
 		if !ui_add_tray() { ui_restore() }
@@ -330,23 +336,53 @@ ui_request_exit :: proc(app: ^App) -> bool {
 
 // --- Resize handling ---
 
-recreate_backbuffer :: proc(w, h: i32) {
-	if ui.mem_valid {
-		windows.SelectObject(ui.mem_dc, ui.mem_bmp_old)
-		windows.DeleteObject(windows.HGDIOBJ(ui.mem_bmp))
-		windows.DeleteDC(ui.mem_dc)
-		ui.mem_valid = false
+Backbuffer_IO :: struct {
+	create_dc: type_of(windows.CreateCompatibleDC),
+	create_bitmap: type_of(windows.CreateCompatibleBitmap),
+	select_object: type_of(windows.SelectObject),
+}
+
+release_backbuffer :: proc(s: ^UiState) {
+	if s.mem_dc != nil && s.mem_bmp_old != nil { windows.SelectObject(s.mem_dc, s.mem_bmp_old) }
+	if s.mem_bmp != nil { windows.DeleteObject(windows.HGDIOBJ(s.mem_bmp)) }
+	if s.mem_dc != nil { windows.DeleteDC(s.mem_dc) }
+	s.mem_dc, s.mem_bmp, s.mem_bmp_old = nil, nil, nil
+	s.mem_valid = false
+	s.mem_w, s.mem_h = 0, 0
+}
+
+// Build off to the side: failure preserves the previous valid buffer, and
+// releases every partially acquired resource. The caller never blits a stale size.
+create_backbuffer :: proc(s: ^UiState, dc: windows.HDC, w, h: i32, io := Backbuffer_IO{}) -> bool {
+	if dc == nil || w <= 0 || h <= 0 { return false }
+	ops := io
+	if ops.create_dc == nil { ops.create_dc = windows.CreateCompatibleDC }
+	if ops.create_bitmap == nil { ops.create_bitmap = windows.CreateCompatibleBitmap }
+	if ops.select_object == nil { ops.select_object = windows.SelectObject }
+	next: UiState
+	defer release_backbuffer(&next)
+	next.mem_dc = ops.create_dc(dc)
+	if next.mem_dc == nil { return false }
+	next.mem_bmp = ops.create_bitmap(dc, w, h)
+	if next.mem_bmp == nil { return false }
+	next.mem_bmp_old = ops.select_object(next.mem_dc, windows.HGDIOBJ(next.mem_bmp))
+	if next.mem_bmp_old == nil || uintptr(next.mem_bmp_old) == ~uintptr(0) {
+		next.mem_bmp_old = nil
+		return false
 	}
-	if w <= 0 || h <= 0 {
-		return
-	}
+	release_backbuffer(s)
+	s.mem_dc, s.mem_bmp, s.mem_bmp_old = next.mem_dc, next.mem_bmp, next.mem_bmp_old
+	s.mem_w, s.mem_h, s.mem_valid = w, h, true
+	next.mem_dc, next.mem_bmp, next.mem_bmp_old = nil, nil, nil
+	return true
+}
+
+recreate_backbuffer :: proc(w, h: i32) -> bool {
+	if w <= 0 || h <= 0 { release_backbuffer(&ui); return true }
 	dc := windows.GetDC(ui.hwnd)
-	ui.mem_dc = windows.CreateCompatibleDC(dc)
-	ui.mem_bmp = windows.CreateCompatibleBitmap(dc, w, h)
-	windows.ReleaseDC(ui.hwnd, dc)
-	ui.mem_bmp_old = windows.SelectObject(ui.mem_dc, windows.HGDIOBJ(ui.mem_bmp))
-	ui.mem_w = w
-	ui.mem_h = h
+	if dc == nil { return false }
+	defer windows.ReleaseDC(ui.hwnd, dc)
+	ok := create_backbuffer(&ui, dc, w, h)
 
 	// Move the filter edit control to the bottom of the client area.
 	if ui.edit != nil {
@@ -359,7 +395,7 @@ recreate_backbuffer :: proc(w, h: i32) {
 		)
 	}
 	ui_resize_date_picker(w, h)
-	ui.mem_valid = true
+	return ok
 }
 
 ui_edit_valid :: proc() -> bool {
@@ -471,6 +507,9 @@ draw_themed_control :: proc(dc: windows.HDC, theme: Theme_Handle, part, state: i
 
 wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lparam: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
 	app := global_app
 	switch msg {
 	case windows.WM_CLOSE:
@@ -500,12 +539,15 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		if !ui.mem_valid || ui.mem_w != w || ui.mem_h != h {
 			recreate_backbuffer(w, h)
 		}
-		if ui.mem_valid {
+		if ui.mem_valid && ui.mem_w == w && ui.mem_h == h {
 			// Keep the cursor position current even without mouse-move spam.
 			_update_mouse_client()
 			dc_buffer := ui.mem_dc
 			draw_frame(app, dc_buffer, w, h)
 			windows.BitBlt(dc, 0, 0, w, h, dc_buffer, 0, 0, windows.SRCCOPY)
+		} else {
+			fill_rect(dc, 0, 0, w, h, C_BG)
+			draw_string(dc, "Unable to allocate drawing buffer. Resize to retry.", 16, 40, ui.font_normal, C_TXT)
 		}
 		return 0
 	case windows.WM_TIMER:
@@ -533,7 +575,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			tag_pointer_move(win_x, compute_layout(w, h), app.activities)
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		}
-		if ui.zoom_drag != 0 {
+		if ui.zoom_drag != .None {
 			w, h := client_size(hwnd)
 			zoom_pointer_move(win_x, compute_layout(w, h))
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
@@ -550,7 +592,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		return 0
 	case windows.WM_SETCURSOR:
 		if ui.tab == 0 && (u32(lparam) & 0xFFFF) == 1 { // HTCLIENT
-			if ui.zoom_drag == 4 {
+			if ui.zoom_drag == .Timeline {
 				windows.SetCursor(ui_grab_cursor())
 				return 1
 			}
@@ -582,7 +624,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			}
 		}
 	case windows.WM_MOUSEWHEEL:
-		if ui.tab != 0 || tag_ui.drag != 0 || ui.pane_drag != 0 || ui.zoom_drag != 0 { return 0 }
+		if ui.tab != 0 || tag_ui.drag != 0 || ui.pane_drag != 0 || ui.zoom_drag != .None { return 0 }
 		delta := i32(i16((u32(wparam) >> 16) & 0xFFFF))
 		// WM_MOUSEWHEEL coordinates are screen-relative, including on other monitors.
 		p := windows.POINT{i32(i16(u32(lparam) & 0xFFFF)), i32(i16((u32(lparam) >> 16) & 0xFFFF))}
@@ -632,17 +674,17 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_MBUTTONUP:
-		if ui.zoom_drag == 4 {
+		if ui.zoom_drag == .Timeline {
 			w, h := client_size(hwnd)
 			x := i32(i16(u32(lparam) & 0xFFFF))
 			zoom_pointer_move(x, compute_layout(w, h))
-			ui.zoom_drag = 0
+			ui.zoom_drag = .None
 			windows.ReleaseCapture()
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		}
 		return 0
 	case windows.WM_LBUTTONDOWN, windows.WM_LBUTTONDBLCLK:
-		if ui.zoom_drag == 4 { return 0 }
+		if ui.zoom_drag == .Timeline { return 0 }
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
 		w, h := client_size(hwnd)
@@ -659,7 +701,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			return 0
 		}
 		id := hit_test(win_x, win_y, w, h)
-		if id >= HIT_BTN_PREV && id <= HIT_TOTALS_TREE {
+		if (id >= HIT_BTN_PREV && id <= HIT_TOTALS_TREE) || id == HIT_SETTINGS {
 			ui.pressed_hit = id
 			windows.SetCapture(hwnd)
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
@@ -668,7 +710,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_LBUTTONUP:
-		if ui.zoom_drag == 4 { return 0 }
+		if ui.zoom_drag == .Timeline { return 0 }
 		if ui.pane_drag != 0 {
 			w, h := client_size(hwnd)
 			x := i32(i16(u32(lparam) & 0xFFFF))
@@ -685,8 +727,8 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			tag_pointer_up(app, x, compute_layout(w, h))
 			return 0
 		}
-		if ui.zoom_drag != 0 {
-			ui.zoom_drag = 0
+		if ui.zoom_drag != .None {
+			ui.zoom_drag = .None
 			windows.ReleaseCapture()
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 			return 0
@@ -703,48 +745,25 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_CANCELMODE:
-		if ui.zoom_drag == 4 {
-			ui.zoom_drag = 0
-			windows.ReleaseCapture()
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		if ui.pane_drag != 0 {
-			pane_drag_cancel()
-			windows.ReleaseCapture()
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
+		ui_cancel_interaction()
+		if windows.GetCapture() == hwnd { windows.ReleaseCapture() }
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		// Let DefWindowProc dismiss any active native menu as well.
+		return windows.DefWindowProcW(hwnd, msg, wparam, lparam)
 	case windows.WM_CAPTURECHANGED:
-		pane_drag_cancel()
-		tag_ui.drag = 0
-		ui.pressed_hit = HIT_NONE
-		ui.zoom_drag = 0
+		ui_cancel_interaction()
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_KEYDOWN:
-		if wparam == 0x1B && ui.zoom_drag == 4 {
-			ui.zoom_start, ui.zoom_end = ui.zoom_drag_start, ui.zoom_drag_end
-			ui.zoom_drag = 0
-			windows.ReleaseCapture()
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		if wparam == 0x1B && ui.pane_drag != 0 {
-			pane_drag_cancel()
-			windows.ReleaseCapture()
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		if wparam == 0x1B && tag_ui.drag != 0 {
-			tag_ui.drag = 0
-			windows.ReleaseCapture()
+		if wparam == 0x1B {
+			ui_cancel_interaction()
+			if windows.GetCapture() == hwnd { windows.ReleaseCapture() }
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 			return 0
 		}
 	case windows.WM_COMMAND:
-		if windows.HWND(uintptr(lparam)) == ui.date_picker && (u32(wparam) >> 16) == 0 {
-			date_calendar_open()
+		if ui.date_picker != nil && windows.HWND(uintptr(lparam)) == ui.date_picker && (u32(wparam) >> 16) == 0 {
+			if ui.tab == 0 { date_calendar_open() }
 			return 0
 		}
 		if lparam == 0 && (u32(wparam) >> 16) == 0 {
@@ -781,9 +800,22 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		ui_remove_tray()
 		windows.KillTimer(hwnd, windows.UINT_PTR(APP_TIMER_ID))
 		windows.PostQuitMessage(0)
+		if ui.hwnd == hwnd { ui.hwnd = nil }
 		return 0
 	}
 	return windows.DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+// Idempotent cancellation shared by Escape, native modal transitions and
+// capture loss. Successful releases clear their state before ReleaseCapture.
+ui_cancel_interaction :: proc() {
+	pane_drag_cancel()
+	if ui.zoom_drag != .None {
+		ui.zoom_start, ui.zoom_end = ui.zoom_drag_start, ui.zoom_drag_end
+	}
+	ui.zoom_drag = .None
+	tag_ui.drag = 0
+	ui.pressed_hit = HIT_NONE
 }
 
 client_size :: proc(hwnd: windows.HWND) -> (w, h: i32) {
@@ -878,7 +910,16 @@ handle_click :: proc(app: ^App, x, y: i32) {
 			ui.totals_scroll.pos = 0
 		}
 	}
+	ui_sync_day_controls()
 	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+}
+
+ui_sync_day_controls :: proc() {
+	show := ui.tab == 0
+	if !show { date_calendar_close(false) }
+	if ui.date_picker != nil && bool(windows.IsWindowVisible(ui.date_picker)) != show {
+		windows.ShowWindow(ui.date_picker, windows.SW_SHOW if show else windows.SW_HIDE)
+	}
 }
 
 // --- Fonts ---
@@ -907,7 +948,13 @@ ui_create_fonts :: proc() {
 
 // --- Window bootstrap ---
 
-ui_bootstrap :: proc() -> bool {
+Ui_Startup_Stage :: enum { Class, Fonts, Window, Tray, Scrollbars, Filter, Date, Buffer, Timer }
+
+// Optional checkpoint permits deterministic unwinding tests after each owned
+// resource stage; production passes nil and checks the native API results.
+ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) -> bool {
+	ready := false
+	defer if !ready { ui_shutdown() }
 	theme_load()
 	ui.zoom_end = 1
 	hinstance := windows.GetModuleHandleW(nil)
@@ -923,15 +970,19 @@ ui_bootstrap :: proc() -> bool {
 	if windows.RegisterClassExW(&wc) == 0 {
 		return false
 	}
+	ui.main_class = true
+	if checkpoint != nil && !checkpoint(.Class) { return false }
 
 	ui_create_fonts()
+	if ui.font_normal == nil || ui.font_bold == nil || ui.font_small == nil || ui.font_title == nil || ui.font_icons == nil { return false }
+	if checkpoint != nil && !checkpoint(.Fonts) { return false }
 
 	// Common controls (ICC_DATE_CLASSES) for the native month calendar.
 	icc := windows.INITCOMMONCONTROLSEX{
 		dwSize = windows.DWORD(size_of(windows.INITCOMMONCONTROLSEX)),
 		dwICC  = windows.ICC_DATE_CLASSES,
 	}
-	windows.InitCommonControlsEx(&icc)
+	if !windows.InitCommonControlsEx(&icc) { return false }
 
 	title := windows.utf8_to_wstring("aika", context.temp_allocator)
 	// WS_CLIPCHILDREN keeps our BitBlt from painting over the filter EDIT.
@@ -953,22 +1004,28 @@ ui_bootstrap :: proc() -> bool {
 	if ui.hwnd == nil {
 		return false
 	}
+	if checkpoint != nil && !checkpoint(.Window) { return false }
 	ui_open_themes()
 	tray_class := windows.WNDCLASSEXW{cbSize = size_of(windows.WNDCLASSEXW),
 		lpfnWndProc = tray_wnd_proc, hInstance = windows.HINSTANCE(hinstance),
 		lpszClassName = wtext("aika_tray_window_class")}
-	windows.RegisterClassExW(&tray_class)
+	if windows.RegisterClassExW(&tray_class) == 0 { return false }
+	ui.tray_class = true
 	ui.tray_hwnd = windows.CreateWindowExW(0, tray_class.lpszClassName, wtext("aika tray"),
 		windows.WS_POPUP, 0, 0, 0, 0, nil, nil, windows.HINSTANCE(hinstance), nil)
+	if ui.tray_hwnd == nil { return false }
 	ui.taskbar_created = windows.RegisterWindowMessageW(wtext("TaskbarCreated"))
 	ui_add_tray()
+	if checkpoint != nil && !checkpoint(.Tray) { return false }
 
 	// Independent native scrollbars, initially hidden until row counts are known.
 	for s in ([2]^PaneScroll{&ui.list_scroll, &ui.totals_scroll}) {
 		s.hwnd = windows.CreateWindowExW(0, wtext("SCROLLBAR"), nil,
 			windows.WS_CHILD | windows.WS_TABSTOP | 1, // SBS_VERT
 			0, 0, 0, 0, ui.hwnd, nil, windows.HINSTANCE(hinstance), nil)
+		if s.hwnd == nil { return false }
 	}
+	if checkpoint != nil && !checkpoint(.Scrollbars) { return false }
 
 	// Start with the Applications lane selected, like a fresh ManicTime day.
 	ui.lane = 2
@@ -982,13 +1039,16 @@ ui_bootstrap :: proc() -> bool {
 		0, 0, 100, 24,
 		ui.hwnd, nil, windows.HINSTANCE(hinstance), nil,
 	)
+	if ui.edit == nil { return false }
 	if ui.font_normal != nil {
 		windows.SendMessageW(ui.edit, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	}
 	if ui.edit != nil {
 		previous := windows.SetWindowLongPtrW(ui.edit, -4, transmute(windows.LONG_PTR)(windows.WNDPROC(filter_edit_proc))) // GWLP_WNDPROC
 		filter_edit_original = transmute(windows.WNDPROC)(previous)
+		if previous == 0 { return false }
 	}
+	if checkpoint != nil && !checkpoint(.Filter) { return false }
 
 	// Native owner-drawn button keeps keyboard activation and accessibility,
 	// while allowing the face to use the same palette as the rest of the UI.
@@ -1000,6 +1060,7 @@ ui_bootstrap :: proc() -> bool {
 		0, 0, 120, 26,
 		ui.hwnd, nil, windows.HINSTANCE(hinstance), nil,
 	)
+	if ui.date_picker == nil { return false }
 	if ui.date_picker != nil {
 		if ui.font_normal != nil {
 			windows.SendMessageW(ui.date_picker, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
@@ -1008,6 +1069,7 @@ ui_bootstrap :: proc() -> bool {
 			sync_date_picker(global_app)
 		}
 	}
+	if checkpoint != nil && !checkpoint(.Date) { return false }
 
 	// Position the filter edit explicitly: the first WM_SIZE can arrive before
 	// the control exists.
@@ -1020,30 +1082,41 @@ ui_bootstrap :: proc() -> bool {
 		windows.TRUE,
 	)
 	ui_resize_date_picker(cw, ch)
+	if !recreate_backbuffer(cw, ch) { return false }
+	if checkpoint != nil && !checkpoint(.Buffer) { return false }
 
 	theme_apply_native()
+	if windows.SetTimer(ui.hwnd, windows.UINT_PTR(APP_TIMER_ID), 500, nil) == 0 { return false }
+	if checkpoint != nil && !checkpoint(.Timer) { return false }
 	windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
-	windows.SetTimer(ui.hwnd, windows.UINT_PTR(APP_TIMER_ID), 500, nil)
+	ready = true
 	return true
 }
 
 ui_shutdown :: proc() {
+	settings_close()
+	if tag_ui.popup != nil { tag_picker_close() }
+	if ui.date_popup != nil { windows.DestroyWindow(ui.date_popup); ui.date_popup = nil; ui.date_calendar = nil }
+	if ui.hwnd != nil {
+		windows.DestroyWindow(ui.hwnd)
+		ui.hwnd = nil
+	}
+	ui.edit, ui.date_picker, ui.list_scroll.hwnd, ui.totals_scroll.hwnd = nil, nil, nil, nil
 	if ui.grab_cursor != nil { windows.DestroyCursor(ui.grab_cursor); ui.grab_cursor = nil }
 	totals_tree_shutdown()
 	ui_remove_tray()
 	if ui.tray_hwnd != nil { windows.DestroyWindow(ui.tray_hwnd); ui.tray_hwnd = nil }
 	ui_close_themes()
-	if ui.mem_valid {
-		windows.SelectObject(ui.mem_dc, ui.mem_bmp_old)
-		windows.DeleteObject(windows.HGDIOBJ(ui.mem_bmp))
-		windows.DeleteDC(ui.mem_dc)
-		ui.mem_valid = false
-	}
+	release_backbuffer(&ui)
 	if ui.font_normal != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_normal)) }
 	if ui.font_bold != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_bold)) }
 	if ui.font_small != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_small)) }
 	if ui.font_title != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_title)) }
 	if ui.font_icons != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_icons)) }
+	ui.font_normal, ui.font_bold, ui.font_small, ui.font_title, ui.font_icons = nil, nil, nil, nil, nil
+	hi := windows.HINSTANCE(windows.GetModuleHandleW(nil))
+	if ui.tray_class { windows.UnregisterClassW(wtext("aika_tray_window_class"), hi); ui.tray_class = false }
+	if ui.main_class { windows.UnregisterClassW(wtext(WNDC_CLASS), hi); ui.main_class = false }
 	if ui.filter != "" {
 		delete(ui.filter)
 		ui.filter = ""

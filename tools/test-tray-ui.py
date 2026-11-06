@@ -12,10 +12,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from native_ui import windows_for
 
 u = c.WinDLL("user32", use_last_error=True)
-callback = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
-u.EnumWindows.argtypes = [callback, w.LPARAM]
 u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
 u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
 u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
@@ -32,23 +31,6 @@ class GuiThreadInfo(c.Structure):
 
 
 u.GetGUIThreadInfo.argtypes = [w.DWORD, c.POINTER(GuiThreadInfo)]
-
-
-def windows_for(pid, class_name):
-    found = []
-
-    @callback
-    def visit(hwnd, _):
-        owner = w.DWORD()
-        u.GetWindowThreadProcessId(hwnd, c.byref(owner))
-        name = c.create_unicode_buffer(256)
-        u.GetClassNameW(hwnd, name, 256)
-        if owner.value == pid and name.value == class_name:
-            found.append(hwnd)
-        return True
-
-    u.EnumWindows(visit, 0)
-    return found
 
 
 def check_menu(process, tray, owner, event=0x0205, select=None):
@@ -88,19 +70,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tray-", dir=root) as folder:
     hwnd = None
     try:
         assert u.WaitForInputIdle(w.HANDLE(process._handle), 10000) == 0
-        found = []
-
-        @callback
-        def visit(window, _):
-            pid = w.DWORD()
-            u.GetWindowThreadProcessId(window, c.byref(pid))
-            name = c.create_unicode_buffer(256)
-            u.GetClassNameW(window, name, 256)
-            if pid.value == process.pid and name.value == "aika_window_class":
-                found.append(window)
-            return True
-
-        u.EnumWindows(visit, 0)
+        found = windows_for(process.pid, "aika_window_class")
         assert len(found) == 1
         hwnd = found[0]
         print("Window opened", flush=True)

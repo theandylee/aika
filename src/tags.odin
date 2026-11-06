@@ -16,6 +16,7 @@ TagUi :: struct {
 	visible: [dynamic]int,
 	menu_open: bool,
 	task_picker: bool,
+	control_failed: bool,
 }
 
 tag_ui: TagUi
@@ -33,7 +34,7 @@ tag_block_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> i64 {
 }
 
 tag_context_menu :: proc(app: ^App, screen: windows.POINT) {
-	if tag_ui.drag != 0 || ui.zoom_drag != 0 || tag_ui.popup != nil || tag_ui.menu_open { return }
+	if tag_ui.drag != 0 || ui.zoom_drag != .None || tag_ui.popup != nil || tag_ui.menu_open { return }
 	p := screen
 	windows.ScreenToClient(ui.hwnd, &p)
 	w, h := client_size(ui.hwnd)
@@ -86,7 +87,7 @@ tag_gap_at :: proc(activities: []Activity, point: i64) -> (start, end: i64, foun
 }
 
 tag_gap_double_click :: proc(app: ^App, x, y: i32, lay: Layout) -> bool {
-	if ui.tab != 0 || tag_ui.popup != nil || tag_ui.menu_open || tag_ui.drag != 0 || ui.zoom_drag != 0 ||
+	if ui.tab != 0 || tag_ui.popup != nil || tag_ui.menu_open || tag_ui.drag != 0 || ui.zoom_drag != .None ||
 	   !rect_hit(windows.RECT{lay.chart_x, lay.lane_y, lay.chart_x + lay.chart_w, lay.lane_y + lay.lane_h}, x, y) {
 		return false
 	}
@@ -272,6 +273,7 @@ tag_picker_filter :: proc() {
 tag_picker_close :: proc() {
 	hwnd := tag_ui.popup
 	tag_ui.popup = nil
+	tag_ui.search, tag_ui.list, tag_ui.create = nil, nil, nil
 	tag_ui.task_picker = false
 	windows.EnableWindow(ui.hwnd, windows.TRUE)
 	if hwnd != nil { windows.DestroyWindow(hwnd) }
@@ -335,6 +337,9 @@ tag_picker_accept :: proc(create: bool) {
 
 tag_picker_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
 	switch msg {
 	case windows.WM_ERASEBKGND:
 		w, h := client_size(hwnd)
@@ -361,11 +366,14 @@ tag_picker_control :: proc(class, label: string, style: u32, x, y, w, h: i32, id
 	hwnd := windows.CreateWindowExW(0, wtext(class), wtext(label),
 		windows.WS_CHILD | windows.WS_VISIBLE | style, x, y, w, h,
 		tag_ui.popup, windows.HMENU(id), windows.HINSTANCE(windows.GetModuleHandleW(nil)), nil)
+	if hwnd == nil { tag_ui.control_failed = true; return nil }
 	windows.SendMessageW(hwnd, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	return hwnd
 }
 
 tag_picker_open :: proc() {
+	if tag_ui.popup != nil { windows.SetForegroundWindow(tag_ui.popup); return }
+	tag_ui.control_failed = false
 	hi := windows.HINSTANCE(windows.GetModuleHandleW(nil))
 	wc := windows.WNDCLASSEXW{cbSize = size_of(windows.WNDCLASSEXW), lpfnWndProc = tag_picker_proc,
 		hInstance = hi, hCursor = windows.LoadCursorW(nil, transmute(cstring16)(u64(32512))),
@@ -387,6 +395,7 @@ tag_picker_open :: proc() {
 	tag_picker_control("BUTTON", "Use tag", windows.WS_TABSTOP | 1, 12, 268, 100, 28, 103)
 	tag_ui.create = tag_picker_control("BUTTON", "Create tag", windows.WS_TABSTOP, 120, 268, 140, 28, 104)
 	tag_picker_control("BUTTON", "Cancel", windows.WS_TABSTOP, 272, 268, 120, 28, 105)
+	if tag_ui.control_failed { tag_picker_close(); return }
 	tags, result := db_load_tags(&global_app.db)
 	if result != .Ok {
 		tag_picker_close()

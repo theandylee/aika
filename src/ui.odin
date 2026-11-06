@@ -10,8 +10,8 @@ import "core:sys/windows"
 // Applications), details list + totals panel below.
 //
 // Memory note: everything allocated during a paint uses context.temp_allocator
-// and is released by the free_all(context.temp_allocator) call after each
-// message in main; nothing is cached between frames.
+// and is released when its owning native callback returns (even inside a modal
+// loop); no derived view data is cached between frames.
 
 // --- Palette (COLORREF = 0x00BBGGRR; comments show rgb(R,G,B)) ---
 
@@ -202,6 +202,7 @@ fmt_hms :: proc(ms: i64) -> string {
 // --- Top-level frame ---
 
 draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	ui_sync_day_controls()
 	snapshot := build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
 	windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
 	if ui.scroll_date != app.date {
@@ -514,7 +515,7 @@ snapshot_filter_matches :: proc(name, filter: string) -> bool {
 filter_matches :: proc(name: string) -> bool { return snapshot_filter_matches(name, ui.filter) }
 
 // Builds the row list for the selected lane. Allocated with the temp
-// allocator: released by the post-message free_all in main.
+// allocator: released by the owning native callback's scratch scope.
 build_rows :: proc(snapshot: Day_Snapshot, tl: i64, filter: string = "") -> []ListRow {
 	if tl == 0 {
 		return nil
@@ -738,6 +739,8 @@ hit_test :: proc(x, y, w, h: i32) -> int {
 			return HIT_TAB_BASE + i
 		}
 	}
+	// Placeholder tabs draw only the shared tab/theme/settings strip.
+	if ui.tab != 0 { return HIT_NONE }
 	lay := compute_layout(w, h)
 	if ui.tab == 0 {
 		if rect_hit(totals_mode_rect(lay), x, y) { return HIT_TOTALS_TREE }

@@ -10,11 +10,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from native_ui import windows_for as find
 
 u = c.WinDLL("user32")
-callback = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
-u.EnumWindows.argtypes = [callback, w.LPARAM]
-u.EnumChildWindows.argtypes = [w.HWND, callback, w.LPARAM]
 u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
 u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
 u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
@@ -30,26 +28,6 @@ class ScrollInfo(c.Structure):
 
 
 u.GetScrollInfo.argtypes = [w.HWND, c.c_int, c.POINTER(ScrollInfo)]
-
-
-def find(pid, cls, parent=None):
-    result = []
-
-    @callback
-    def visit(hwnd, _):
-        owner = w.DWORD()
-        u.GetWindowThreadProcessId(hwnd, c.byref(owner))
-        name = c.create_unicode_buffer(256)
-        u.GetClassNameW(hwnd, name, 256)
-        if owner.value == pid and name.value.upper() == cls.upper():
-            result.append(hwnd)
-        return True
-
-    if parent:
-        u.EnumChildWindows(parent, visit, 0)
-    else:
-        u.EnumWindows(visit, 0)
-    return result
 
 
 def launch(exe, db):

@@ -30,7 +30,7 @@ settings_save_minutes :: proc(db_path: string, minutes: int) -> bool {
 		transmute([]u8)fmt.tprintf("%d\n", minutes))
 }
 
-SettingsUi :: struct { hwnd, minutes: windows.HWND }
+SettingsUi :: struct { hwnd, minutes: windows.HWND, control_failed: bool }
 settings_ui: SettingsUi
 
 settings_switch_rect :: proc(w: i32) -> windows.RECT {
@@ -88,6 +88,9 @@ settings_accept :: proc() {
 
 settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
 	switch msg {
 	case windows.WM_ERASEBKGND:
 		return 1
@@ -127,6 +130,7 @@ settings_control :: proc(class, label: string, style: u32, x, y, w, h: i32, id: 
 	hwnd := windows.CreateWindowExW(0, wtext(class), wtext(label),
 		windows.WS_CHILD | windows.WS_VISIBLE | style, x, y, w, h,
 		settings_ui.hwnd, windows.HMENU(id), windows.HINSTANCE(windows.GetModuleHandleW(nil)), nil)
+	if hwnd == nil { settings_ui.control_failed = true; return nil }
 	windows.SendMessageW(hwnd, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	return hwnd
 }
@@ -158,6 +162,7 @@ settings_open :: proc() {
 	settings_control("STATIC", "minutes (1–500)", 0, 388, 58, 136, 22, 0)
 	settings_control("BUTTON", "OK", windows.WS_TABSTOP | 1, 334, 394, 96, 28, 1)
 	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP, 438, 394, 96, 28, 2)
+	if settings_ui.control_failed { settings_close(); return }
 	dark := windows.BOOL(1) if ui.dark else windows.BOOL(0)
 	DwmSetWindowAttribute(settings_ui.hwnd, 20, &dark, size_of(dark))
 	SetWindowTheme(settings_ui.minutes, wtext("DarkMode_Explorer") if ui.dark else nil, nil)

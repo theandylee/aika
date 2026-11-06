@@ -13,11 +13,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from native_ui import windows_for, window_pid
 
 u = c.WinDLL("user32", use_last_error=True)
-callback = c.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
-u.EnumWindows.argtypes = [callback, w.LPARAM]
-u.EnumChildWindows.argtypes = [w.HWND, callback, w.LPARAM]
 u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
 u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
 u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
@@ -50,19 +48,7 @@ def drag(hwnd, x, y, dx, dy, cancel=False):
 def launch(exe, db):
     process = subprocess.Popen([exe, "--db", str(db)])
     assert u.WaitForInputIdle(w.HANDLE(process._handle), 10000) == 0
-    found = []
-
-    @callback
-    def visit(hwnd, _):
-        pid = w.DWORD()
-        u.GetWindowThreadProcessId(hwnd, c.byref(pid))
-        name = c.create_unicode_buffer(256)
-        u.GetClassNameW(hwnd, name, 256)
-        if pid.value == process.pid and name.value == "aika_window_class":
-            found.append(hwnd)
-        return True
-
-    u.EnumWindows(visit, 0)
+    found = windows_for(process.pid, "aika_window_class")
     assert len(found) == 1
     # WaitForInputIdle can return before the first complete paint/timer tick.
     time.sleep(0.6)
@@ -73,18 +59,12 @@ def launch(exe, db):
 def scrollbars(hwnd):
     result = []
 
-    @callback
-    def visit(child, _):
-        name = c.create_unicode_buffer(256)
-        u.GetClassNameW(child, name, 256)
-        if name.value.upper() == "SCROLLBAR" and u.IsWindowVisible(child):
+    for child in windows_for(window_pid(hwnd), "SCROLLBAR", hwnd):
+        if u.IsWindowVisible(child):
             rect = w.RECT()
             u.GetWindowRect(child, c.byref(rect))
             u.MapWindowPoints(None, hwnd, c.byref(rect), 2)
             result.append((rect.left, rect.top, rect.right, rect.bottom))
-        return True
-
-    u.EnumChildWindows(hwnd, visit, 0)
     assert len(result) == 2, result
     return sorted(result)
 

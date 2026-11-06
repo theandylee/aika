@@ -38,43 +38,46 @@ zoom_pointer_down :: proc(x, y: i32, lay: Layout) -> bool {
 	if ui.tab != 0 { return false }
 	bar, _, _, _ := zoom_rects(lay)
 	if !rect_hit(bar, x, y) { return false }
+	ui.zoom_drag_start, ui.zoom_drag_end = ui.zoom_start, ui.zoom_end
 	w := f64(bar.right - bar.left)
 	left := bar.left + i32(ui.zoom_start * w)
 	right := bar.left + i32(ui.zoom_end * w)
 	f := clamp(f64(x - bar.left) / w, 0.0, 1.0)
 	if abs(x - left) <= 6 && abs(x - left) <= abs(x - right) {
-		ui.zoom_drag = 1 // left edge
+		ui.zoom_drag = .Left
 	} else if abs(x - right) <= 6 {
-		ui.zoom_drag = 2 // right edge
+		ui.zoom_drag = .Right
 	} else {
-		ui.zoom_drag = 3 // move the visible window
+		ui.zoom_drag = .Overview
 		if x < left || x > right {
 			span := ui.zoom_end - ui.zoom_start
 			ui.zoom_start = clamp(f - span / 2, 0.0, 1.0 - span)
 			ui.zoom_end = ui.zoom_start + span
 		}
 	}
-	ui.zoom_drag_anchor = f
-	ui.zoom_drag_start = ui.zoom_start
-	ui.zoom_drag_end = ui.zoom_end
+	// A click outside recenters immediately; anchor that move while retaining
+	// the original range for cancellation.
+	ui.zoom_drag_anchor = f - (ui.zoom_start - ui.zoom_drag_start)
+	windows.SetFocus(ui.hwnd)
 	windows.SetCapture(ui.hwnd)
 	return true
 }
 
 // Grab the ruler or lanes, not the whole-day overview or its controls.
 zoom_pan_down :: proc(x, y: i32, lay: Layout) -> bool {
-	if ui.tab != 0 || ui.zoom_drag != 0 || ui.pane_drag != 0 ||
+	if ui.tab != 0 || ui.zoom_drag != .None || ui.pane_drag != 0 ||
 	   tag_ui.drag != 0 || ui.pressed_hit != HIT_NONE { return false }
 	if x < lay.chart_x || x >= lay.chart_x + lay.chart_w ||
 	   y < lay.ruler_y || y >= lay.lanes_bottom { return false }
-	ui.zoom_drag = 4
+	ui.zoom_drag = .Timeline
 	ui.zoom_drag_anchor = f64(x - lay.chart_x) / f64(max(1, lay.chart_w))
 	ui.zoom_drag_start, ui.zoom_drag_end = ui.zoom_start, ui.zoom_end
+	windows.SetFocus(ui.hwnd)
 	return true
 }
 
 zoom_pointer_move :: proc(x: i32, lay: Layout) {
-	if ui.zoom_drag == 4 {
+	if ui.zoom_drag == .Timeline {
 		// Move the content with the pointer, at the current zoom's pixel scale.
 		// Leave the pointer unclamped so capture also works outside the window.
 		f := f64(x - lay.chart_x) / f64(max(1, lay.chart_w))
@@ -85,12 +88,12 @@ zoom_pointer_move :: proc(x: i32, lay: Layout) {
 	}
 	bar, _, _, _ := zoom_rects(lay)
 	f := clamp(f64(x - bar.left) / f64(max(1, bar.right - bar.left)), 0.0, 1.0)
-	switch ui.zoom_drag {
-	case 1:
+	#partial switch ui.zoom_drag {
+	case .Left:
 		ui.zoom_start = clamp(f, 0.0, ui.zoom_end - ZOOM_MIN_SPAN)
-	case 2:
+	case .Right:
 		ui.zoom_end = clamp(f, ui.zoom_start + ZOOM_MIN_SPAN, 1.0)
-	case 3:
+	case .Overview:
 		span := ui.zoom_drag_end - ui.zoom_drag_start
 		ui.zoom_start = clamp(ui.zoom_drag_start + f - ui.zoom_drag_anchor, 0.0, 1.0 - span)
 		ui.zoom_end = ui.zoom_start + span

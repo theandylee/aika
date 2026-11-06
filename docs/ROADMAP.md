@@ -45,6 +45,16 @@ fixes before expanding the tracker. Checkboxes reflect verified follow-up work.
 
 ### Medium priority
 
+Step 6 reliability follow-up is implemented: callback-scoped scratch, repeatable
+partial-startup cleanup, transactional backbuffers, typed zoom/shared interaction
+cancellation, hidden Day hit-target fixes, PID-scoped native test helpers and a
+resource soak. Measured synthetic-history results justified only the timeline/start
+index; day reads retain their existing date-index path to avoid a regression.
+See `AUDIT.md` for measurements, passing checks and verification boundaries.
+Metadata/resolved-identity caching, prepared statement reuse, snapshot/derived-view
+caching, generalized overlap indexing and import peak-memory profiling remain
+deferred. DPI/keyboard policy and new tracker features were not part of this step.
+
 - [x] **A4. Merge short activities backward** (`src/tracker.odin`). Attribute a
   discarded activity shorter than five seconds to the preceding activity rather
   than backdating the next one. Define behavior when there is no preceding row.
@@ -115,9 +125,10 @@ idle threshold fires.
 
 ### 2. Settings
 
-The current constants are hardcoded:
+Tracking settings already expose an idle timeout (default 1 minute, range 1–500)
+through a native window and a database-adjacent `.settings` file. Remaining policy
+constants are currently fixed:
 
-- idle threshold = 10 minutes
 - poll interval = 1 second
 - 5 s minimum
 - 10 s heartbeat
@@ -143,8 +154,8 @@ Storage options:
 - a `Settings` table in SQLite (recommended; one file), or
 - `aika.ini` next to the exe.
 
-Add a settings panel in raygui. At minimum expose idle threshold and
-"don't track aika".
+Extend the existing native settings window only under a separate feature request;
+"don't track aika" and other policy options are not implemented.
 
 **Acceptance:**
 
@@ -155,10 +166,9 @@ Add a settings panel in raygui. At minimum expose idle threshold and
 
 - Use a named mutex (`CreateMutexW`) to prevent two trackers writing the same DB.
 - If a second instance starts, focus the existing window or exit with a message.
-- Add a tray icon with "Pause", "Open", "Exit" so closing the window can keep
-  tracking.
-- The current app exits when the window closes; ManicTime keeps running in the
-  tray.
+- Close-to-tray, Open/Settings/Exit, continued hidden tracking and guarded final
+  write flushing are implemented. Single-instance prevention and tray Pause remain
+  future policy work.
 
 **Acceptance:**
 
@@ -277,7 +287,7 @@ Improvements:
 
 - Group legend with toggles.
 - Hover highlight for all bars, not just app bars.
-- Zoom/pan (currently auto-fit only).
+- Zoom/pan is implemented, including overview resizing and middle-button panning.
 - Keyboard shortcuts: `T` today, arrows for days, `Space` pause.
 - DPI scaling: GDI text sizes are fixed pixels today; `GetDpiForWindow` +
   font recreation (or `SystemParametersInfo`) is a likely future step.
@@ -314,10 +324,10 @@ Document the trade-off clearly before implementing.
 
 | Item | Notes |
 |---|---|
-| No automated tests | Add headless DB tests and a fake clock first |
+| Automated reliability coverage | 64 Odin tests plus isolated native UI/import scripts; extend with each change |
 | Hardcoded timing constants | Move to `Settings` |
 | Hardcoded group colors | ManicTime-like palette is fine, but make it configurable |
-| No schema version | Add `PRAGMA user_version` and migrations before changing schema |
+| Additive schema migrations | Schema version 1 with import provenance; targeted indexes created idempotently |
 | `Sequence` table unused | Needed only for exact ManicTime ID behavior |
 | Document table unused | Implement with the Documents timeline |
 | No error log | Add rotating `aika.log` |
@@ -329,10 +339,7 @@ Document the trade-off clearly before implementing.
 
 ## Suggested next step
 
-Resolve **A1–A3 (import safety, idle reconciliation, and write-failure recovery)**
-first, with focused regression tests. Then complete **A4–A7** before adding new
-tracker features.
-
-Next, implement **session lock + power events** and **settings** together. They
-share the same lifecycle code in `tracker.odin`. After that, document/URL tracking
-is the highest-value user feature.
+**A1–A7** and the scoped/measured step-6 reliability work are complete. Review the
+remaining unchecked `AUDIT.md` items before selecting another change. Session
+lock/power events, broader settings and document/URL tracking require separate
+feature approval; they are not implied by the reliability refactoring.

@@ -52,6 +52,9 @@ date_calendar_accept :: proc() {
 
 date_popup_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
 	switch msg {
 	case windows.WM_ACTIVATE:
 		if u32(wp) & 0xFFFF == 0 { date_calendar_close(false) }
@@ -84,7 +87,11 @@ date_calendar_open :: proc() {
 			windows.WS_CHILD | windows.WS_VISIBLE | windows.WS_TABSTOP, 0, 0, 240, 200,
 			ui.date_popup, nil, hi, nil)
 	}
-	if ui.date_calendar == nil { return }
+	if ui.date_calendar == nil {
+		windows.DestroyWindow(ui.date_popup)
+		ui.date_popup = nil
+		return
+	}
 	theme_date_calendar()
 	sync_date_picker(global_app)
 	minimum: windows.RECT

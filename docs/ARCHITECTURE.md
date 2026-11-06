@@ -13,12 +13,11 @@ main()
   db_open()
   tracker_init()
   load_day()
-  InitWindow()
-  loop:
-    tracker_tick()        // throttled to 1 Hz inside
-    maybe load_day()      // every 10 s or after date navigation
-    draw_frame()
-    free temp allocator
+  ui_bootstrap()          // checked; partial failure unwinds
+  GetMessage/dispatch:
+    WM_TIMER -> tracker_tick() / task_tick() / maybe load_day()
+    WM_PAINT -> draw_frame()
+    each native callback owns independent scoped scratch
   tracker_shutdown()
   db_close()
 ```
@@ -241,11 +240,19 @@ title/group-name behavior.
 
 This is a correctness projection, not a derived-view cache: snapshot arrays/maps
 are rebuilt per paint, and new write-through cache rows currently copy the day
-array. Allocation scopes, measured caching and other optimizations remain step 6.
+array. Their lifetime is bounded by the paint callback's independent scratch scope.
+Metadata/derived-view caching and array-capacity changes remain deferred pending
+measurements; step 6 optimized only measured latest-row/task-neighbor queries.
 
 ## Persistence layer
 
 `src/db.odin` is a small synchronous SQLite repository.
+
+Failed opens close their handle and owned path before returning an empty DB.
+Cleanup is idempotent. The additive `(TimelineId, StartUtcMs, ActivityId)` index
+supports latest-row ordering and task-boundary seeks. Day overlap reads explicitly
+retain `IX_Activity_Timeline_Date`: the new index otherwise doubled their cost on
+synthetic history. It does not solve general large-history overlap scanning.
 
 Important functions:
 
@@ -314,7 +321,7 @@ The GUI is split across two files:
   text and ellipsis truncation).
 - `src/ui.odin` — the ManicTime-style Day view renderer: tab strip, toolbar
   (prev/next/Today, Start/Stop task, Day start / Day end / Duration boxes), a
-  full 24 h ruler, four lanes (Tags, Computer Usage, Applications, Documents),
+  full 24 h ruler, three lanes (Tags, Computer Usage, Applications),
   the details list, the totals panel, tooltips, filter row and status bar.
 - `src/date_picker.odin` — a palette-colored native owner-drawn button showing
   the selected weekday/date and a calendar icon. It opens a non-modal native
@@ -332,10 +339,23 @@ UI palette between light and dark via the top-right toggle, saving the choice
 beside the selected database as `<database path>.theme`. Dark buttons and tabs
 use GDI rather than light UxTheme drawing; stored activity colors are unchanged.
 
-Odin note: `wnd_proc` uses a non-default calling convention, which makes it
-contextless; it starts with `context = rt.default_context()`. All paint-time
-allocations (UTF-16 text conversions, row lists) use `context.temp_allocator`
-and are released by the `free_all` after each message in `main`.
+Odin note: native callbacks use a non-default calling convention and start with
+`context = rt.default_context()`, then install a fresh `Scratch` allocator and
+defer its destruction. Each arena allocates lazily, uses runtime map-cache-line
+alignment, and is independent of suspended outer callbacks. Never clear a shared
+temp allocator in a nested callback. Main's key routing has a separate scope.
+Persistent strings/cache data use the normal allocator; scratch cannot escape.
+
+Bootstrap checks required classes/windows/controls/fonts, initial backbuffer and
+timer, and unwinds every acquired stage on failure. Shutdown is repeatable.
+Backbuffer replacement acquires DC/bitmap/selection before releasing the previous
+buffer; failed resize paints a direct error fallback and retries on later paints.
+Final tracker teardown releases owned metadata without acknowledging lost writes.
+
+Zoom uses typed drag states. Escape, capture loss and native cancellation share
+one idempotent interaction-cancellation helper; successful releases clear state
+before releasing capture. Overview and middle-button cancellation restore the
+original range. Non-Day tabs expose only shared tab/theme/Settings hit targets.
 
 ### Timeline
 
