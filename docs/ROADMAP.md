@@ -10,17 +10,20 @@ This roadmap is ordered by value and implementation risk.
 ## Audit follow-up — correctness before new features
 
 Added from the 2026-11-06 project audit. Complete the high-priority data-integrity
-fixes before expanding the tracker. All tasks below are open.
+fixes before expanding the tracker. Checkboxes reflect verified follow-up work.
 
 ### High priority
 
-- [ ] **A1. Make imports collision-safe** (`src/db.odin`, `src/importer.odin`).
+- [x] **A1. Make imports collision-safe** (`src/db.odin`, `src/db_import.odin`, `src/importer.odin`).
   Replace raw external-ID `INSERT OR REPLACE` behavior with stable source-to-local
   identity mapping for groups and activities. Remap imported group references and
   preserve unrelated local history. Add schema versioning/migrations if needed.
   **Acceptance:** importing colliding group/activity IDs neither overwrites local
   activities nor relabels their applications; importing the same source twice is
   idempotent. The sample still imports 202 activities and 2745 groups into a fresh DB.
+  Implemented with explicit source identities, local-ID allocation, guarded source
+  updates, tombstones, and additive schema version 1. Legacy exports need
+  `--import-source`; existing unprovenanced history is not automatically adopted.
 
 - [ ] **A2. Reconcile application history when backdating idle**
   (`src/tracker.odin`, `src/db.odin`). Trim or remove all application intervals
@@ -30,7 +33,7 @@ fixes before expanding the tracker. All tasks below are open.
   no negative-duration rows and no application activity within the resulting
   Away interval. Cover a current activity that starts after the transition time.
 
-- [ ] **A3. Preserve pending activity on database write failures**
+- [x] **A3. Preserve pending activity on database write failures**
   (`src/db.odin`, `src/tracker.odin`, `src/ui.odin`). Propagate SQLite write results,
   retain failed inserts/updates for retry, retry failed usage inserts, and show
   recording errors in the UI. Advance persistence state only after successful writes.
@@ -47,7 +50,7 @@ fixes before expanding the tracker. All tasks below are open.
   seconds, C starts at its actual focus time, and no B row remains. Cover quick
   A → B → A switches and pause/away boundaries without bridging tracking gaps.
 
-- [ ] **A5. Return failing CLI exit codes** (`src/main.odin`). Return nonzero exit
+- [x] **A5. Return failing CLI exit codes** (`src/main.odin`). Return nonzero exit
   codes for database-open and import failures, including with `--quiet`.
   **Acceptance:** missing files, malformed JSON, and an unwritable database fail
   in scripts; a successful import returns zero.

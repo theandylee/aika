@@ -172,8 +172,8 @@ Important functions:
 | `db_resize_tag` | Update both bounds and all timestamp fields of a tag |
 | `db_ensure_group` | Lookup/insert group by `(timeline, key hash)` |
 | `db_usage_group` | Get the seeded Active/Away/etc. group id |
-| `db_import_group` | Import a group preserving ids/colors |
-| `db_insert_activity_full` | Import an activity with explicit id |
+| `db_import_group` | Resolve group by timeline/key; preserve existing metadata |
+| `db_import_activity` | Allocate/map local IDs; guard source updates against local edits |
 
 ### Persistence failures and retries
 
@@ -367,17 +367,46 @@ window resize. Escape or capture loss restores the sizes from before the drag.
 
 ```
 ManicTime.sdf
-  -> tools/export-manictime.ps1   (read-only SQL CE)
-  -> JSON { groups, activities }
+  -> tools/export-manictime.ps1 -SourceId database-id   (read-only SQL CE)
+  -> JSON { sourceId, groups, activities }
   -> aika-cli.exe --import
   -> json.unmarshal into ImportFile
-  -> db_import_group / db_insert_activity_full
+  -> db_import_group / db_import_activity
+  -> ImportActivityMap (source database/id -> allocated local id)
 ```
 
 The exporter converts `StartUtcTime`/`EndUtcTime` to Unix milliseconds. The
 importer recomputes local date/time fields from those instants using the current
 Windows timezone. This is correct when importing history on the same machine and
 timezone.
+
+`src/importer.odin` validates the entire file before beginning its
+`BEGIN IMMEDIATE` transaction. Source activity/group IDs must be positive and
+unique within the file; timestamps must be present and ordered, and nonzero group
+references must resolve within the same source file/timeline. Empty group keys
+are rejected rather than guessed from display names. Legacy JSON without
+`sourceId` requires `--import-source`; a provided override must agree with the
+payload. Source identities are explicit, case-sensitive labels for a database
+generation, not paths or export timestamps.
+
+`src/db_import.odin` never uses source IDs as local primary keys. Groups resolve
+by `(TimelineId, Key)` without replacing existing metadata. Activities get fresh
+local IDs and a persistent source mapping. Identical source payloads are no-ops,
+even if a mapped row was edited locally. Changed source payloads update only if
+the local row still matches its last imported fingerprint; otherwise the whole
+transaction rolls back. Timeline/start changes for the same source ID are treated
+as identity conflicts. Deletion sets the mapped local ID to NULL, retaining a
+tombstone so reimports do not resurrect local deletions.
+
+Parsed JSON/maps use an import-owned arena; SQL/conversion/fingerprint scratch
+uses a separate arena reset after each completed row. Both are destroyed on
+success or failure, including parse and commit failures. This still parses the
+whole file in memory; it is not a streaming importer.
+
+Schema version 0 upgrades additively to version 1 (`ImportActivityMap`). Existing
+activities are not adopted by numeric IDs or content guesses. Old unprovenanced
+imports can therefore duplicate on their first new import; no automatic repair
+or deduplication of old history is attempted. See `docs/DATABASE.md`.
 
 ## Deliberate design choices
 

@@ -338,6 +338,11 @@ interrupted reads after a first row, and cache preservation on load failure.
 lock against an isolated DB, checks UI responsiveness and error visibility,
 verifies Exit cancellation while writes are pending, then releases the lock and
 checks recovery and successful Exit. Native UI tests should run sequentially.
+`python tools/test-import.py build/aika-cli.exe` tests the sample and renamed
+reimports, source isolation, guarded updates, failure exit codes, and version-0
+schema upgrades, using only temporary databases. `src/importer_test.odin` adds
+ID/key collisions, alias groups, local-edit conflicts, deletion tombstones,
+malformed data, embedded NUL/Unicode text, and write/commit rollback tests.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.

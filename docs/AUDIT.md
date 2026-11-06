@@ -33,7 +33,7 @@ verified. References describe the source at audit time; line numbers may drift.
 
 ## High priority: correctness and data loss
 
-- [ ] **1. Importing can overwrite local history and orphan activities.**
+- [x] **1. Importing can overwrite local history and orphan activities.**
   References: `src/db.odin:578`, `src/db.odin:648`.
   Both activities and groups use `INSERT OR REPLACE` with imported IDs. An
   imported activity or group ID can replace an unrelated local record. A matching
@@ -42,6 +42,11 @@ verified. References describe the source at audit time; line numbers may drift.
   reproduced against the current schema.
   Introduce source-to-local ID mapping, resolve group identity independently of
   source IDs, and define an explicit, idempotent import strategy.
+  Fixed: groups resolve by `(TimelineId, Key)` without changing existing metadata;
+  source activity IDs map to allocated local IDs under an explicit source database
+  identity. Reimports are no-ops or guarded updates, with conflicts rolling back
+  the whole transaction and deletions retained as tombstones. Schema version 1
+  adds provenance without adopting/overwriting older unprovenanced history.
 
 - [x] **2. Persistence failures are silently treated as success.**
   References: `src/db.odin:309–344`, `src/tracker.odin:68–88`,
@@ -119,6 +124,9 @@ verified. References describe the source at audit time; line numbers may drift.
   are silently ignored.
   Add validated argument parsing, explicit startup stages with cleanup, and
   meaningful failure exit codes.
+  Partial progress: database/import failures now exit nonzero, and missing option
+  values/unknown arguments are rejected. GUI bootstrap failure handling and full
+  staged startup cleanup remain open.
 
 ## Memory and resource ownership
 
@@ -131,7 +139,7 @@ verified. References describe the source at audit time; line numbers may drift.
   Fixed: `filter_from_utf16` frees its intermediate conversion. A tracking-allocator
   test verifies no outstanding allocations after 1,000 conversion/free cycles.
 
-- [ ] **10. Import allocations have no bounded ownership scope.**
+- [x] **10. Import allocations have no bounded ownership scope.**
   References: `src/importer.odin:31–74`, `src/db.odin:172–174`.
   The input file is freed, but the unmarshalled object graph is not. Per-row SQL,
   text, and date scratch allocations accumulate because imports never enter the
@@ -139,6 +147,10 @@ verified. References describe the source at audit time; line numbers may drift.
   peak-memory problem because the CLI exits afterward.
   Use an import-owned arena for parsed data and separately resettable per-batch
   scratch storage, including cleanup after parse errors.
+  Fixed: parsed JSON/maps belong to an import-owned arena; a separate scratch
+  arena is reset after each row's repository calls return/finalize. Both are
+  destroyed on success, parse failure, rollback or failed commit. Whole-file
+  parsing still has O(input size) memory cost; peak memory has not been benchmarked.
 
 - [ ] **11. Temporary cleanup depends on returning from native modal loops.**
   References: `src/main.odin:108–113`, `src/winui.odin:164`,
@@ -309,6 +321,23 @@ verified. References describe the source at audit time; line numbers may drift.
 - Pending writes remain memory-only; forced termination during an outage can
   lose them. Import identity, idle reconciliation, wall-clock scheduling and
   effective live-view consistency remain separate unchecked work.
+
+## Follow-up verification — step 3
+
+- `odin check src -vet` and all 36 tests in `odin test src -vet` passed, including
+  import collisions, reimports, local-edit conflicts, deletion tombstones, Unicode/
+  embedded NUL text, malformed inputs, and write/commit rollback.
+- The normal build was blocked by the user's running `build/aika.exe`. Both
+  alternate builds (`build/aika-step3.exe`, `build/aika-step3-cli.exe`) succeeded;
+  the existing process was not stopped or replaced.
+- The isolated CLI integration test passed: 202 sample activities / 2,745 groups,
+  renamed reimports, source isolation, timestamp consistency, local-edit conflict
+  handling, version-0 migration, and nonzero failure exit codes.
+- Exporter PowerShell syntax and rejection of missing `SourceId` were checked.
+  The installed SQL CE exporter was not run against the user's live history.
+- Isolated PID-scoped task and persistence UI tests passed against the alternate
+  GUI build. Tests with global popup lookup were avoided while another aika
+  instance was running.
 
 ## Guardrails for follow-up work
 

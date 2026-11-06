@@ -108,13 +108,13 @@ with ManicTime.
 Export the last 7 days:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 7
+powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 7 -SourceId home-manictime-1
 ```
 
 Export only today:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 1 -Out tools\manictime-today.json
+powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 1 -SourceId home-manictime-1 -Out tools\manictime-today.json
 ```
 
 Import into a fresh `aika` database:
@@ -128,6 +128,27 @@ imports and scripting. `aika.exe` is the GUI build.
 
 The exporter opens `ManicTime.sdf` in read-only mode. ManicTime can usually keep
 running, but close it if SQL CE reports a file-write lock.
+
+Choose `SourceId` once per source database and reuse it for every export/date
+range. Use a new ID after replacing/resetting that database; don't use export
+filenames or timestamps as identities. New exports carry this ID in the JSON.
+Legacy exports (including the checked-in sample) require an explicit ID:
+
+```bat
+build\aika-cli.exe --db data\import-test.db --import tools\manictime-today.json --import-source manictime-sample --quiet
+```
+
+Imports allocate local IDs, resolve groups by `(TimelineId, Key)`, and preserve
+existing group names/colors. Reimporting the same source does not duplicate rows;
+source changes update only mapped rows that have not changed locally. Conflicts
+roll back the entire import, and locally deleted imported tags stay deleted.
+Import failures return exit code 1; invalid CLI arguments return 2.
+
+**Older imports have no provenance.** Back up an existing database before using
+the new importer. It will not infer ownership from IDs or rewrite earlier rows:
+importing that same legacy history again can create duplicates once. Use a fresh
+database for a clean reimport, or review your existing history first. Earlier
+overwrites/orphans are not automatically repaired.
 
 ## ManicTime schema compatibility
 

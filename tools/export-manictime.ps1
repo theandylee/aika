@@ -1,9 +1,17 @@
 param(
     [int]$Days = 7,
-    [string]$Out = ""
+    [string]$Out = "",
+    [string]$SourceId = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# Chosen once per source database generation, then reused for every date range.
+# A path, machine name or export timestamp is not a safe database identity.
+if ($SourceId -eq "" -or $SourceId -ne $SourceId.Trim() -or
+    [System.Text.Encoding]::UTF8.GetByteCount($SourceId) -gt 256 -or $SourceId.Contains([string][char]0)) {
+    throw "Pass -SourceId <stable-database-id> (1-256 UTF-8 bytes, no surrounding whitespace). Reuse it for this database; choose a new ID after replacing/resetting the database."
+}
 
 $manicDir = "C:\Program Files (x86)\ManicTime"
 $sdf = Join-Path $env:LOCALAPPDATA "Finkit\ManicTime\ManicTime.sdf"
@@ -84,6 +92,7 @@ $conn.Close()
 
 $payload = [ordered]@{
     source     = "ManicTime"
+    sourceId   = $SourceId
     exportedAt = (Get-Date).ToString("o")
     fromDate   = $fromInt
     toDate     = $toInt

@@ -42,7 +42,7 @@ Override with `--db <path>`.
 Import ManicTime history:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 7
+powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 7 -SourceId home-manictime-1
 build\aika-cli.exe --db data\aika.db --import tools\manictime-export.json --quiet
 ```
 
@@ -118,6 +118,7 @@ src/
   tracker.odin    Focus polling, idle/away state, activity lifecycle
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
   db.odin         SQLite schema, repository, activity/group queries, import helpers
+  db_import.odin  Import group resolution, guarded activity updates, provenance
   sqlite.odin     SQLite C bindings
   winui.odin      Native window: WndProc, timer, GDI helpers, double buffer, hit tests
   ui.odin         ManicTime-style Day view drawn with GDI (lanes, list, totals, tooltip)
@@ -198,10 +199,12 @@ for r in c.execute("select ActivityId,TimelineId,DisplayName,GroupId,StartLocalD
 6. Import test:
 
 ```bat
-build\aika-cli.exe --db data\import-test.db --import tools\manictime-today.json --quiet
+build\aika-cli.exe --db data\import-test.db --import tools\manictime-today.json --import-source manictime-sample --quiet
 ```
 
 Expected: exit code 0, 202 activities for the sample file, 2745 groups.
+New exports carry `sourceId`; legacy exports require `--import-source`. Reuse the
+same ID for one source database generation, never an export filename or date.
 
 7. Close the window to hide it in the system tray; verify tracking continues.
    Restore via the tray icon, then choose its right-click **Exit** option and

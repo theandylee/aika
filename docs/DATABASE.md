@@ -177,6 +177,34 @@ ManicTime allocates IDs through this table. aika relies on SQLite
 `AUTOINCREMENT` instead. If you need exact ManicTime-style ID allocation later,
 use `Sequence` and explicit IDs.
 
+### ImportActivityMap (aika extension, schema version 1)
+
+```sql
+CREATE TABLE ImportActivityMap (
+    SourceId TEXT NOT NULL CHECK(length(SourceId) > 0),
+    SourceActivityId INTEGER NOT NULL CHECK(SourceActivityId > 0),
+    SourceTimelineId INTEGER NOT NULL CHECK(SourceTimelineId BETWEEN 1 AND 4),
+    SourceStartUtcMs INTEGER NOT NULL CHECK(SourceStartUtcMs > 0),
+    LocalActivityId INTEGER UNIQUE REFERENCES Activity(ActivityId) ON DELETE SET NULL,
+    SourceFingerprint TEXT NOT NULL,
+    LocalFingerprint TEXT NOT NULL,
+    PRIMARY KEY (SourceId, SourceActivityId)
+);
+```
+
+`SourceId` is an explicit, case-sensitive identifier for one source database
+generation. Source activity IDs are namespaced by it, never inserted into
+`Activity.ActivityId`. `LocalActivityId` is allocated by SQLite; NULL means the
+local row was deleted and must not be resurrected by reimporting.
+
+`SourceFingerprint` hashes the last imported timeline, resolved local group,
+start/end UTC milliseconds, title and text data. `LocalFingerprint` hashes the
+stored activity fields (including all timestamp representations and GroupListId,
+excluding the bookkeeping UpdatedTimestamp). They are case-sensitive SHA-256
+hashes with Base64 encoding, not ManicTime's lowercased group-key hashes. A changed
+source payload may update its mapped activity only when the current local row
+still matches that baseline. Both mapping and activity writes share one transaction.
+
 ---
 
 ## 2. ManicTime date encoding
@@ -311,7 +339,9 @@ WHERE a.TimelineId = 2
 ORDER BY a.StartUtcMs DESC;
 ```
 
-Usage group IDs are seeded:
+Usage groups are seeded by timeline/key. The following numeric IDs are typical
+only for a fresh database; always resolve identity by `(TimelineId, Key)` rather
+than assuming source IDs or these local IDs:
 
 | GroupId | Key hash | Name |
 |---:|---|---|
@@ -331,6 +361,7 @@ The hashes are `Base64(SHA256("manictime/active"))` etc.
 ```json
 {
   "source": "ManicTime",
+  "sourceId": "home-manictime-1",
   "exportedAt": "2026-11-06T07:52:29.4112812+01:00",
   "fromDate": 20261106,
   "toDate": 20261106,
@@ -358,16 +389,55 @@ The hashes are `Base64(SHA256("manictime/active"))` etc.
 }
 ```
 
-The importer:
+Pass `-SourceId home-manictime-1` to the exporter. Reuse it across files, date
+ranges, renames and copies for that same source database. Choose a new ID only
+after replacing/resetting the source database. Do not derive IDs from timestamps,
+export paths or the generic `"source": "ManicTime"` label. IDs must contain
+1–256 UTF-8 bytes with no surrounding whitespace or embedded NUL.
 
-1. `json.unmarshal` into `ImportFile`.
-2. Inserts groups with `INSERT OR REPLACE`, preserving IDs and colors.
-3. Inserts activities with explicit IDs.
-4. Recomputes local/UTC fields from `startUtcMs`/`endUtcMs`.
-5. Runs inside a `BEGIN`/`COMMIT` transaction.
+Legacy JSON without `sourceId`, including the checked-in sample, needs an explicit
+identity:
+
+```bat
+build\aika-cli.exe --db data\import-test.db --import tools\manictime-today.json --import-source manictime-sample --quiet
+```
+
+If both the payload and CLI supply an ID, they must agree. The importer:
+
+1. Parses the JSON into an import-owned arena and validates every row before
+   starting any import writes. Source IDs must be positive/unique, timelines must
+   be 1–4, keys nonempty, and nonzero group references must resolve in the file on
+   the same timeline. Zero/missing, reversed, and out-of-range timestamps fail the
+   whole import rather than being silently skipped. Supported UTC milliseconds
+   are after the Unix epoch through year 9999, with `end >= start`.
+2. Starts `BEGIN IMMEDIATE`. Resolves groups by `(TimelineId, Key)`, allocating
+   local IDs for new identities. Existing names, colors and metadata win; new
+   groups preserve source colors and metadata. Multiple source group IDs can map
+   to the same identity. No `INSERT OR REPLACE` is used.
+3. Allocates new local activity IDs and records source mappings. Explicitly
+   ungrouped activities (`groupId: 0`) store SQL NULL, not a guessed local group.
+4. Treats identical source payloads as no-ops, including after local edits. A
+   changed source payload updates only a mapped, locally unchanged row; a local
+   conflict aborts the whole transaction. A changed timeline/start for the same
+   source activity ID is an identity conflict, not an implicit replacement.
+   Legitimate source start-time edits need reviewed reconciliation; do not invent
+   a new source ID merely to bypass a conflict.
+5. Keeps locally deleted rows tombstoned. Reimports never delete rows merely
+   absent from a particular exported date range.
+6. Recomputes all local/UTC timestamp representations together on writes, then
+   commits activities, groups and provenance atomically. Any write or commit
+   failure rolls back everything. Per-row scratch is reset only after its
+   statements have finalized; all parsed/scratch storage is released on return.
 
 `--quiet` suppresses the GUI message box for scripted imports. Use
-`build\aika-cli.exe` for a console build.
+`build\aika-cli.exe` for a console build. Exit codes: 0 on success, 1 on database
+or import failure, 2 for invalid/missing CLI arguments.
+
+**Pre-provenance imports:** existing activities are never adopted by numeric ID
+or content guesses. Back up an existing database first. Reimporting legacy history
+can add a duplicate copy once because the old rows have no source ownership.
+Prefer a fresh DB for a clean reimport or review existing history first. The new
+importer does not repair earlier orphaned/overwritten history automatically.
 
 ---
 
@@ -390,8 +460,12 @@ concurrent readers, not multiple writers.
 
 ## 7. Migration notes
 
-There is no migration framework. The schema is created with
-`CREATE TABLE IF NOT EXISTS` and indexes with `CREATE INDEX IF NOT EXISTS`.
+`db_init_schema` performs schema/seed initialization in a transaction and uses
+`PRAGMA user_version`. Version 0 (the old schema) upgrades additively to version 1
+by creating `ImportActivityMap`; existing activity/group rows are retained without
+inferring provenance or changing their primary keys. New databases start at
+version 1. Higher, unsupported versions are rejected rather than downgraded.
+Tables/indexes still use `CREATE ... IF NOT EXISTS`.
 
 If you change the schema:
 

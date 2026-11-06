@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS Sequence (
 	Name TEXT PRIMARY KEY,
 	Value INTEGER NOT NULL DEFAULT 0
 );
+
+-- aika import provenance, schema version 1. Source IDs never become local IDs.
+CREATE TABLE IF NOT EXISTS ImportActivityMap (
+	SourceId TEXT NOT NULL CHECK(length(SourceId) > 0),
+	SourceActivityId INTEGER NOT NULL CHECK(SourceActivityId > 0),
+	SourceTimelineId INTEGER NOT NULL CHECK(SourceTimelineId BETWEEN 1 AND 4),
+	SourceStartUtcMs INTEGER NOT NULL CHECK(SourceStartUtcMs > 0),
+	LocalActivityId INTEGER UNIQUE REFERENCES Activity(ActivityId) ON DELETE SET NULL,
+	SourceFingerprint TEXT NOT NULL,
+	LocalFingerprint TEXT NOT NULL,
+	PRIMARY KEY (SourceId, SourceActivityId)
+);
 `
 
 SEED_SQL :: `
@@ -156,13 +168,31 @@ db_open :: proc(path: string) -> (DB, bool) {
 	if !db_exec(&db, "PRAGMA journal_mode=WAL;") ||
 	   !db_exec(&db, "PRAGMA synchronous=NORMAL;") ||
 	   !db_exec(&db, "PRAGMA foreign_keys=ON;") ||
-	   !db_exec(&db, SCHEMA_SQL) ||
-	   !db_exec(&db, SEED_SQL) {
+	   !db_init_schema(&db) {
 		sqlite3_close_v2(db.handle)
 		db.handle = nil
 		return db, false
 	}
 	return db, true
+}
+
+db_init_schema :: proc(db: ^DB) -> bool {
+	stmt, ok := db_prepare(db, "PRAGMA user_version")
+	if !ok { return false }
+	rc := sqlite3_step(stmt)
+	version := col_i64(stmt, 0) if rc == SQLITE_ROW else -1
+	sqlite3_finalize(stmt)
+	if version < 0 || version > 1 {
+		fmt.eprintln("unsupported database schema version:", version)
+		return false
+	}
+	if !db_exec(db, "BEGIN IMMEDIATE") { return false }
+	committed := false
+	defer if !committed { db_exec(db, "ROLLBACK") }
+	if !db_exec(db, SCHEMA_SQL) || !db_exec(db, SEED_SQL) ||
+	   !db_exec(db, "PRAGMA user_version = 1") || !db_exec(db, "COMMIT") { return false }
+	committed = true
+	return true
 }
 
 db_close :: proc(db: ^DB) {
@@ -189,7 +219,7 @@ db_prepare :: proc(db: ^DB, sql: string) -> (^sqlite3_stmt, bool) {
 
 bind_text :: proc(stmt: ^sqlite3_stmt, idx: int, s: string) -> c.int {
 	cstr := strings.clone_to_cstring(s, context.temp_allocator)
-	return sqlite3_bind_text(stmt, c.int(idx), cstr, -1, SQLITE_TRANSIENT)
+	return sqlite3_bind_text(stmt, c.int(idx), cstr, c.int(len(s)), SQLITE_TRANSIENT)
 }
 
 bind_i64 :: proc(stmt: ^sqlite3_stmt, idx: int, v: i64) -> c.int {
@@ -604,57 +634,6 @@ db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, DB_Result) {
 	return 0, db_result(rc)
 }
 
-// Used by the importer.
-db_insert_activity_full :: proc(
-	db: ^DB,
-	id: i64,
-	timeline_id: i64,
-	display_name: string,
-	group_id: i64,
-	start_ms, end_ms: i64,
-	text_data: string,
-) -> bool {
-	start_local := unix_ms_to_local(start_ms)
-	start_utc := unix_ms_to_utc(start_ms)
-	end_local := unix_ms_to_local(end_ms)
-	end_utc := unix_ms_to_utc(end_ms)
-
-	sql := `INSERT OR REPLACE INTO Activity (
-		ActivityId, TimelineId, DisplayName, GroupId,
-		StartLocalDate, StartLocalTime, StartUtcTime,
-		EndLocalDate, EndLocalTime, EndUtcTime,
-		StartUtcMs, EndUtcMs, TextData, UpdatedTimestamp
-	) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`
-	stmt, ok := db_prepare(db, sql)
-	if !ok {
-		return false
-	}
-	defer sqlite3_finalize(stmt)
-	if id > 0 {
-		bind_i64(stmt, 1, id)
-	} else {
-		bind_null(stmt, 1)
-	}
-	bind_i64(stmt, 2, timeline_id)
-	bind_text(stmt, 3, display_name)
-	if group_id > 0 {
-		bind_i64(stmt, 4, group_id)
-	} else {
-		bind_null(stmt, 4)
-	}
-	bind_i64(stmt, 5, manic_date_from_date_int(date_int_from_systemtime(start_local)))
-	bind_text(stmt, 6, format_systemtime(start_local))
-	bind_text(stmt, 7, format_systemtime(start_utc))
-	bind_i64(stmt, 8, manic_date_from_date_int(date_int_from_systemtime(end_local)))
-	bind_text(stmt, 9, format_systemtime(end_local))
-	bind_text(stmt, 10, format_systemtime(end_utc))
-	bind_i64(stmt, 11, start_ms)
-	bind_i64(stmt, 12, end_ms)
-	bind_text(stmt, 13, text_data)
-	bind_i64(stmt, 14, now_ms() / 1000)
-	return sqlite3_step(stmt) == SQLITE_DONE
-}
-
 extract_xml_tag :: proc(xml, tag: string) -> string {
 	if len(xml) == 0 {
 		return ""
@@ -671,39 +650,4 @@ extract_xml_tag :: proc(xml, tag: string) -> string {
 		return ""
 	}
 	return xml[start:start + j]
-}
-
-db_import_group :: proc(db: ^DB, id: i64, timeline_id: i64, display_name: string, color: u32, key: string, text_data: string) -> bool {
-	name := display_name
-	if name == "" {
-		switch key {
-		case "W4yiNcyXGPLtSeJd09iJhvbDr6EL/BE2HWKJS8johz8=":
-			name = "Active"
-		case "jaM0cRC0p2E80XobDIz5aMfg8NBucI9QrcoCdb0ll2o=":
-			name = "Away"
-		case "S7sALuDiUUUJfMuqfN8d1nFc/kVH3SgUYCDbTWNju+c=":
-			name = "Session locked"
-		case "kw+obQQ1f/3ZFvvhV3kgmhQRNnt+Lr2cgk7gFZdu/LU=":
-			name = "Power off"
-		case:
-			name = extract_xml_tag(text_data, "Name")
-		}
-	}
-	stmt, ok := db_prepare(db, `INSERT OR REPLACE INTO "Group" (GroupId, TimelineId, DisplayName, Color, TextData, Key, UpdatedTimestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`)
-	if !ok {
-		return false
-	}
-	defer sqlite3_finalize(stmt)
-	if id > 0 {
-		bind_i64(stmt, 1, id)
-	} else {
-		bind_null(stmt, 1)
-	}
-	bind_i64(stmt, 2, timeline_id)
-	bind_text(stmt, 3, name)
-	bind_i64(stmt, 4, i64(color))
-	bind_text(stmt, 5, text_data)
-	bind_text(stmt, 6, key)
-	bind_i64(stmt, 7, now_ms() / 1000)
-	return sqlite3_step(stmt) == SQLITE_DONE
 }

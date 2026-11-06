@@ -36,6 +36,7 @@ main :: proc() {
 	args := os.args
 	db_path := "data/aika.db"
 	import_path := ""
+	import_source := ""
 	quiet := false
 
 	i := 1
@@ -44,22 +45,40 @@ main :: proc() {
 		case "--quiet", "-q":
 			quiet = true
 		case "--db":
-			if i + 1 < len(args) {
-				i += 1
-				db_path = args[i]
+			if i + 1 >= len(args) || strings.has_prefix(args[i + 1], "--") || args[i + 1] == "" {
+				fmt.eprintln("--db requires a path")
+				os.exit(2)
 			}
+			i += 1
+			db_path = args[i]
 		case "--import":
-			if i + 1 < len(args) {
-				i += 1
-				import_path = args[i]
+			if i + 1 >= len(args) || strings.has_prefix(args[i + 1], "--") || args[i + 1] == "" {
+				fmt.eprintln("--import requires a path")
+				os.exit(2)
 			}
+			i += 1
+			import_path = args[i]
+		case "--import-source":
+			if i + 1 >= len(args) || strings.has_prefix(args[i + 1], "--") || strings.trim_space(args[i + 1]) == "" {
+				fmt.eprintln("--import-source requires a stable source database identifier")
+				os.exit(2)
+			}
+			i += 1
+			import_source = args[i]
 		case "--help", "-h":
-			msg := "aika - a ManicTime-style activity tracker\nusage: aika [--db path] [--import export.json]"
+			msg := "aika - a ManicTime-style activity tracker\nusage: aika [--db path] [--import export.json [--import-source database-id]] [--quiet]"
 			fmt.println(msg)
-			message_box(msg, "aika")
+			if !quiet { message_box(msg, "aika") }
 			return
+		case:
+			fmt.eprintln("unknown argument:", args[i])
+			os.exit(2)
 		}
 		i += 1
+	}
+	if import_source != "" && import_path == "" {
+		fmt.eprintln("--import-source requires --import")
+		os.exit(2)
 	}
 
 	_ = os.make_directory("data")
@@ -69,11 +88,12 @@ main :: proc() {
 		msg := fmt.tprintf("Failed to open database:\n%s", db_path)
 		fmt.eprintln(msg)
 		if !quiet { message_box(msg, "aika", 0x10) }
-		return
+		db_close(&db)
+		os.exit(1)
 	}
 
 	if import_path != "" {
-		ok_import := import_manictime_json(&db, import_path)
+		ok_import := import_manictime_json(&db, import_path, import_source)
 		db_close(&db)
 		if ok_import {
 			msg := fmt.tprintf("Import complete:\n%s", import_path)
@@ -83,6 +103,7 @@ main :: proc() {
 			msg := fmt.tprintf("Import failed:\n%s", import_path)
 			fmt.eprintln(msg)
 			if !quiet { message_box(msg, "aika", 0x10) }
+			os.exit(1)
 		}
 		return
 	}
