@@ -52,6 +52,9 @@ UiState :: struct {
 	lane:        i32,  // selected timeline lane (0..2)
 	list_scroll, totals_scroll: PaneScroll,
 	scroll_date: int,
+	zoom_start, zoom_end: f64,
+	zoom_drag: i32, // 0 = idle, 1/2 = resize edges, 3 = pan
+	zoom_drag_anchor, zoom_drag_start, zoom_drag_end: f64,
 }
 
 ui: UiState
@@ -62,6 +65,9 @@ HIT_BTN_PREV    :: 1
 HIT_BTN_TODAY   :: 2
 HIT_BTN_NEXT    :: 3
 HIT_BTN_TRACK   :: 4
+HIT_ZOOM_OUT    :: 5
+HIT_ZOOM_IN     :: 6
+HIT_ZOOM_RESET  :: 7
 HIT_TAB_BASE    :: 10 // +0..2
 HIT_LANE_BASE   :: 20 // +0..3
 
@@ -347,6 +353,11 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 	case windows.WM_MOUSEMOVE:
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
+		if ui.zoom_drag != 0 {
+			w, h := client_size(hwnd)
+			zoom_pointer_move(win_x, compute_layout(w, h))
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		}
 		if ui.mouse.x != win_x || ui.mouse.y != win_y {
 			ui.mouse.x = win_x
 			ui.mouse.y = win_y
@@ -357,6 +368,23 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 	case windows.WM_MOUSELEAVE:
 		ui.mouse_valid = false
 		return 0
+	case windows.WM_SETCURSOR:
+		if ui.tab == 0 && (u32(lparam) & 0xFFFF) == 1 { // HTCLIENT
+			_update_mouse_client()
+			w, h := client_size(hwnd)
+			bar, _, _, _ := zoom_rects(compute_layout(w, h))
+			if rect_hit(bar, ui.mouse.x, ui.mouse.y) {
+				width := f64(bar.right - bar.left)
+				left := bar.left + i32(ui.zoom_start * width)
+				right := bar.left + i32(ui.zoom_end * width)
+				cursor := u64(32649) // IDC_HAND (pan)
+				if abs(ui.mouse.x - left) <= 6 || abs(ui.mouse.x - right) <= 6 {
+					cursor = 32644 // IDC_SIZEWE (resize)
+				}
+				windows.SetCursor(windows.LoadCursorW(nil, transmute(cstring16)(cursor)))
+				return 1
+			}
+		}
 	case windows.WM_MOUSEWHEEL:
 		if ui.tab != 0 { return 0 }
 		delta := i32(i16((u32(wparam) >> 16) & 0xFFFF))
@@ -365,6 +393,13 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		windows.ScreenToClient(hwnd, &p)
 		w, h := client_size(hwnd)
 		lay := compute_layout(w, h)
+		if p.x >= lay.chart_x && p.x < lay.chart_x + lay.chart_w &&
+		   p.y >= lay.ruler_y && p.y < lay.list_top {
+			if delta != 0 {
+				zoom_scale(0.8 if delta > 0 else 1.25,
+					clamp(f64(p.x - lay.chart_x) / f64(lay.chart_w), 0.0, 1.0))
+			}
+		}
 		if p.y >= lay.list_top && p.y < lay.list_bottom {
 			if p.x >= lay.chart_x && p.x < lay.sidebar_x - 8 {
 				pane_scroll_wheel(&ui.list_scroll, delta)
@@ -388,8 +423,12 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
 		w, h := client_size(hwnd)
+		if zoom_pointer_down(win_x, win_y, compute_layout(w, h)) {
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		id := hit_test(win_x, win_y, w, h)
-		if id >= HIT_BTN_PREV && id <= HIT_BTN_TRACK {
+		if id >= HIT_BTN_PREV && id <= HIT_ZOOM_RESET {
 			ui.pressed_hit = id
 			windows.SetCapture(hwnd)
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
@@ -398,6 +437,12 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_LBUTTONUP:
+		if ui.zoom_drag != 0 {
+			ui.zoom_drag = 0
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		pressed := ui.pressed_hit
 		ui.pressed_hit = HIT_NONE
 		if pressed != HIT_NONE {
@@ -411,6 +456,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		return 0
 	case windows.WM_CAPTURECHANGED:
 		ui.pressed_hit = HIT_NONE
+		ui.zoom_drag = 0
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_COMMAND:
@@ -488,6 +534,12 @@ handle_click :: proc(app: ^App, x, y: i32) {
 	w, h := client_size(ui.hwnd)
 	id := hit_test(x, y, w, h)
 	switch {
+	case id == HIT_ZOOM_OUT:
+		zoom_scale(1.5, 0.5)
+	case id == HIT_ZOOM_IN:
+		zoom_scale(1.0 / 1.5, 0.5)
+	case id == HIT_ZOOM_RESET:
+		ui.zoom_start, ui.zoom_end = 0, 1
 	case id == HIT_BTN_PREV:
 		app.date = add_days(app.date, -1)
 		sync_date_picker(app)
@@ -549,6 +601,7 @@ ui_create_fonts :: proc() {
 // --- Window bootstrap ---
 
 ui_bootstrap :: proc() -> bool {
+	ui.zoom_end = 1
 	hinstance := windows.GetModuleHandleW(nil)
 	class_name := windows.utf8_to_wstring(WNDC_CLASS, context.temp_allocator)
 

@@ -112,6 +112,13 @@ before touching it:
   pointer; headers and the grand total stay fixed. Each scrollbar is hidden
   when its rows fit, and positions are clamped after filtering or resizing.
   `pane_scroll_update` synchronizes the native range with each rendered list.
+- The timeline zoom overview (`src/zoom.odin`) sits below the lanes. Drag its
+  orange edges to resize the visible range, drag inside to pan, or click outside
+  to center the selection there. `+` / `-` zoom around the center; `Full day`
+  resets the view. The mouse wheel over the timeline zooms around the pointer.
+  Zoom affects the ruler, lanes, now marker, and tooltips, not the day-wide lists.
+  The range stays selected when changing dates. `odin test src -vet` checks zoom
+  limits, panning, layout, tick spacing, and variable-length local days.
 - When iterating on GUI builds, beware stale binaries: `taskkill /F`, wait for
   the file lock, `Remove-Item -Force` the copy target, and confirm the build
   output before launching.
@@ -289,7 +296,8 @@ Check:
 
 ## Testing checklist
 
-There is no automated test suite yet. Use this manual checklist:
+Run `odin test src -vet` for the zoom unit tests. Use this manual checklist for
+the UI and tracker:
 
 1. `odin check src -vet`
 2. `build.bat`

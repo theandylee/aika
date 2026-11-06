@@ -61,6 +61,7 @@ Layout :: struct {
 	lane_y:        i32,
 	lane_h:        i32,
 	lanes_bottom:  i32,
+	zoom_y:        i32,
 	list_top:      i32,
 	list_bottom:   i32, // exclusive; header row sits at the top
 	sidebar_x:     i32,
@@ -89,11 +90,12 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay.chart_w = w - MARGIN * 2 - 1
 
 	// Lane heights: leave room for a ~120px list area, cap lanes at 96px.
-	lane_area := bottom_limit - (lay.ruler_y + RULER_H) - 120 - LIST_HDR - 2 * LANE_GAP
+	lane_area := bottom_limit - (lay.ruler_y + RULER_H) - 120 - LIST_HDR - 2 * LANE_GAP - ZOOM_H
 	lay.lane_h = min(96, max(44, lane_area / 3))
 	lay.lane_y = lay.ruler_y + RULER_H
 	lay.lanes_bottom = lay.lane_y + 3 * lay.lane_h + 2 * LANE_GAP
-	lay.list_top = lay.lanes_bottom + 8
+	lay.zoom_y = lay.lanes_bottom + 4
+	lay.list_top = lay.zoom_y + ZOOM_H + 4
 	lay.list_bottom = bottom_limit
 	lay.sidebar_x = w - SIDEBAR_W - MARGIN - 1
 	lay.sidebar_w = SIDEBAR_W
@@ -182,6 +184,7 @@ fmt_hms :: proc(ms: i64) -> string {
 // --- Top-level frame ---
 
 draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
 	if ui.scroll_date != app.date {
 		ui.scroll_date = app.date
 		ui.list_scroll.pos = 0
@@ -327,39 +330,35 @@ draw_day :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	draw_toolbar(app, dc, lay)
 
 	day_start, day_end := day_bounds_ms(app.date)
+	view_start, view_end := zoom_bounds(day_start, day_end)
 
 	// Ruler
 	draw_toolbar_background_rect(dc, lay.chart_x, lay.ruler_y, lay.chart_w, RULER_H)
-	hour_w := lay.chart_w / 24
-	label_every_h := i32(1)
-	if hour_w < 34 {
-		label_every_h = 2
-	}
-	for hour := i32(0); hour <= 24; hour += 1 {
-		x := lay.chart_x + hour * hour_w
-		if hour < 24 {
-			line_v(dc, x, lay.ruler_y, RULER_H + 3 * (lay.lane_h + LANE_GAP), C_BORDER_SOFT)
-		}
-		if hour % label_every_h == 0 || hour == 24 {
-			s := fmt.tprintf("%02d", hour % 24)
-			if hour == 24 { s = "24" }
-			draw_string(dc, s, x - 7, lay.ruler_y + 6, ui.font_small, C_DIM)
-		}
+	step := zoom_tick_step(view_start, view_end, lay.chart_w)
+	first_tick := day_start + ((view_start - day_start + step - 1) / step) * step
+	for tick := first_tick; tick <= view_end + 1; tick += step {
+		x := x_for_ms(tick, view_start, view_end, lay.chart_x, lay.chart_w)
+		s := fmt_clock_hm(tick)
+		if tick >= day_end { s = "24:00" }
+		tw := text_pixel_width(s, ui.font_small)
+		draw_string(dc, s, clamp(x - tw / 2, lay.chart_x, lay.chart_x + lay.chart_w - tw),
+			lay.ruler_y + 6, ui.font_small, C_DIM)
 	}
 
 	// Lanes
 	for i := 0; i < 3; i += 1 {
 		ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
-		draw_lane(app, dc, lay, i32(i), lay.chart_x, ly, lay.chart_w, lay.lane_h, day_start, day_end)
+		draw_lane(app, dc, lay, i32(i), lay.chart_x, ly, lay.chart_w, lay.lane_h, view_start, view_end)
 	}
 
 	// Now marker (today only)
-	if app.date == today_date_int() {
-		nx := x_for_ms(now_ms(), day_start, day_end, lay.chart_x, lay.chart_w)
+	if app.date == today_date_int() && now_ms() >= view_start && now_ms() < view_end {
+		nx := x_for_ms(now_ms(), view_start, view_end, lay.chart_x, lay.chart_w)
 		line_v(dc, nx, lay.ruler_y, lay.lanes_bottom - lay.ruler_y, C_RED)
 	}
 
 	// Details list + totals
+	draw_zoom_bar(app, dc, lay, day_start, day_end)
 	draw_list(app, dc, lay, day_start, day_end)
 	draw_totals(app, dc, lay, day_start, day_end)
 }
@@ -390,8 +389,11 @@ activity_colorref :: proc(a: Activity) -> windows.COLORREF {
 
 draw_lane :: proc(app: ^App, dc: windows.HDC, lay: Layout, idx, x, y, w, h: i32, day_start, day_end: i64) {
 	fill_rect(dc, x, y, w, h, C_LANE_BG)
-	for hour := i32(0); hour < 24; hour += 1 {
-		line_v(dc, x + hour * (w / 24), y, h, C_LANE_GRID)
+	step := zoom_tick_step(day_start, day_end, w)
+	local_start, _ := day_bounds_ms(app.date)
+	first_tick := local_start + ((day_start - local_start + step - 1) / step) * step
+	for tick := first_tick; tick < day_end; tick += step {
+		line_v(dc, x_for_ms(tick, day_start, day_end, x, w), y, h, C_LANE_GRID)
 	}
 	draw_string(dc, lane_name(idx), x + 10, y + h / 2 - 9, ui.font_normal,
 		C_DIM if ui.lane == idx else C_LANE_TXT)
@@ -744,8 +746,14 @@ hit_test :: proc(x, y, w, h: i32) -> int {
 		}
 	}
 	lay := compute_layout(w, h)
+	if ui.tab == 0 {
+		_, minus, plus, reset := zoom_rects(lay)
+		if rect_hit(minus, x, y) { return HIT_ZOOM_OUT }
+		if rect_hit(plus, x, y) { return HIT_ZOOM_IN }
+		if rect_hit(reset, x, y) { return HIT_ZOOM_RESET }
+	}
 	if y >= lay.ruler_y && x >= lay.chart_x && x < lay.chart_x + lay.chart_w {
-		for i := 0; i < 4; i += 1 {
+		for i := 0; i < 3; i += 1 {
 			ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
 			if y >= ly && y < ly + lay.lane_h {
 				return HIT_LANE_BASE + i
@@ -768,7 +776,8 @@ draw_tooltip :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	if mx < lay.chart_x || mx >= lay.chart_x + lay.chart_w { return }
 
 	found: ^Activity = nil
-	day_start, day_end := day_bounds_ms(app.date)
+	full_start, full_end := day_bounds_ms(app.date)
+	day_start, day_end := zoom_bounds(full_start, full_end)
 
 	for lane_i := 1; lane_i <= 2; lane_i += 1 {
 		ly := lay.lane_y + i32(lane_i) * (lay.lane_h + LANE_GAP)
