@@ -110,8 +110,17 @@ draw_totals_tree_row :: proc(dc: windows.HDC, node: ^Totals_Node, x, y, w: i32) 
 	indent := min(node.depth * 14, max(0, w - dw - 80))
 	left := x + 8 + indent
 	if len(node.children) > 0 {
-		r := windows.RECT{left, y, left + 12, y + LIST_ROW}
-		draw_button_text(dc, "v" if ui.totals_expanded[totals_tree_key(node.path)] else ">", r)
+		// Align with the label's visible capitals, not the row/color-chip center:
+		// draw_string shifts its text rectangle up by two pixels.
+		cx, cy := left + 6, y + 7
+		expanded := ui.totals_expanded[totals_tree_key(node.path)]
+		for i := i32(0); i < 4; i += 1 {
+			if expanded {
+				line_h(dc, cx - 3 + i, cy - 2 + i, 7 - 2 * i, C_TXT)
+			} else {
+				line_v(dc, cx - 2 + i, cy - 3 + i, 7 - 2 * i, C_TXT)
+			}
+		}
 	} else {
 		color := activity_colorref(Activity{group_id = node.group_id, color = node.color})
 		fill_rect(dc, left + 1, y + 4, 10, 10, color)
