@@ -32,6 +32,9 @@ UiState :: struct {
 	font_bold:   windows.HFONT, // 12px bold
 	font_small:  windows.HFONT, // 11px
 	font_title:  windows.HFONT, // 20px bold (day header)
+	theme_button: Theme_Handle,
+	theme_tab:    Theme_Handle,
+	pressed_hit:  int,
 
 	mouse:       windows.POINT, // client coords, refreshed each paint
 	mouse_valid: bool,
@@ -217,10 +220,41 @@ sync_date_picker :: proc(app: ^App) {
 
 // --- WndProc ---
 
+ui_close_themes :: proc() {
+	if ui.theme_button != nil { CloseThemeData(ui.theme_button) }
+	if ui.theme_tab != nil { CloseThemeData(ui.theme_tab) }
+	ui.theme_button = nil
+	ui.theme_tab = nil
+}
+
+ui_open_themes :: proc() {
+	ui_close_themes()
+	ui.theme_button = OpenThemeData(ui.hwnd, wtext("Button"))
+	ui.theme_tab = OpenThemeData(ui.hwnd, wtext("Tab"))
+}
+
+// Return false when visual styles are unavailable so callers can use GDI.
+draw_themed_control :: proc(dc: windows.HDC, theme: Theme_Handle, part, state: i32, r: windows.RECT, label: string) -> bool {
+	if theme == nil { return false }
+	rc := r
+	if DrawThemeBackground(theme, dc, part, state, &rc, nil) < 0 { return false }
+	old := windows.SelectObject(dc, windows.HGDIOBJ(ui.font_normal))
+	defer windows.SelectObject(dc, old)
+	flags := windows.DrawTextFormat.DT_SINGLELINE | windows.DrawTextFormat.DT_CENTER |
+		windows.DrawTextFormat.DT_VCENTER | windows.DrawTextFormat.DT_NOPREFIX
+	text := wtext(label)
+	DrawThemeText(theme, dc, part, state, text, -1, u32(flags), 0, &rc)
+	return true
+}
+
 wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lparam: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
 	app := global_app
 	switch msg {
+	case 0x031A: // WM_THEMECHANGED: cached theme handles are no longer valid.
+		ui_open_themes()
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return 0
 	case windows.WM_ERASEBKGND:
 		return 1 // no flicker: everything is drawn in WM_PAINT
 	case windows.WM_PAINT:
@@ -271,7 +305,31 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 	case windows.WM_LBUTTONDOWN:
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
-		handle_click(app, win_x, win_y)
+		w, h := client_size(hwnd)
+		id := hit_test(win_x, win_y, w, h)
+		if id >= HIT_BTN_PREV && id <= HIT_BTN_TRACK {
+			ui.pressed_hit = id
+			windows.SetCapture(hwnd)
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		} else {
+			handle_click(app, win_x, win_y)
+		}
+		return 0
+	case windows.WM_LBUTTONUP:
+		pressed := ui.pressed_hit
+		ui.pressed_hit = HIT_NONE
+		if pressed != HIT_NONE {
+			windows.ReleaseCapture()
+			x := i32(i16(u32(lparam) & 0xFFFF))
+			y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
+			w, h := client_size(hwnd)
+			if hit_test(x, y, w, h) == pressed { handle_click(app, x, y) }
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		}
+		return 0
+	case windows.WM_CAPTURECHANGED:
+		ui.pressed_hit = HIT_NONE
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_COMMAND:
 		// Filter edit: HIWORD notification = EN_CHANGE, LOWORD = control id.
@@ -449,6 +507,7 @@ ui_bootstrap :: proc() -> bool {
 	if ui.hwnd == nil {
 		return false
 	}
+	ui_open_themes()
 
 	// Start with the Applications lane selected, like a fresh ManicTime day.
 	ui.lane = 2
@@ -504,6 +563,7 @@ ui_bootstrap :: proc() -> bool {
 }
 
 ui_shutdown :: proc() {
+	ui_close_themes()
 	if ui.mem_valid {
 		windows.SelectObject(ui.mem_dc, ui.mem_bmp_old)
 		windows.DeleteObject(windows.HGDIOBJ(ui.mem_bmp))

@@ -217,6 +217,13 @@ draw_tabs :: proc(dc: windows.HDC) {
 	for i := i32(0); i < 3; i += 1 {
 		t := compute_tabs(i32(i))
 		active := ui.tab == i
+		state := i32(3) if active else i32(1) // TIS_SELECTED / TIS_NORMAL
+		if !active && ui.mouse_valid && rect_hit(t, ui.mouse.x, ui.mouse.y) {
+			state = 2 // TIS_HOT
+		}
+		if draw_themed_control(dc, ui.theme_tab, 1, state, t, tab_name(i)) {
+			continue
+		}
 		bg: windows.COLORREF = C_TAB_ACTIVE if active else C_TAB_BG
 		if !active && ui.mouse_valid && rect_hit(t, ui.mouse.x, ui.mouse.y) {
 			bg = rgb(244, 248, 252)
@@ -285,6 +292,12 @@ day_span :: proc(app: ^App, day_start, day_end: i64) -> (min_ms, max_ms: i64) {
 }
 
 draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: int) {
+	hot := ui.mouse_valid && rect_hit(r, ui.mouse.x, ui.mouse.y)
+	state := i32(1) // PBS_NORMAL
+	if hot {
+		state = 3 if ui.pressed_hit == hit else 2 // PBS_PRESSED / PBS_HOT
+	}
+	if draw_themed_control(dc, ui.theme_button, 1, state, r, label) { return }
 	w := r.right - r.left
 	h := r.bottom - r.top
 	bg: windows.COLORREF = C_BTN_FACE

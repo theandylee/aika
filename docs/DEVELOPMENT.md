@@ -30,12 +30,16 @@ build.bat
 `build.bat` runs:
 
 ```bat
-odin build src -out:build\aika.exe -subsystem:windows
-odin build src -out:build\aika-cli.exe
+odin build src -out:build\aika.exe -subsystem:windows -resource:assets/aika.rc
+odin build src -out:build\aika-cli.exe -resource:assets/aika.rc
 ```
 
 `aika.exe` is the GUI build (no console). `aika-cli.exe` is the console build for
 imports and debugging.
+
+Both executables embed `assets/aika.manifest` via `assets/aika.rc` to opt into
+Common Controls v6 visual styles. Keep the resource flag when building manually;
+without it native controls revert to their classic appearance.
 
 Run:
 
@@ -87,6 +91,11 @@ before touching it:
   this scope`).
 - Repaints are on-demand (`WM_TIMER` every 500 ms + input), not a render loop.
   Do not add a busy loop; the tracker samples at 1 Hz inside `tracker_tick`.
+- Buttons and tabs use UxTheme drawing into the same GDI backbuffer, with a
+  plain GDI fallback when visual styles are unavailable. Theme handles are
+  reopened on `WM_THEMECHANGED` and released at shutdown. Toolbar buttons use
+  mouse capture for pressed feedback and activate on release inside the button.
+  These remain custom hit targets, not native keyboard-accessible controls.
 - All paint-time allocations use `context.temp_allocator`; the `free_all` after
   each dispatched message in `main` releases them. Per-object deletes of
   temp memory crash (allocator mismatch) — don't add them.
