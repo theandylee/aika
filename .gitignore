@@ -1,0 +1,7 @@
+build/
+data/
+tools/manictime-export.json
+tools/manictime-today.json
+vendor/sqlite/sqlite3.obj
+vendor/sqlite/sqlite3.c
+vendor/sqlite/sqlite3.h
