@@ -353,6 +353,11 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 	case windows.WM_MOUSEMOVE:
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
+		if tag_ui.drag != 0 {
+			w, h := client_size(hwnd)
+			tag_pointer_move(win_x, compute_layout(w, h), app.activities)
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		}
 		if ui.zoom_drag != 0 {
 			w, h := client_size(hwnd)
 			zoom_pointer_move(win_x, compute_layout(w, h))
@@ -372,6 +377,11 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		if ui.tab == 0 && (u32(lparam) & 0xFFFF) == 1 { // HTCLIENT
 			_update_mouse_client()
 			w, h := client_size(hwnd)
+			_, edge := tag_edge_hit(app, ui.mouse.x, ui.mouse.y, compute_layout(w, h))
+			if edge != 0 || tag_ui.drag >= 2 {
+				windows.SetCursor(windows.LoadCursorW(nil, transmute(cstring16)(u64(32644))))
+				return 1
+			}
 			bar, _, _, _ := zoom_rects(compute_layout(w, h))
 			if rect_hit(bar, ui.mouse.x, ui.mouse.y) {
 				width := f64(bar.right - bar.left)
@@ -386,7 +396,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			}
 		}
 	case windows.WM_MOUSEWHEEL:
-		if ui.tab != 0 { return 0 }
+		if ui.tab != 0 || tag_ui.drag != 0 { return 0 }
 		delta := i32(i16((u32(wparam) >> 16) & 0xFFFF))
 		// WM_MOUSEWHEEL coordinates are screen-relative, including on other monitors.
 		p := windows.POINT{i32(i16(u32(lparam) & 0xFFFF)), i32(i16((u32(lparam) >> 16) & 0xFFFF))}
@@ -419,10 +429,24 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
-	case windows.WM_LBUTTONDOWN:
+	case windows.WM_CONTEXTMENU:
+		if windows.HWND(wparam) == hwnd {
+			p := windows.POINT{i32(i16(u32(lparam) & 0xFFFF)), i32(i16((u32(lparam) >> 16) & 0xFFFF))}
+			if p.x == -1 && p.y == -1 { windows.GetCursorPos(&p) }
+			tag_context_menu(app, p)
+			return 0
+		}
+	case windows.WM_LBUTTONDOWN, windows.WM_LBUTTONDBLCLK:
 		win_x := i32(i16(u32(lparam) & 0xFFFF))
 		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
 		w, h := client_size(hwnd)
+		if msg == windows.WM_LBUTTONDBLCLK && tag_gap_double_click(app, win_x, win_y, compute_layout(w, h)) {
+			return 0
+		}
+		if tag_pointer_down(app, win_x, win_y, compute_layout(w, h)) {
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 		if zoom_pointer_down(win_x, win_y, compute_layout(w, h)) {
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 			return 0
@@ -437,6 +461,12 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_LBUTTONUP:
+		if tag_ui.drag != 0 {
+			w, h := client_size(hwnd)
+			x := i32(i16(u32(lparam) & 0xFFFF))
+			tag_pointer_up(app, x, compute_layout(w, h))
+			return 0
+		}
 		if ui.zoom_drag != 0 {
 			ui.zoom_drag = 0
 			windows.ReleaseCapture()
@@ -455,10 +485,18 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 		return 0
 	case windows.WM_CAPTURECHANGED:
+		tag_ui.drag = 0
 		ui.pressed_hit = HIT_NONE
 		ui.zoom_drag = 0
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
+	case windows.WM_KEYDOWN:
+		if wparam == 0x1B && tag_ui.drag != 0 {
+			tag_ui.drag = 0
+			windows.ReleaseCapture()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			return 0
+		}
 	case windows.WM_COMMAND:
 		// Filter edit: HIWORD notification = EN_CHANGE, LOWORD = control id.
 		hi := i32((u32(wparam) >> 16) & 0xFFFF)
@@ -607,6 +645,7 @@ ui_bootstrap :: proc() -> bool {
 
 	wc: windows.WNDCLASSEXW
 	wc.cbSize = windows.UINT(size_of(windows.WNDCLASSEXW))
+	wc.style = windows.CS_DBLCLKS
 	wc.lpfnWndProc = wnd_proc
 	wc.hInstance = windows.HINSTANCE(hinstance)
 	wc.hCursor = windows.LoadCursorW(nil, transmute(cstring16)(u64(32512))) // IDC_ARROW

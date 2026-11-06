@@ -121,6 +121,7 @@ src/
   sqlite.odin     SQLite C bindings
   winui.odin      Native window: WndProc, timer, GDI helpers, double buffer, hit tests
   ui.odin         ManicTime-style Day view drawn with GDI (lanes, list, totals, tooltip)
+  tags.odin       Time-range dragging, native searchable tag picker, tag resizing
   importer.odin   JSON import command
 tools/
   export-manictime.ps1   Read ManicTime.sdf and write JSON
@@ -211,9 +212,10 @@ Expected: exit code 0, 202 activities for the sample file, 2745 groups.
 
 - Session lock and power-off events are not implemented; only idle `Away`.
 - Documents/URLs are not tracked.
-- Tags, folders, statistics, editing, tray icon, and autostart are missing.
-- The UI draws all four lanes, but only ComputerUsage and Applications have
-  data; Tags and Documents render as empty placeholders.
+- Folders, statistics, general activity editing, tray icon, and autostart are missing.
+- Tags support range creation, border resizing and right-click block deletion;
+  tag-name deletion/renaming is not implemented.
+- The UI draws Tags, ComputerUsage and Applications; Documents are not tracked.
 - Import history assumes the same Windows timezone.
 - The exporter depends on the installed ManicTime SQL CE assemblies.
 - `aika` is not binary-compatible with `.sdf`; it is schema/semantics-compatible

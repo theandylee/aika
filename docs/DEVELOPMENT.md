@@ -296,7 +296,14 @@ Check:
 
 ## Testing checklist
 
-Run `odin test src -vet` for the zoom unit tests. Use this manual checklist for
+Run `odin test src -vet` for zoom/tag interaction and tag persistence tests.
+`python tools/test-tags-ui.py build/aika.exe` runs a native UI smoke test with
+its own temporary database (create, reverse drag, search/reuse, resize both
+edges, cancel, non-overlap, context-menu delete, tag reuse, persistence).
+Close the running app before rebuilding its EXE;
+otherwise build to a separate filename and pass that path to the smoke test.
+Build GUI and CLI sequentially: the resource compiler shares `assets/aika.res`.
+Use this manual checklist for
 the UI and tracker:
 
 1. `odin check src -vet`

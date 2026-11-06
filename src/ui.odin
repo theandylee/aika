@@ -150,9 +150,9 @@ lane_name :: proc(i: i32) -> string {
 	return ""
 }
 
-// 0 when the lane has no data yet (Tags).
 lane_timeline :: proc(i: i32) -> i64 {
 	switch i {
+	case 0: return TIMELINE_TAGS
 	case 1: return TIMELINE_COMPUTER
 	case 2: return TIMELINE_APPS
 	}
@@ -430,6 +430,9 @@ draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y,
 		}
 		s := max(a.start_ms, day_start)
 		e := min(a.end_ms, day_end)
+		if tl == TIMELINE_TAGS && tag_ui.drag >= 2 && a.id == tag_ui.id {
+			s, e = max(tag_ui.start_ms, day_start), min(tag_ui.end_ms, day_end)
+		}
 		if e <= s {
 			continue
 		}
@@ -441,6 +444,16 @@ draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y,
 			color = C_GREEN
 		}
 		fill_rect(dc, x1, bar_y, bw, bar_h, color)
+		if tl == TIMELINE_TAGS {
+			fill_frame(dc, x1, bar_y, bw, bar_h, C_BORDER)
+			draw_string(dc, a.display_name, x1 + 6, bar_y + 8, ui.font_bold, C_TXT, bw - 12)
+			line_v(dc, x1 + 2, bar_y + bar_h / 2 - 5, 10, C_PANEL)
+			if bw > 6 { line_v(dc, x2 - 3, bar_y + bar_h / 2 - 5, 10, C_PANEL) }
+		}
+	}
+	if tl == TIMELINE_TAGS && (tag_ui.drag == 1 || tag_ui.popup != nil) {
+		lay := compute_layout(ui.mem_w, ui.mem_h)
+		tag_draw_range(dc, lay, day_start, day_end)
 	}
 
 	// Current (possibly unpersisted) activity grows live.
@@ -630,7 +643,7 @@ build_totals :: proc(app: ^App, day_start, day_end: i64) -> []TotRow {
 		m[a.group_id] = entry
 	}
 	c := &app.tracker.current
-	if c.active && c.persisted_id == 0 && date_int_from_unix_ms(c.start_ms) == app.date {
+	if tl == TIMELINE_APPS && c.active && c.persisted_id == 0 && date_int_from_unix_ms(c.start_ms) == app.date {
 		s := max(c.start_ms, day_start)
 		e := min(now_ms(), day_end)
 		if e > s {
@@ -770,7 +783,7 @@ hit_test :: proc(x, y, w, h: i32) -> int {
 // --- Tooltip ---
 
 draw_tooltip :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
-	if !ui.mouse_valid || ui.tab != 0 { return }
+	if !ui.mouse_valid || ui.tab != 0 || tag_ui.drag != 0 || tag_ui.popup != nil || tag_ui.menu_open { return }
 	mx, my := ui.mouse.x, ui.mouse.y
 	lay := compute_layout(w, h)
 	if mx < lay.chart_x || mx >= lay.chart_x + lay.chart_w { return }
@@ -779,7 +792,7 @@ draw_tooltip :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	full_start, full_end := day_bounds_ms(app.date)
 	day_start, day_end := zoom_bounds(full_start, full_end)
 
-	for lane_i := 1; lane_i <= 2; lane_i += 1 {
+	for lane_i := 0; lane_i <= 2; lane_i += 1 {
 		ly := lay.lane_y + i32(lane_i) * (lay.lane_h + LANE_GAP)
 		if my < ly || my >= ly + lay.lane_h { continue }
 		br := bar_rect_for_lane(i32(lane_i), lay.chart_x, ly, lay.chart_w, lay.lane_h)

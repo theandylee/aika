@@ -28,6 +28,7 @@ Working MVP:
   Tags / Computer Usage / Applications / Documents lanes
 - Application timeline with live current-activity bar
 - Computer usage lane (Active / Away)
+- Time tagging: drag a range, search/select or create a tag, resize either edge
 - Details list (Title / Start / End / Duration) for the selected lane
 - Per-application totals with color chips and a grand total
 - Filter box wired to the lists
@@ -40,7 +41,7 @@ Not implemented yet:
 
 - Session lock / power-off events (`SessionSwitch`, `PowerModeChanged`)
 - Document/URL tracking (browser plugins)
-- Tags, folders, statistics, editing
+- Folders, statistics, general activity editing
 - Multi-monitor / per-window tracking (ManicTime also only tracks the foreground window)
 - Writing back to `.sdf` (not feasible without the SQL Server Compact engine)
 
@@ -72,6 +73,30 @@ windowing toolkit ships with the binary. A running GUI window uses about 6 MB
 of private memory.
 
 The app writes `data\aika.db` by default. Override with `--db`.
+
+## Tagging time
+
+Drag left-to-right or right-to-left on the **Tags** lane. Release to open the
+tag picker, then search and select an existing tag (double-click or **Use tag**),
+or type a new name and click **Create tag**. Enter uses the selected result, or
+creates a tag if there are no matches. Escape/Cancel dismisses without saving.
+
+Double-click empty space **between two tag blocks** to select the whole gap,
+then choose a tag in the picker. The new block fits exactly between its neighbors.
+Empty space before the first block or after the last block is not auto-filled.
+
+Drag either border of a tag block to change its start or end; release to save.
+For touching blocks, grab just inside the block whose border you want to resize.
+Escape during a drag cancels the change. Selection uses the current zoom range,
+without time snapping. Tags appear in the lane, details list, and totals, and
+survive restarting the app. Tag blocks cannot overlap: a drag within a block is
+a no-op, and dragging out of a block selects only the free time beyond its edge.
+Selections stop at the next occupied block; resizing also stops at neighboring
+blocks. Deleting/renaming tags and moving whole blocks are not yet
+implemented.
+
+Right-click a tag block and choose **Delete** to remove that time interval.
+The tag name stays available in the picker for reuse.
 
 ## Importing existing ManicTime history
 

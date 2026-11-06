@@ -197,6 +197,10 @@ DocumentInfo :: struct {
 
 ### 5. Tags
 
+**Implemented:** range dragging in either direction, searchable tag selection,
+creation, persisted tag blocks, border resizing, details and totals. See
+`src/tags.odin`. Multi-tag group lists and tag management remain future work.
+
 **Why:** Tags are how ManicTime turns raw activity into timesheets.
 
 **Design:**

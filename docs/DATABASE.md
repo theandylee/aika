@@ -239,6 +239,19 @@ Base64 scheme applies.
 
 aika uses the same scheme in `key_hash()` / `db_ensure_group()`.
 
+### Tags
+
+User tags are groups on timeline 1; their key is `key_hash(trimmed_tag_name)`.
+Names are reused case-insensitively, also for imported tags with different keys.
+Each time block is an `Activity` on timeline 1 with the tag's `GroupId` and name
+as `DisplayName`. `GroupListId` is unused (one tag per block). New/edited blocks
+cannot overlap another tag; touching endpoints are allowed. Creation checks
+`StartUtcMs < new_end AND EndUtcMs > new_start` within its transaction, and
+resizing uses the same check excluding itself in the UPDATE. Existing imported
+overlaps are not rewritten. Creating a tag and its initial block is one transaction. Resizing
+updates local dates/times, UTC times, UTC milliseconds and `UpdatedTimestamp`
+together, and is restricted to timeline 1. The existing schema is unchanged.
+
 ---
 
 ## 4. Example queries

@@ -160,7 +160,9 @@ Important functions:
 | `db_update_activity_end` | Update end local/UTC/ms fields |
 | `db_delete_activity` | Delete one row (used by future merge logic) |
 | `db_last_activity` | Most recent row for a timeline |
-| `db_load_activities` | Load a day for timelines 2 and 3 |
+| `db_load_activities` | Load a day for timelines 1, 2 and 3 |
+| `db_load_tags` / `db_ensure_tag` | List tags / reuse or create a tag group |
+| `db_resize_tag` | Update both bounds and all timestamp fields of a tag |
 | `db_ensure_group` | Lookup/insert group by `(timeline, key hash)` |
 | `db_usage_group` | Get the seeded Active/Away/etc. group id |
 | `db_import_group` | Import a group preserving ids/colors |
@@ -175,7 +177,7 @@ Timeline IDs:
 4  ManicTime/Documents
 ```
 
-The UI currently loads **2** and **3** only.
+The UI loads **1**, **2**, and **3**.
 
 ## UI
 
@@ -209,14 +211,47 @@ and are released by the `free_all` after each message in `main`.
 
 - Uses the full local day 00:00–24:00 as the fixed axis (ManicTime-style);
   `x_for_ms()` maps a timestamp to a pixel position.
-- Draws one lane per timeline; lanes without tracking (Tags, Documents) render
-  as labeled empty boxes. The selected lane (click anywhere on it) gets the
+- Draws Tags, Computer Usage and Applications lanes. The selected lane gets the
   orange ManicTime frame and drives the details list and totals panel.
 - Draws application bars (stored/exported group colors) and computer usage bars
   (green = Active, orange = Away).
 - Draws the live current-activity overlay and the growing usage bar.
 - Draws a red "now" line when the selected date is today.
 - Shows a tooltip for the innermost bar under the mouse.
+
+### Time tags
+
+`src/tags.odin` owns drag state and the native tag-picker window. Dragging in the
+Tags lane previews a range mapped through the visible zoom bounds; either drag
+direction works. Release opens a searchable EDIT/LISTBOX picker with Use tag,
+Create tag and Cancel buttons. The owner is disabled while the picker is open,
+but its timer continues sampling. The main message loop routes picker keyboard
+input through `tag_picker_key` and `IsDialogMessageW`.
+
+Tags use timeline 1, one group per tag and one activity per block. Creation of a
+new group and block is transactional. The picker reuses names case-insensitively,
+including imported groups. Resize handles have a six-pixel hit tolerance;
+clipped edges are not handles. Captured drags preview in memory and update the
+database only on release; Escape or loss of capture discards the preview.
+Ranges do not snap; crossing edges is prevented. New selections use the first
+contiguous free interval in the drag direction: wholly occupied drags do
+nothing, drags starting inside a block begin at its exit edge, and selections
+stop at the next block. Resize edges stop at neighbors. Creation checks for
+overlaps within its transaction; resize uses an atomic SQL overlap guard.
+Imported overlaps are left untouched. No schema migration is required.
+
+The main window enables `CS_DBLCLKS`. Double-clicking empty space between two
+tags selects the complete bounded gap and opens the same tag picker; the exact
+neighboring timestamps are used, even when the view is zoomed. Occupied space
+and gaps without a block on both sides are not auto-filled. Cancel still saves
+nothing, and creation uses the normal transactional overlap check.
+
+Right-clicking a tag block opens a native popup menu with Delete. Hit testing
+uses rendered pixel bounds (including clipped and one-pixel blocks). Deletion
+is restricted to timeline 1, removes only the selected activity, preserves its
+group for reuse, and reloads the list/totals. The menu retains an activity ID,
+not a pointer into the day cache, since timer reloads can occur in its nested
+message loop. Cancelling the menu makes no changes.
 
 ### Details list and totals
 

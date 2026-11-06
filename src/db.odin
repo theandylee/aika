@@ -343,6 +343,89 @@ db_delete_activity :: proc(db: ^DB, activity_id: i64) {
 	sqlite3_step(stmt)
 }
 
+Tag :: struct {
+	id: i64,
+	name: string,
+}
+
+db_delete_tag_block :: proc(db: ^DB, id: i64) -> bool {
+	if id <= 0 { return false }
+	stmt, ok := db_prepare(db, `DELETE FROM Activity WHERE ActivityId = ?1 AND TimelineId = 1`)
+	if !ok { return false }
+	defer sqlite3_finalize(stmt)
+	bind_i64(stmt, 1, id)
+	return sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db.handle) == 1
+}
+
+db_load_tags :: proc(db: ^DB) -> []Tag {
+	stmt, ok := db_prepare(db, `SELECT GroupId, DisplayName FROM "Group"
+		WHERE TimelineId = 1 AND COALESCE(DisplayName, '') <> '' ORDER BY DisplayName COLLATE NOCASE`)
+	if !ok { return nil }
+	defer sqlite3_finalize(stmt)
+	tags := make([dynamic]Tag)
+	for sqlite3_step(stmt) == SQLITE_ROW {
+		append(&tags, Tag{col_i64(stmt, 0), col_text(stmt, 1)})
+	}
+	return tags[:]
+}
+
+free_tags :: proc(tags: []Tag) {
+	for tag in tags { delete(tag.name) }
+	if tags != nil { delete(tags) }
+}
+
+// Reuse imported tags by name too, even if their original key differs.
+db_ensure_tag :: proc(db: ^DB, raw_name: string) -> i64 {
+	name := strings.trim_space(raw_name)
+	if name == "" { return 0 }
+	tags := db_load_tags(db)
+	defer free_tags(tags)
+	lower := strings.to_lower(name, context.temp_allocator)
+	for tag in tags {
+		if strings.to_lower(tag.name, context.temp_allocator) == lower { return tag.id }
+	}
+	return db_ensure_group_id(db, TIMELINE_TAGS, key_hash(name), name, "")
+}
+
+// Half-open intervals allow blocks to share an edge, but not occupied time.
+// Call within the creation transaction so the check and insert stay together.
+db_tag_range_free :: proc(db: ^DB, start_ms, end_ms: i64) -> bool {
+	if end_ms <= start_ms { return false }
+	stmt, ok := db_prepare(db, `SELECT NOT EXISTS (SELECT 1 FROM Activity
+		WHERE TimelineId = 1 AND StartUtcMs < ?2 AND EndUtcMs > ?1)`)
+	if !ok { return false }
+	defer sqlite3_finalize(stmt)
+	bind_i64(stmt, 1, start_ms)
+	bind_i64(stmt, 2, end_ms)
+	return sqlite3_step(stmt) == SQLITE_ROW && col_i64(stmt, 0) == 1
+}
+
+// Only user-authored tags are editable here. Update all timestamp representations
+// together; tracking's incremental end-time updates remain separate.
+db_resize_tag :: proc(db: ^DB, id, start_ms, end_ms: i64) -> bool {
+	if id <= 0 || end_ms <= start_ms { return false }
+	stmt, ok := db_prepare(db, `UPDATE Activity SET
+		StartLocalDate = ?1, StartLocalTime = ?2, StartUtcTime = ?3, StartUtcMs = ?4,
+		EndLocalDate = ?5, EndLocalTime = ?6, EndUtcTime = ?7, EndUtcMs = ?8,
+		UpdatedTimestamp = ?9 WHERE ActivityId = ?10 AND TimelineId = 1
+		AND NOT EXISTS (SELECT 1 FROM Activity other WHERE other.TimelineId = 1
+			AND other.ActivityId <> ?10 AND other.StartUtcMs < ?8 AND other.EndUtcMs > ?4)`)
+	if !ok { return false }
+	defer sqlite3_finalize(stmt)
+	s, e := unix_ms_to_local(start_ms), unix_ms_to_local(end_ms)
+	bind_i64(stmt, 1, manic_date_from_date_int(date_int_from_systemtime(s)))
+	bind_text(stmt, 2, format_systemtime(s))
+	bind_text(stmt, 3, format_systemtime(unix_ms_to_utc(start_ms)))
+	bind_i64(stmt, 4, start_ms)
+	bind_i64(stmt, 5, manic_date_from_date_int(date_int_from_systemtime(e)))
+	bind_text(stmt, 6, format_systemtime(e))
+	bind_text(stmt, 7, format_systemtime(unix_ms_to_utc(end_ms)))
+	bind_i64(stmt, 8, end_ms)
+	bind_i64(stmt, 9, now_ms() / 1000)
+	bind_i64(stmt, 10, id)
+	return sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db.handle) == 1
+}
+
 LastActivity :: struct {
 	id:           i64,
 	group_id:     i64,
@@ -395,7 +478,7 @@ db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> 
 		       COALESCE(g.DisplayName, ''), COALESCE(g.Color, 0)
 		FROM Activity a
 		LEFT JOIN "Group" g ON g.GroupId = a.GroupId
-		WHERE a.TimelineId IN (2, 3)
+		WHERE a.TimelineId IN (1, 2, 3)
 		  AND a.StartLocalDate <= ?1 AND a.EndLocalDate >= ?1
 		ORDER BY a.StartUtcMs ASC, a.ActivityId ASC
 	`)
