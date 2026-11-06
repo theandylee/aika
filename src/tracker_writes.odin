@@ -9,19 +9,29 @@ Pending_Activity :: struct {
 	id, timeline, group: i64,
 	start_ms, end_ms: i64,
 	title: string, // owned only while queued
+	group_name: string, // owned only while queued
+	color: u32,
 	usage_kind: UsageKind, // resolve a missing usage group again on retry
 	spell: u64, // ownership survives retries and wall-clock discontinuities
 }
 
 tracker_write :: proc(app: ^App, write: ^Pending_Activity) -> DB_Result {
-	if write.id > 0 { return tracker_update_end(app, write.id, write.end_ms) }
+	if write.id > 0 {
+		result := tracker_update_end(app, write.id, write.end_ms)
+		if result == .Ok { present_tracker_write(app, write^) }
+		return result
+	}
 	if write.timeline == TIMELINE_COMPUTER && write.group == 0 {
-		group, result := db_usage_group(&app.db, write.usage_kind)
+		group, color, result := db_usage_group(&app.db, write.usage_kind)
 		if result != .Ok { return result }
 		write.group = group
+		write.color = color
 	}
 	id, result := tracker_insert(app, write.timeline, write.title, write.group, write.start_ms, write.end_ms, write.spell)
-	if result == .Ok { write.id = id }
+	if result == .Ok {
+		write.id = id
+		present_tracker_write(app, write^)
+	}
 	return result
 }
 
@@ -32,6 +42,7 @@ tracker_queue :: proc(app: ^App, write: Pending_Activity, result: DB_Result) {
 	owned := write
 	if owned.spell == 0 { owned.spell = t.spell }
 	owned.title = strings.clone(write.title)
+	owned.group_name = strings.clone(write.group_name)
 	t.pending[t.pending_count] = owned
 	t.pending_count += 1
 	t.pending_result = result
@@ -47,6 +58,7 @@ tracker_retry :: proc(app: ^App, budget: int = TRACKER_RETRY_BATCH) {
 			return
 		}
 		delete(t.pending[0].title)
+		delete(t.pending[0].group_name)
 		copy(t.pending[:], t.pending[1:t.pending_count])
 		t.pending_count -= 1
 		t.pending[t.pending_count] = {}

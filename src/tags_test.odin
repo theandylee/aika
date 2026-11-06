@@ -68,7 +68,8 @@ tag_drag_behavior :: proc(t: ^testing.T) {
 	// A live application must not leak into the tags totals.
 	app.tracker.current.active = true
 	app.tracker.current.start_ms = ds
-	totals := build_totals(&app, ds, de)
+	snapshot := build_day_snapshot(&app, ds + 1000, 1000)
+	totals := build_totals(snapshot, TIMELINE_TAGS)
 	defer free_totals_slice(totals)
 	testing.expect(t, len(totals) == 1 && totals[0].group_id == 0)
 }

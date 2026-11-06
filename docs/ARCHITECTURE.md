@@ -195,8 +195,53 @@ Quick-return reuse is limited to rows owned by this spell and nonnegative gaps
 of at most one second, with no pending writes. It never adopts imported rows or
 bridges pause/Away/clock boundaries.
 
-The UI draws the unpersisted current activity as an overlay, so the bar grows
-even before the 5-second threshold.
+The UI projects the current interval into a shared day snapshot, so every view
+grows before and after the 5-second persistence threshold, without a separate
+bar-only overlay.
+
+### Effective day snapshot
+
+`src/activity_snapshot.odin` owns the presentation contract. Once per Day paint,
+`draw_frame` captures UTC/monotonic time and builds a scratch-allocated
+`Day_Snapshot`. Bars, details, flat/tree totals, tooltips, overview and day-span
+boxes all consume that same snapshot. The builder performs no database queries,
+clock reads or source-state mutation; input strings remain borrowed for the draw.
+
+It starts with the selected-day cache, overlays queued writes by activity ID,
+then overlays the live application, ComputerUsage and running task. Missing live
+rows are added even when persisted but not yet loaded. Unsaved intervals get
+distinct negative presentation-only IDs, never database IDs; unresolved usage
+groups get distinct synthetic identities until the repository resolves them.
+Rows are ordered by full start/ID, preserving distinct switches with identical
+titles/groups. The snapshot rejects empty/reversed displayed intervals and clips
+by overlap, not by the activity's start date. Full source bounds remain available
+separately from selected-day bounds. Zoom clips geometry only, not daily totals.
+
+The live endpoint is frozen at the last observed instant on an unprocessed clock
+jump, or at the frozen observation while an idle transaction is held for retry.
+Tasks use their acknowledged endpoint rather than guessing growth beyond a future
+tag neighbor. The task owns its name/group/color for snapshots missing its cached
+row; `task_clear` releases that metadata on every stop/error path.
+
+Successful tracker/task writes update the selected-day cache immediately with
+owned metadata and acknowledged endpoints. Completed intervals therefore do not
+disappear between a queue/current transition and the next 10-second reload.
+An idle transaction suspends cache writes until COMMIT, then publishes its staged
+writes and owned-row trims/deletions together; rollback leaves the cache alone.
+Periodic reads replace the cache only on success and never fabricate live ends.
+The initial cache date is established before the first read so subsequent local
+writes remain presentable even if that historical baseline read fails.
+
+Details/list times, totals and tooltip durations use displayed-day bounds; the
+exclusive end of a full day is labeled `24:00`. Tooltip/tag hit tests use the same
+half-open pixel rectangles and paint order, including one-pixel bars. An active
+tag drag is intentionally a separate, uncommitted bar preview; it does not change
+saved/list totals before confirmation. Filtering retains its existing per-view
+title/group-name behavior.
+
+This is a correctness projection, not a derived-view cache: snapshot arrays/maps
+are rebuilt per paint, and new write-through cache rows currently copy the day
+array. Allocation scopes, measured caching and other optimizations remain step 6.
 
 ## Persistence layer
 
@@ -316,9 +361,10 @@ disabled by a picker.
   orange ManicTime frame and drives the details list and totals panel.
 - Draws application bars (stored/exported group colors) and computer usage bars
   (green = Active, orange = Away).
-- Draws the live current-activity overlay and the growing usage bar.
+- Draws effective snapshot intervals, including live and retry-pending intervals.
 - Draws a red "now" line when the selected date is today.
-- Shows a tooltip for the innermost bar under the mouse.
+- Shows a tooltip for the last painted bar under the mouse, using the same
+  half-open pixel bounds as rendering.
 
 Middle-button dragging on the timeline ruler or lanes pans the visible time
 range without changing its zoom level. Content follows the pointer and stays
@@ -367,8 +413,8 @@ selects today's Tags lane. Cancelling does not start anything. The button
 becomes **Stop task** with an elapsed `h:mm:ss` timer; application tracking
 continues independently.
 
-`src/task.odin` persists the block every second and updates its cached endpoint
-for the timeline, details, tooltips and totals. Stop and graceful exit flush the
+`src/task.odin` persists the block every second and publishes its acknowledged
+endpoint/metadata to the cache and shared snapshot. Stop and graceful exit flush the
 final endpoint; hiding in the tray keeps the task running. A forced kill leaves
 the last saved endpoint, and tasks do not automatically resume on restart.
 Active task blocks cannot be resized or deleted until stopped. Existing future
@@ -376,12 +422,13 @@ tags stop the task at their boundary rather than allowing overlapping blocks.
 
 ### Details list and totals
 
-`build_rows()` (temp-allocated) builds the row list for the selected lane,
-respects the filter string, and includes the unpersisted current activity.
+`build_rows()` (temp-allocated) projects the selected lane from `Day_Snapshot`,
+respects the filter string, and retains both full and displayed-day bounds.
 `draw_list()` renders Title / Start / End / Duration columns with vertical-wheel
 scrolling. `build_totals()` aggregates timeline activities by `group_id` for the
 selected lane, sorted by duration; `draw_totals()` renders the totals panel with
-color chips and a pinned `Total: h:mm:ss` line.
+color chips and a pinned `Total: h:mm:ss` line. It aggregates the same clipped
+snapshot intervals, not independently loaded or extended activity data.
 
 The small tree icon in the Totals header toggles a hierarchical view provided
 by `src/totals_tree.odin`. Slash-separated names create nested groups; segment

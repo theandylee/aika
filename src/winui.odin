@@ -292,7 +292,7 @@ app_tick :: proc(app: ^App) {
 	now := now_ms()
 	tracker_tick(app, now) // also retries pending writes while sampling is paused
 	if !task_tick(app, now) {
-		app.task = RunningTask{}
+		task_clear(&app.task)
 		message_box("Task tracking stopped because its tag block could not be updated. The last saved time is preserved.", "aika", 0x10)
 	}
 	mono := monotonic_ms()

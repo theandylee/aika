@@ -23,6 +23,10 @@ split tracking intervals rather than filling the clock jump; a running task stop
 at its last saved endpoint. Backward jumps can leave separate intervals overlapping
 in UTC—existing history is not moved or repaired automatically.
 
+Day-view bars, lists, totals and tooltips share the same live intervals, including
+across midnight. Daily durations are clipped to the selected day; saved and live
+versions of the same activity are counted only once.
+
 ## Status
 
 Working MVP:

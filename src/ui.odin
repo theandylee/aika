@@ -202,6 +202,7 @@ fmt_hms :: proc(ms: i64) -> string {
 // --- Top-level frame ---
 
 draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	snapshot := build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
 	windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
 	if ui.scroll_date != app.date {
 		ui.scroll_date = app.date
@@ -215,7 +216,7 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	fill_rect(dc, 0, 0, w, h, C_BG)
 	switch ui.tab {
 	case 0:
-		draw_day(app, dc, w, h)
+		draw_day(app, snapshot, dc, w, h)
 	case 1:
 		draw_placeholder(dc, w, h, "Timesheet", "Timesheets are not implemented yet (see docs/ROADMAP.md).")
 	case 2:
@@ -224,7 +225,7 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	draw_filter_row(dc, w, h)
 	draw_status_bar(app, dc, w, h)
 	if ui.tab == 0 {
-		draw_tooltip(app, dc, w, h)
+		draw_tooltip(snapshot, dc, w, h)
 	}
 	draw_theme_tooltip(dc, w)
 	draw_settings_tooltip(dc, w)
@@ -276,19 +277,18 @@ draw_tabs :: proc(dc: windows.HDC) {
 
 // --- Toolbar (date navigation + day start/end/duration) ---
 
-draw_toolbar :: proc(app: ^App, dc: windows.HDC, lay: Layout) {
+draw_toolbar :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	draw_toolbar_background_rect(dc, 0, lay.toolbar_y, lay.w, TOOLBAR_H)
 	draw_button(dc, lay.btn_prev, "<", HIT_BTN_PREV)
 	draw_button(dc, lay.btn_next, ">", HIT_BTN_NEXT)
 	draw_button(dc, lay.btn_today, "Today", HIT_BTN_TODAY)
 
 	label := "Start task"
-	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s", fmt_hms(now_ms() - app.task.start_ms)) }
+	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s", fmt_hms(app.task.end_ms - app.task.start_ms)) }
 	draw_button(dc, lay.btn_track, label, HIT_BTN_TASK)
 
 	// Day start / day end / duration, ManicTime-style.
-	day_start, day_end := day_bounds_ms(app.date)
-	min_ms, max_ms := day_span(app, day_start, day_end)
+	min_ms, max_ms := day_span(snapshot)
 	captions := [3]string{"Day start", "Day end", "Duration"}
 	values := [3]string{fmt_hm(min_ms), fmt_hm(max_ms), fmt_span_hm(max_ms - min_ms)}
 	if max_ms <= min_ms {
@@ -306,18 +306,19 @@ draw_toolbar :: proc(app: ^App, dc: windows.HDC, lay: Layout) {
 }
 
 // Day span across both tracked lanes, clamped to the selected date.
-day_span :: proc(app: ^App, day_start, day_end: i64) -> (min_ms, max_ms: i64) {
-	min_ms = day_end
-	max_ms = day_start
-	for a in app.activities {
+day_span :: proc(snapshot: Day_Snapshot) -> (min_ms, max_ms: i64) {
+	min_ms = snapshot.day_end
+	max_ms = snapshot.day_start
+	for row in snapshot.rows {
+		a := row.activity
 		if a.timeline_id != TIMELINE_COMPUTER && a.timeline_id != TIMELINE_APPS {
 			continue
 		}
-		if a.start_ms < min_ms && a.end_ms > day_start { min_ms = max(a.start_ms, day_start) }
-		if a.end_ms > max_ms && a.start_ms < day_end { max_ms = min(a.end_ms, day_end) }
+		min_ms = min(min_ms, row.start_ms)
+		max_ms = max(max_ms, row.end_ms)
 	}
 	if min_ms > max_ms {
-		min_ms, max_ms = day_end, day_start
+		min_ms, max_ms = snapshot.day_end, snapshot.day_start
 	}
 	return
 }
@@ -342,19 +343,19 @@ draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: int) {
 
 // --- Day view ---
 
-draw_day :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) {
 	lay := compute_layout(w, h)
 	draw_tabs(dc)
-	draw_toolbar(app, dc, lay)
+	draw_toolbar(app, snapshot, dc, lay)
 
-	day_start, day_end := day_bounds_ms(app.date)
+	day_start, day_end := snapshot.day_start, snapshot.day_end
 	view_start, view_end := zoom_bounds(day_start, day_end)
 
 	// Ruler
 	draw_toolbar_background_rect(dc, lay.chart_x, lay.ruler_y, lay.chart_w, RULER_H)
 	step := zoom_tick_step(view_start, view_end, lay.chart_w)
 	first_tick := day_start + ((view_start - day_start + step - 1) / step) * step
-	for tick := first_tick; tick <= view_end + 1; tick += step {
+	for tick := first_tick; tick <= view_end; tick += step {
 		x := x_for_ms(tick, view_start, view_end, lay.chart_x, lay.chart_w)
 		s := fmt_clock_hm(tick)
 		if tick >= day_end { s = "24:00" }
@@ -366,19 +367,19 @@ draw_day :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	// Lanes
 	for i := 0; i < 3; i += 1 {
 		ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
-		draw_lane(app, dc, lay, i32(i), lay.chart_x, ly, lay.chart_w, lay.lane_h, view_start, view_end)
+		draw_lane(snapshot, dc, lay, i32(i), lay.chart_x, ly, lay.chart_w, lay.lane_h, view_start, view_end)
 	}
 
 	// Now marker (today only)
-	if app.date == today_date_int() && now_ms() >= view_start && now_ms() < view_end {
-		nx := x_for_ms(now_ms(), view_start, view_end, lay.chart_x, lay.chart_w)
+	if snapshot.now >= view_start && snapshot.now < view_end {
+		nx := x_for_ms(snapshot.now, view_start, view_end, lay.chart_x, lay.chart_w)
 		line_v(dc, nx, lay.ruler_y, lay.lanes_bottom - lay.ruler_y, C_RED)
 	}
 
 	// Details list + totals
-	draw_zoom_bar(app, dc, lay, day_start, day_end)
-	draw_list(app, dc, lay, day_start, day_end)
-	draw_totals(app, dc, lay, day_start, day_end)
+	draw_zoom_bar(snapshot, dc, lay, day_start, day_end)
+	draw_list(snapshot, dc, lay)
+	draw_totals(snapshot, dc, lay)
 	draw_pane_splitters(dc, lay)
 }
 
@@ -401,15 +402,17 @@ argb_to_colorref :: proc(c: u32) -> windows.COLORREF {
 activity_colorref :: proc(a: Activity) -> windows.COLORREF {
 	c := a.color
 	if c == 0 {
-		c = GROUP_COLORS[int(a.group_id) % len(GROUP_COLORS)]
+		index := a.group_id % i64(len(GROUP_COLORS))
+		if index < 0 { index = -index } // synthetic unresolved usage identities
+		c = GROUP_COLORS[int(index)]
 	}
 	return argb_to_colorref(c)
 }
 
-draw_lane :: proc(app: ^App, dc: windows.HDC, lay: Layout, idx, x, y, w, h: i32, day_start, day_end: i64) {
+draw_lane :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, idx, x, y, w, h: i32, day_start, day_end: i64) {
 	fill_rect(dc, x, y, w, h, C_LANE_BG)
 	step := zoom_tick_step(day_start, day_end, w)
-	local_start, _ := day_bounds_ms(app.date)
+	local_start := snapshot.day_start
 	first_tick := local_start + ((day_start - local_start + step - 1) / step) * step
 	for tick := first_tick; tick < day_end; tick += step {
 		line_v(dc, x_for_ms(tick, day_start, day_end, x, w), y, h, C_LANE_GRID)
@@ -419,7 +422,7 @@ draw_lane :: proc(app: ^App, dc: windows.HDC, lay: Layout, idx, x, y, w, h: i32,
 
 	tl := lane_timeline(idx)
 	if tl != 0 {
-		draw_lane_bars(app, dc, idx, tl, x, y, w, h, day_start, day_end)
+		draw_lane_bars(snapshot, dc, idx, tl, x, y, w, h, day_start, day_end)
 	}
 
 	border := windows.COLORREF(C_BORDER)
@@ -438,17 +441,18 @@ bar_rect_for_lane :: proc(idx: i32, x, y, w, h: i32) -> windows.RECT {
 	return windows.RECT{left = x, top = y, right = x + w, bottom = y + h}
 }
 
-draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y, w, h: i32, day_start, day_end: i64) {
+draw_lane_bars :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lane_idx: i32, tl: i64, x, y, w, h: i32, day_start, day_end: i64) {
 	br := bar_rect_for_lane(lane_idx, x, y, w, h)
 	bar_h := br.bottom - br.top
 	bar_y := br.top
 
-	for a in app.activities {
+	for row in snapshot.rows {
+		a := row.activity
 		if a.timeline_id != tl {
 			continue
 		}
-		s := max(a.start_ms, day_start)
-		e := min(a.end_ms, day_end)
+		s := max(row.start_ms, day_start)
+		e := min(row.end_ms, day_end)
 		if tl == TIMELINE_TAGS && tag_ui.drag >= 2 && a.id == tag_ui.id {
 			s, e = max(tag_ui.start_ms, day_start), min(tag_ui.end_ms, day_end)
 		}
@@ -459,10 +463,12 @@ draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y,
 		x2 := x_for_ms(e, day_start, day_end, x, w)
 		bw := max(1, x2 - x1)
 		color := activity_colorref(a)
-		if tl == TIMELINE_COMPUTER && (a.group_id == 1 || a.group_name == "Active") {
+		if tl == TIMELINE_COMPUTER && a.group_name == "Active" {
 			color = C_GREEN
 		}
+		if tl == TIMELINE_COMPUTER && a.group_name == "Away" { color = C_ORANGE }
 		fill_rect(dc, x1, bar_y, bw, bar_h, color)
+		if row.live { fill_frame(dc, x1, bar_y, bw, bar_h, rgb(255, 255, 255)) }
 		if tl == TIMELINE_TAGS {
 			fill_frame(dc, x1, bar_y, bw, bar_h, C_BORDER)
 			draw_string(dc, a.display_name, x1 + 6, bar_y + 8, ui.font_bold, bar_text_color(color), bw - 12)
@@ -475,34 +481,6 @@ draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y,
 		tag_draw_range(dc, lay, day_start, day_end)
 	}
 
-	// Current (possibly unpersisted) activity grows live.
-	if tl == TIMELINE_APPS && app.tracker.current.active &&
-	   date_int_from_unix_ms(app.tracker.current.start_ms) == app.date {
-		c := &app.tracker.current
-		s := max(c.start_ms, day_start)
-		e := min(now_ms(), day_end)
-		if e > s {
-			x1 := x_for_ms(s, day_start, day_end, x, w)
-			x2 := x_for_ms(e, day_start, day_end, x, w)
-			bw := max(1, x2 - x1)
-			color := activity_colorref(Activity{group_id = c.group_id, color = c.group_color})
-			fill_rect(dc, x1, bar_y, bw, bar_h, color)
-			fill_frame(dc, x1, bar_y, bw, bar_h, rgb(255, 255, 255))
-		}
-	}
-	if tl == TIMELINE_COMPUTER && app.tracker.usage_id > 0 &&
-	   date_int_from_unix_ms(app.tracker.usage_start_ms) == app.date {
-		s := max(app.tracker.usage_start_ms, day_start)
-		e := min(now_ms(), day_end)
-		if e > s {
-			x1 := x_for_ms(s, day_start, day_end, x, w)
-			x2 := x_for_ms(e, day_start, day_end, x, w)
-			bw := max(1, x2 - x1)
-			color: windows.COLORREF = C_GREEN if app.tracker.usage_kind == .Active else C_ORANGE
-			fill_rect(dc, x1, bar_y, bw, bar_h, color)
-			fill_frame(dc, x1, bar_y, bw, bar_h, rgb(255, 255, 255))
-		}
-	}
 }
 
 // --- Details list (bottom left) ---
@@ -512,6 +490,7 @@ ListRow :: struct {
 	name:       string, // points into activity data or temp storage
 	start_ms:   i64,
 	end_ms:     i64,
+	full_start_ms, full_end_ms: i64,
 	color:      u32,
 	is_current: bool,
 }
@@ -523,72 +502,56 @@ TotRow :: struct {
 	ms:       i64,
 }
 
-filter_matches :: proc(name: string) -> bool {
-	if len(ui.filter) == 0 {
+snapshot_filter_matches :: proc(name, filter: string) -> bool {
+	if len(filter) == 0 {
 		return true
 	}
 	l := strings.to_lower(name)
 	defer delete(l)
-	return strings.contains(l, ui.filter)
+	return strings.contains(l, filter)
 }
+
+filter_matches :: proc(name: string) -> bool { return snapshot_filter_matches(name, ui.filter) }
 
 // Builds the row list for the selected lane. Allocated with the temp
 // allocator: released by the post-message free_all in main.
-build_rows :: proc(app: ^App, day_start, day_end: i64) -> []ListRow {
-	tl := lane_timeline(i32(ui.lane))
+build_rows :: proc(snapshot: Day_Snapshot, tl: i64, filter: string = "") -> []ListRow {
 	if tl == 0 {
 		return nil
 	}
 	rows := make([dynamic]ListRow, 0, 64, context.temp_allocator)
-	for a in app.activities {
+	for row in snapshot.rows {
+		a := row.activity
 		if a.timeline_id != tl {
-			continue
-		}
-		s := max(a.start_ms, day_start)
-		e := min(a.end_ms, day_end)
-		if e <= s {
 			continue
 		}
 		name := a.display_name
 		if tl == TIMELINE_COMPUTER && len(a.group_name) > 0 {
 			name = a.group_name
 		}
-		if !filter_matches(name) {
+		if !snapshot_filter_matches(name, filter) {
 			continue
 		}
 		append(&rows, ListRow{
 			group_id = a.group_id,
 			name     = name,
-			start_ms = a.start_ms,
-			end_ms   = a.end_ms,
+			start_ms = row.start_ms,
+			end_ms   = row.end_ms,
+			full_start_ms = a.start_ms,
+			full_end_ms = a.end_ms,
 			color    = a.color,
+			is_current = row.live,
 		})
-	}
-	c := &app.tracker.current
-	if tl == TIMELINE_APPS && c.active && c.persisted_id == 0 &&
-	   date_int_from_unix_ms(c.start_ms) == app.date {
-		s := max(c.start_ms, day_start)
-		e := min(now_ms(), day_end)
-		if e > s && filter_matches(c.title) {
-			append(&rows, ListRow{
-				group_id   = c.group_id,
-				name       = c.title,
-				start_ms   = c.start_ms,
-				end_ms     = e,
-				color      = c.group_color,
-				is_current = true,
-			})
-		}
 	}
 	return rows[:]
 }
 
-draw_list :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i64) {
+draw_list :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	x := lay.chart_x
 	w := lay.sidebar_x - lay.chart_x - 8
 
 	fill_rect(dc, x, lay.list_top, w, lay.list_bottom - lay.list_top, C_PANEL)
-	rows := build_rows(app, day_start, day_end)
+	rows := build_rows(snapshot, lane_timeline(i32(ui.lane)), ui.filter)
 	rows_view_h := max(0, lay.list_bottom - lay.list_top - LIST_HDR)
 	visible := max(1, rows_view_h / LIST_ROW)
 	w -= pane_scroll_update(&ui.list_scroll, i32(len(rows)), visible,
@@ -626,28 +589,23 @@ draw_list :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i
 		color := activity_colorref(Activity{group_id = row.group_id, color = row.color})
 		fill_rect(dc, x + 2, ry + 4, 4, LIST_ROW - 8, color)
 		draw_string(dc, row.name, x + 10, ry + 3, ui.font_normal, C_TXT, col_dur - x - 18)
-		draw_string(dc, fmt_clock_hm(row.start_ms), col_dur + 4, ry + 3, ui.font_normal, C_DIM, 60)
-		draw_string(dc, fmt_clock_hm(row.end_ms), col_end + 4, ry + 3, ui.font_normal, C_DIM, 60)
+		draw_string(dc, fmt_snapshot_clock(snapshot, row.start_ms), col_dur + 4, ry + 3, ui.font_normal, C_DIM, 60)
+		draw_string(dc, fmt_snapshot_clock(snapshot, row.end_ms), col_end + 4, ry + 3, ui.font_normal, C_DIM, 60)
 		draw_string(dc, fmt_span_hm(row.end_ms - row.start_ms), col_start + 4, ry + 3, ui.font_normal, C_DIM, 60)
 	}
 }
 
 // --- Totals panel (bottom right) ---
 
-build_totals :: proc(app: ^App, day_start, day_end: i64) -> []TotRow {
-	tl := lane_timeline(i32(ui.lane))
+build_totals :: proc(snapshot: Day_Snapshot, tl: i64) -> []TotRow {
 	if tl == 0 {
 		return nil
 	}
 	m := make(map[i64]TotRow)
 	defer delete(m)
-	for a in app.activities {
+	for row in snapshot.rows {
+		a := row.activity
 		if a.timeline_id != tl {
-			continue
-		}
-		s := max(a.start_ms, day_start)
-		e := min(a.end_ms, day_end)
-		if e <= s {
 			continue
 		}
 		name := a.group_name
@@ -658,21 +616,8 @@ build_totals :: proc(app: ^App, day_start, day_end: i64) -> []TotRow {
 		if !ok {
 			entry = TotRow{group_id = a.group_id, name = name, color = a.color}
 		}
-		entry.ms += e - s
+		entry.ms += row.end_ms - row.start_ms
 		m[a.group_id] = entry
-	}
-	c := &app.tracker.current
-	if tl == TIMELINE_APPS && c.active && c.persisted_id == 0 && date_int_from_unix_ms(c.start_ms) == app.date {
-		s := max(c.start_ms, day_start)
-		e := min(now_ms(), day_end)
-		if e > s {
-			entry, ok := m[c.group_id]
-			if !ok {
-				entry = TotRow{group_id = c.group_id, name = c.app_name, color = c.group_color}
-			}
-			entry.ms += e - s
-			m[c.group_id] = entry
-		}
 	}
 	list := make([dynamic]TotRow, 0, len(m))
 	for _, v in m {
@@ -682,7 +627,7 @@ build_totals :: proc(app: ^App, day_start, day_end: i64) -> []TotRow {
 	return list[:]
 }
 
-draw_totals :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i64) {
+draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	x := lay.sidebar_x
 	w := lay.sidebar_w
 	total_h := lay.list_bottom - lay.list_top
@@ -690,7 +635,7 @@ draw_totals :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end:
 	fill_rect(dc, x, lay.list_top, w, total_h, C_PANEL)
 	fill_frame(dc, x, lay.list_top, w, total_h, C_BORDER_SOFT)
 
-	totals := build_totals(app, day_start, day_end)
+	totals := build_totals(snapshot, lane_timeline(i32(ui.lane)))
 	defer free_totals_slice(totals)
 
 	total_ms: i64
@@ -823,14 +768,13 @@ hit_test :: proc(x, y, w, h: i32) -> int {
 
 // --- Tooltip ---
 
-draw_tooltip :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+draw_tooltip :: proc(snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) {
 	if !ui.mouse_valid || ui.tab != 0 || ui.pane_drag != 0 || tag_ui.drag != 0 || tag_ui.popup != nil || tag_ui.menu_open { return }
 	mx, my := ui.mouse.x, ui.mouse.y
 	lay := compute_layout(w, h)
 	if mx < lay.chart_x || mx >= lay.chart_x + lay.chart_w { return }
 
-	found: ^Activity = nil
-	full_start, full_end := day_bounds_ms(app.date)
+	full_start, full_end := snapshot.day_start, snapshot.day_end
 	day_start, day_end := zoom_bounds(full_start, full_end)
 
 	for lane_i := 0; lane_i <= 2; lane_i += 1 {
@@ -840,51 +784,20 @@ draw_tooltip :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 		if my < br.top || my >= br.bottom { return }
 		tl := lane_timeline(i32(lane_i))
 
-		// The live (possibly unpersisted) current activity first.
-		if c := &app.tracker.current; tl == TIMELINE_APPS && c.active &&
-		   date_int_from_unix_ms(c.start_ms) == app.date {
-			s := max(c.start_ms, day_start)
-			e := min(now_ms(), day_end)
-			if e > s {
-				x1 := x_for_ms(s, day_start, day_end, lay.chart_x, lay.chart_w)
-				x2 := x_for_ms(e, day_start, day_end, lay.chart_x, lay.chart_w)
-				if mx >= x1 && mx <= x2 {
-					if !filter_matches(c.title) { return }
-					draw_tooltip_box(dc, w, h, c.app_name, c.title,
-						fmt.tprintf("%s - %s", fmt_clock_hm(c.start_ms), fmt_clock_hm(e)))
-					return
-				}
-			}
-		}
-
-		// Innermost matching bar wins (activities can visually overlap).
-		best_w := lay.chart_w + 1
-		for a, ai in app.activities {
-			if a.timeline_id != tl { continue }
-			s := max(a.start_ms, day_start)
-			e := min(a.end_ms, day_end)
-			if e <= s { continue }
-			x1 := x_for_ms(s, day_start, day_end, lay.chart_x, lay.chart_w)
-			x2 := x_for_ms(e, day_start, day_end, lay.chart_x, lay.chart_w)
-			if mx >= x1 && mx <= x2 && x2 - x1 < best_w {
-				if len(a.display_name) > 0 && !filter_matches(a.display_name) {
-					continue
-				}
-				best_w = x2 - x1
-				found = &app.activities[ai]
-			}
-		}
-		if found != nil {
-			a := found
+		index := snapshot_bar_hit(snapshot, tl, mx, lay.chart_x, lay.chart_w, day_start, day_end)
+		if index >= 0 {
+			row := snapshot.rows[index]
+			a := row.activity
 			title := a.display_name
 			if tl == TIMELINE_COMPUTER && len(a.group_name) > 0 {
 				title = a.group_name
 			}
+			if !filter_matches(title) { return }
 			draw_tooltip_box(dc, w, h,
 				a.group_name,
 				title,
-				fmt.tprintf("%s - %s  (%s)", fmt_clock_hm(a.start_ms), fmt_clock_hm(a.end_ms),
-					fmt_span_hm(a.end_ms - a.start_ms)))
+				fmt.tprintf("%s - %s  (%s)", fmt_snapshot_clock(snapshot, row.start_ms), fmt_snapshot_clock(snapshot, row.end_ms),
+					fmt_span_hm(row.end_ms - row.start_ms)))
 		}
 		return
 	}

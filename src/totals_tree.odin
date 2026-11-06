@@ -131,8 +131,8 @@ draw_totals_tree_row :: proc(dc: windows.HDC, node: ^Totals_Node, x, y, w: i32) 
 }
 
 totals_tree_click :: proc(app: ^App, y: i32, lay: Layout) {
-	start, end := day_bounds_ms(app.date)
-	totals := build_totals(app, start, end)
+	snapshot := build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
+	totals := build_totals(snapshot, lane_timeline(i32(ui.lane)))
 	defer free_totals_slice(totals)
 	rows := totals_tree_rows(totals)
 	index := int(ui.totals_scroll.pos + (y - lay.list_top - 32) / LIST_ROW)

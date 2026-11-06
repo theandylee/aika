@@ -43,6 +43,8 @@ Tracker :: struct {
 	current:               CurrentActivity,
 	usage_kind:            UsageKind,
 	usage_id:              i64,
+	usage_group:           i64,
+	usage_color:           u32,
 	usage_active:          bool,
 	usage_start_ms:        i64,
 	usage_last_db_update:  i64,
@@ -56,6 +58,7 @@ Tracker :: struct {
 	idle_result:           DB_Result,
 	spell:                 u64,
 	spell_rows:            [dynamic]i64,
+	cache_suspended:       bool,
 	idle_threshold_ms:     i64,
 	pending:               [TRACKER_PENDING_LIMIT]Pending_Activity,
 	pending_count:         int,
@@ -94,6 +97,8 @@ start_usage :: proc(app: ^App, kind: UsageKind, start_ms: i64) {
 	app.tracker.usage_kind = kind
 	app.tracker.usage_start_ms = start_ms
 	app.tracker.usage_id = 0
+	app.tracker.usage_group = 0
+	app.tracker.usage_color = 0
 	app.tracker.usage_last_db_update = 0
 	app.tracker.usage_save_mono = tracker_monotonic(app)
 	extend_usage(app, start_ms)
@@ -102,7 +107,7 @@ start_usage :: proc(app: ^App, kind: UsageKind, start_ms: i64) {
 finish_usage :: proc(app: ^App, end_ms: i64) {
 	t := &app.tracker
 	if !t.usage_active { return }
-	write := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER,
+	write := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER, group = t.usage_group, color = t.usage_color,
 		start_ms = t.usage_start_ms, end_ms = max(end_ms, t.usage_start_ms),
 		title = usage_display_name(t.usage_kind), usage_kind = t.usage_kind}
 	result := tracker_write(app, &write)
@@ -116,10 +121,12 @@ extend_usage :: proc(app: ^App, now: i64) {
 	t := &app.tracker
 	if !t.usage_active { return }
 	if t.usage_id > 0 && tracker_monotonic(app) - t.usage_save_mono < 10_000 { return }
-	write := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER,
+	write := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER, group = t.usage_group, color = t.usage_color,
 		start_ms = t.usage_start_ms, end_ms = now,
 		title = usage_display_name(t.usage_kind), usage_kind = t.usage_kind}
 	t.usage_result = tracker_write(app, &write)
+	t.usage_group = write.group
+	t.usage_color = write.color
 	if t.usage_result == .Ok {
 		t.usage_id = write.id
 		t.usage_last_db_update = now
@@ -150,6 +157,7 @@ start_new_current :: proc(app: ^App, group_id: i64, color: u32, app_name, title,
 			app.tracker.current_result = tracker_update_end(app, last.id, start_ms)
 			if app.tracker.current_result == .Ok {
 				app.tracker.current.last_db_update_ms = tracker_now(app)
+				present_tracker_write(app, current_write(&app.tracker.current, start_ms))
 			}
 			return
 		}
@@ -186,8 +194,7 @@ finish_current :: proc(app: ^App, requested_end: i64, force_save: bool) -> i64 {
 		return next_start
 	}
 	if c.persisted_id > 0 || duration > 0 {
-		write := Pending_Activity{id = c.persisted_id, timeline = TIMELINE_APPS,
-			group = c.group_id, title = c.title, start_ms = c.start_ms, end_ms = end_ms}
+		write := current_write(c, end_ms)
 		result := tracker_write(app, &write)
 		if result != .Ok { tracker_queue(app, write, result) }
 	}
@@ -203,16 +210,18 @@ extend_current :: proc(app: ^App, now: i64) {
 	}
 	if c.persisted_id == 0 {
 		if tracker_monotonic(app) - c.start_mono >= 5000 && now >= c.start_ms {
-			id, result := tracker_insert(app, TIMELINE_APPS, c.title, c.group_id, c.start_ms, now)
+			write := current_write(c, now)
+			result := tracker_write(app, &write)
 			app.tracker.current_result = result
 			if result == .Ok {
-				c.persisted_id = id
+				c.persisted_id = write.id
 				c.last_db_update_ms = now
 				c.last_save_mono = tracker_monotonic(app)
 			}
 		}
 	} else if tracker_monotonic(app) - c.last_save_mono >= 10_000 {
-		app.tracker.current_result = tracker_update_end(app, c.persisted_id, now)
+		write := current_write(c, now)
+		app.tracker.current_result = tracker_write(app, &write)
 		if app.tracker.current_result == .Ok {
 			c.last_db_update_ms = now
 			c.last_save_mono = tracker_monotonic(app)
@@ -381,14 +390,4 @@ tracker_shutdown :: proc(app: ^App) -> bool {
 		app.tracker.spell_rows = nil
 	}
 	return app.tracker.pending_count == 0
-}
-
-// --- UI helpers on the tracker ---
-
-current_is_today :: proc(app: ^App) -> bool {
-	return app.tracker.current.active && date_int_from_unix_ms(app.tracker.current.start_ms) == app.date
-}
-
-current_usage_is_today :: proc(app: ^App) -> bool {
-	return app.tracker.usage_id > 0 && date_int_from_unix_ms(app.tracker.usage_start_ms) == app.date
 }

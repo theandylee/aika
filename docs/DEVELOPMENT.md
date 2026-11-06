@@ -348,6 +348,12 @@ commit rollback with pending ownership, unowned-history protection, backward/
 forward clock splits, pre-timer Exit, backward transient merging, midnight
 adjacency and explicit 23/25-hour Windows DST rules. All clocks are injected;
 these tests do not change the desktop timezone or system time.
+`src/activity_snapshot_test.odin` checks matching list/totals/bar durations before
+and after persistence/reload, persisted-but-not-loaded rows, midnight and full
+multi-day clipping, queue recovery, failed reads, atomic cache publication after
+idle COMMIT, clock-jump/frozen endpoints, task metadata and half-open pixel hits.
+The snapshot tests run without changing shared UI globals and borrow source
+metadata only for the projection's scratch lifetime.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.

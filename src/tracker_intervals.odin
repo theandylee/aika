@@ -37,8 +37,7 @@ tracker_merge_short :: proc(app: ^App, end: i64) {
 	if result != .Ok {
 		// A failed lookup is not proof that there is no predecessor. Retain
 		// this short sample under its own identity rather than silently lose it.
-		write := Pending_Activity{timeline = TIMELINE_APPS, group = c.group_id,
-			title = c.title, start_ms = c.start_ms, end_ms = end}
+		write := current_write(c, end)
 		result = tracker_write(app, &write)
 		if result != .Ok { tracker_queue(app, write, result) }
 		return
@@ -58,7 +57,10 @@ tracker_reconcile_idle :: proc(app: ^App) -> bool {
 	if !t.idle_pending { return true }
 	t.idle_result = tracker_idle_transaction(app)
 	if t.idle_result != .Ok { return false }
-	for i in 0 ..< t.pending_count { delete(t.pending[i].title) }
+	for i in 0 ..< t.pending_count {
+		delete(t.pending[i].title)
+		delete(t.pending[i].group_name)
+	}
 	t.pending = {}
 	t.pending_count = 0
 	t.pending_result, t.current_result, t.usage_result = .Ok, .Ok, .Ok
@@ -78,6 +80,9 @@ tracker_idle_transaction :: proc(app: ^App) -> DB_Result {
 	t := &app.tracker
 	if !db_exec(&app.db, "BEGIN IMMEDIATE") { return db_failure(&app.db) }
 	committed := false
+	t.cache_suspended = true
+	defer t.cache_suspended = false
+	writes := make([dynamic]Pending_Activity, context.temp_allocator)
 	owned_count := len(t.spell_rows)
 	defer if !committed {
 		db_exec(&app.db, "ROLLBACK")
@@ -89,21 +94,23 @@ tracker_idle_transaction :: proc(app: ^App) -> DB_Result {
 		write := p
 		result := tracker_write(app, &write)
 		if result != .Ok { return result }
+		append(&writes, write)
 	}
 	c := &t.current
 	if c.active && c.start_ms < t.idle_cutoff {
-		write := Pending_Activity{id = c.persisted_id, timeline = TIMELINE_APPS,
-			group = c.group_id, title = c.title, start_ms = c.start_ms, end_ms = t.idle_cutoff}
+		write := current_write(c, t.idle_cutoff)
 		result := tracker_write(app, &write)
 		if result != .Ok { return result }
+		append(&writes, write)
 	}
 	result := db_reconcile_idle_apps(&app.db, t.spell_rows[:], t.usage_start_ms, t.idle_cutoff, t.idle_observed)
 	if result != .Ok { return result }
-	active := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER,
+	active := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER, group = t.usage_group, color = t.usage_color,
 		start_ms = t.usage_start_ms, end_ms = t.idle_cutoff,
 		title = "Active", usage_kind = .Active}
 	result = tracker_write(app, &active)
 	if result != .Ok { return result }
+	append(&writes, active)
 	away := Pending_Activity{timeline = TIMELINE_COMPUTER, start_ms = t.idle_cutoff,
 		end_ms = t.idle_observed, title = "Away", usage_kind = .Away}
 	result = tracker_write(app, &away)
@@ -111,6 +118,15 @@ tracker_idle_transaction :: proc(app: ^App) -> DB_Result {
 	if !db_exec(&app.db, "COMMIT") { return db_failure(&app.db) }
 	committed = true
 	t.usage_id = away.id
+	t.usage_group = away.group
+	t.usage_color = away.color
+	for write in writes { cache_activity_write(app, write) }
+	for &a in app.activities {
+		if a.timeline_id == TIMELINE_APPS && tracker_owns_row(app, a.id) && a.end_ms > t.idle_cutoff {
+			a.end_ms = max(a.start_ms, t.idle_cutoff)
+		}
+	}
+	cache_activity_write(app, away)
 	return .Ok
 }
 

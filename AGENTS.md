@@ -76,7 +76,8 @@ These have caused bugs before. Do not break them casually.
   Without an adjacent predecessor in the same Active spell it is omitted, not
   merged forward. Pause/Exit force-save; idle reconciliation preserves any
   positive pre-cutoff portion and trims/deletes all affected spell-owned rows.
-- The current activity is held in memory and appears as a UI overlay.
+- The current activity is held in memory and merged into the effective day
+  snapshot, whether persisted yet or not. Do not draw separate live overlays.
 - It is inserted once it reaches 5 seconds.
 - Its `EndTime` is extended every **10 seconds** while active.
 - On graceful exit, `tracker_shutdown` flushes the current activity.
@@ -87,6 +88,10 @@ These have caused bugs before. Do not break them casually.
 - Idle reconciliation is transactional and retryable; never acknowledge IDs or
   clear pending/live ownership before COMMIT. Do not reconcile unrelated history
   based on timestamp overlap alone (especially after backward clock adjustments).
+- Successful tracker/task writes update the selected-day cache only after
+  acknowledgement/COMMIT. Database reads return saved endpoints, never `now`.
+  Rendering uses one snapshot/time sample for bars, lists, totals and tooltips;
+  keep full activity bounds separate from clipped displayed-day bounds.
 
 ### ManicTime database semantics
 - `StartLocalDate` / `EndLocalDate` are **days since 2000-01-01**, not `yyyyMMdd`.
@@ -126,6 +131,7 @@ src/
   main.odin       Entry point, args, message loop, date load
   tracker.odin    Focus polling, idle/away state, activity lifecycle
   tracker_intervals.odin  Atomic idle reconciliation, short merges, clock endpoints
+  activity_snapshot.odin  Effective day projection, daily clipping, write-through cache
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
   db.odin         SQLite schema, repository, activity/group queries, import helpers
   db_import.odin  Import group resolution, guarded activity updates, provenance
@@ -179,6 +185,7 @@ The detailed version is in `docs/ARCHITECTURE.md`.
 | Change schema, queries, date encoding | `src/db.odin` |
 | Change SQLite binding | `src/sqlite.odin` |
 | Change timeline rendering / layout | `src/ui.odin` (drawing), `src/winui.odin` (window, input, GDI helpers) |
+| Change live/day interval presentation | `src/activity_snapshot.odin` |
 | Change importer format | `src/importer.odin`, `tools/export-manictime.ps1` |
 | Change startup / args / build behavior | `src/main.odin`, `build.bat` |
 

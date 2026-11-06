@@ -549,7 +549,7 @@ LOAD_ACTIVITIES_SQL :: `
 		ORDER BY a.StartUtcMs ASC, a.ActivityId ASC
 	`
 
-db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> ([]Activity, DB_Result) {
+db_load_activities :: proc(db: ^DB, date_int: int) -> ([]Activity, DB_Result) {
 	stmt, ok := db_prepare(db, LOAD_ACTIVITIES_SQL)
 	if !ok {
 		return nil, db_failure(db)
@@ -560,7 +560,6 @@ db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> 
 		bind_i64(stmt, 2, day_start), bind_i64(stmt, 3, day_end))
 	if bound != .Ok { return nil, bound }
 
-	now := now_ms()
 	result := make([dynamic]Activity, 0, 256)
 	for {
 		rc := sqlite3_step(stmt)
@@ -579,9 +578,6 @@ db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> 
 			start_date = int(col_i64(stmt, 6)),
 			group_name = col_text(stmt, 7),
 			color = u32(col_i64(stmt, 8)),
-		}
-		if include_current > 0 && a.id == include_current && now > a.end_ms {
-			a.end_ms = now
 		}
 		append(&result, a)
 	}
@@ -613,7 +609,7 @@ db_count_activities :: proc(db: ^DB) -> i64 {
 	return 0
 }
 
-db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, DB_Result) {
+db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, u32, DB_Result) {
 	key: string
 	switch which {
 	case .Active:
@@ -625,17 +621,17 @@ db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, DB_Result) {
 	case .PowerOff:
 		key = "kw+obQQ1f/3ZFvvhV3kgmhQRNnt+Lr2cgk7gFZdu/LU="
 	}
-	stmt, ok := db_prepare(db, `SELECT GroupId FROM "Group" WHERE TimelineId = 2 AND Key = ?1 LIMIT 1`)
+	stmt, ok := db_prepare(db, `SELECT GroupId, Color FROM "Group" WHERE TimelineId = 2 AND Key = ?1 LIMIT 1`)
 	if !ok {
-		return 0, db_failure(db)
+		return 0, 0, db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
 	bound := db_result(bind_text(stmt, 1, key))
-	if bound != .Ok { return 0, bound }
+	if bound != .Ok { return 0, 0, bound }
 	rc := sqlite3_step(stmt)
-	if rc == SQLITE_ROW { return col_i64(stmt, 0), .Ok }
-	if rc == SQLITE_DONE { return 0, .Not_Found }
-	return 0, db_result(rc)
+	if rc == SQLITE_ROW { return col_i64(stmt, 0), u32(col_i64(stmt, 1)), .Ok }
+	if rc == SQLITE_DONE { return 0, 0, .Not_Found }
+	return 0, 0, db_result(rc)
 }
 
 extract_xml_tag :: proc(xml, tag: string) -> string {

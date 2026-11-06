@@ -26,18 +26,10 @@ TAG_POPUP_CLASS :: "aika_tag_picker"
 tag_block_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> i64 {
 	if ui.tab != 0 || !rect_hit(windows.RECT{lay.chart_x, lay.lane_y,
 		lay.chart_x + lay.chart_w, lay.lane_y + lay.lane_h}, x, y) { return 0 }
-	ds, de := day_bounds_ms(app.date)
-	vs, ve := zoom_bounds(ds, de)
-	id: i64
-	for a in app.activities {
-		if a.timeline_id != TIMELINE_TAGS { continue }
-		s, e := max(a.start_ms, vs), min(a.end_ms, ve)
-		if e <= s { continue }
-		x1 := x_for_ms(s, vs, ve, lay.chart_x, lay.chart_w)
-		x2 := x_for_ms(e, vs, ve, lay.chart_x, lay.chart_w)
-		if x >= x1 && x < x1 + max(1, x2 - x1) { id = a.id }
-	}
-	return id
+	snapshot := build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
+	vs, ve := zoom_bounds(snapshot.day_start, snapshot.day_end)
+	index := snapshot_bar_hit(snapshot, TIMELINE_TAGS, x, lay.chart_x, lay.chart_w, vs, ve)
+	return snapshot.rows[index].activity.id if index >= 0 else 0
 }
 
 tag_context_menu :: proc(app: ^App, screen: windows.POINT) {

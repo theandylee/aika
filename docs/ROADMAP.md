@@ -59,19 +59,25 @@ fixes before expanding the tracker. Checkboxes reflect verified follow-up work.
   **Acceptance:** missing files, malformed JSON, and an unwritable database fail
   in scripts; a successful import returns zero.
 
-- [ ] **A6. Keep live overlays working across midnight** (`src/ui.odin`,
+- [x] **A6. Keep live overlays working across midnight** (`src/ui.odin`,
   `src/tracker.odin`). Use interval overlap with the selected day rather than
   start-date equality for current application/usage overlays, view-range logic,
   and related day helpers. Clamp intervals to the selected day's bounds.
   **Acceptance:** an application and usage interval continuing past midnight both
   grow live when viewing the new day; the preceding day's view stays clamped.
+  Implemented via shared snapshot overlap clipping, including persisted rows
+  absent from the selected day's cache. Daily list/tooltip bounds are clipped too.
 
-- [ ] **A7. Reconcile live and cached summary activities** (`src/ui.odin`,
+- [x] **A7. Reconcile live and cached summary activities** (`src/ui.odin`,
   `src/main.odin`). Merge the current activity into the summary by activity ID,
   whether persisted or not, without counting its cached interval twice.
   **Acceptance:** totals do not disappear or decrease when the activity is first
   persisted at five seconds, continue growing between ten-second reloads, and
   remain correct across reloads and day boundaries.
+  Implemented with ID-based queued/live overlays and acknowledged write-through
+  cache updates. All Day views share a single snapshot/time sample per paint;
+  completed writes stay visible before the next reload and rollback never changes
+  the cache. Running tasks use acknowledged endpoints to respect tag neighbors.
 
 ---
 

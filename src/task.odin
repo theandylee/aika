@@ -1,10 +1,20 @@
 package main
 
+import "core:strings"
+
 // A task owns one ordinary Tags activity. Persist at 1 Hz; a crash loses at
 // most the last second, and graceful exit saves the exact final endpoint.
 RunningTask :: struct {
 	id, start_ms, end_ms: i64,
 	last_wall, last_mono, save_mono: i64,
+	group_id: i64,
+	name: string,
+	color: u32,
+}
+
+task_clear :: proc(task: ^RunningTask) {
+	delete(task.name)
+	task^ = RunningTask{}
 }
 
 task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
@@ -20,6 +30,21 @@ task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
 		db_exec(&app.db, "ROLLBACK")
 		return false
 	}
+	stmt, prepared := db_prepare(&app.db, `SELECT Color FROM "Group" WHERE GroupId=?1`)
+	if !prepared {
+		db_exec(&app.db, "ROLLBACK")
+		return false
+	}
+	bound := db_result(bind_i64(stmt, 1, tag_id))
+	color: u32
+	if bound == .Ok && sqlite3_step(stmt) == SQLITE_ROW {
+		color = u32(col_i64(stmt, 0))
+	} else {
+		sqlite3_finalize(stmt)
+		db_exec(&app.db, "ROLLBACK")
+		return false
+	}
+	sqlite3_finalize(stmt)
 	id, result := db_insert_activity(&app.db, TIMELINE_TAGS, name, tag_id, start, start + 1)
 	if result != .Ok || !db_exec(&app.db, "COMMIT") {
 		db_exec(&app.db, "ROLLBACK")
@@ -27,7 +52,10 @@ task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
 	}
 	mono := tracker_monotonic(app)
 	app.task = RunningTask{id = id, start_ms = start, end_ms = start + 1,
-		last_wall = start, last_mono = mono, save_mono = mono}
+		last_wall = start, last_mono = mono, save_mono = mono,
+		group_id = tag_id, name = strings.clone(name), color = color}
+	cache_activity_write(app, Pending_Activity{id = id, timeline = TIMELINE_TAGS,
+		group = tag_id, title = name, group_name = name, color = color, start_ms = start, end_ms = start + 1})
 	return true
 }
 
@@ -38,7 +66,7 @@ task_tick :: proc(app: ^App, now: i64, force: bool = false) -> bool {
 	if abs((now - task.last_wall) - (mono - task.last_mono)) > CLOCK_JUMP_TOLERANCE_MS {
 		// A tag cannot be stretched across a wall-clock adjustment safely.
 		// Stop at the last acknowledged endpoint; the user can start a new task.
-		task^ = RunningTask{}
+		task_clear(task)
 		return true
 	}
 	task.last_wall, task.last_mono = now, mono
@@ -60,15 +88,15 @@ task_tick :: proc(app: ^App, now: i64, force: bool = false) -> bool {
 	if !db_resize_tag(&app.db, task.id, task.start_ms, end) { return false }
 	task.end_ms = end
 	task.save_mono = mono
-	for &a in app.activities {
-		if a.id == task.id { a.end_ms = end }
-	}
-	if end < now { task^ = RunningTask{} }
+	cache_activity_write(app, Pending_Activity{id = task.id, timeline = TIMELINE_TAGS,
+		group = task.group_id, title = task.name, group_name = task.name, color = task.color,
+		start_ms = task.start_ms, end_ms = end})
+	if end < now { task_clear(task) }
 	return true
 }
 
 task_stop :: proc(app: ^App, now: i64) -> bool {
 	if !task_tick(app, now, true) { return false }
-	app.task = RunningTask{}
+	task_clear(&app.task)
 	return true
 }

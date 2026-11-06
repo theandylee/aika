@@ -106,7 +106,7 @@ zoom_tick_step :: proc(start, end: i64, width: i32) -> i64 {
 	return 360 * 60_000
 }
 
-draw_zoom_bar :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i64) {
+draw_zoom_bar :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, day_start, day_end: i64) {
 	bar, minus, plus, reset := zoom_rects(lay)
 	draw_string(dc, "Zoom", lay.chart_x, bar.top + 7, ui.font_normal, C_DIM)
 	fill_rect(dc, bar.left, bar.top, bar.right - bar.left, bar.bottom - bar.top, C_PANEL)
@@ -117,23 +117,14 @@ draw_zoom_bar :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_en
 	selection := rgb(90, 65, 32) if ui.dark else rgb(255, 221, 168)
 	fill_rect(dc, left, bar.top + 1, max(1, right - left), 24, selection)
 	// A thin activity strip makes the overview useful when zoomed far in.
-	for a in app.activities {
+	for row in snapshot.rows {
+		a := row.activity
 		if a.timeline_id != TIMELINE_APPS { continue }
-		s, e := max(a.start_ms, day_start), min(a.end_ms, day_end)
+		s, e := row.start_ms, row.end_ms
 		if e <= s { continue }
 		x1 := x_for_ms(s, day_start, day_end, bar.left, width)
 		x2 := x_for_ms(e, day_start, day_end, bar.left, width)
 		fill_rect(dc, x1, bar.bottom - 5, max(1, x2 - x1), 4, activity_colorref(a))
-	}
-	c := &app.tracker.current
-	if c.active && date_int_from_unix_ms(c.start_ms) == app.date {
-		s, e := max(c.start_ms, day_start), min(now_ms(), day_end)
-		if e > s {
-			x1 := x_for_ms(s, day_start, day_end, bar.left, width)
-			x2 := x_for_ms(e, day_start, day_end, bar.left, width)
-			color := activity_colorref(Activity{group_id = c.group_id, color = c.group_color})
-			fill_rect(dc, x1, bar.bottom - 5, max(1, x2 - x1), 4, color)
-		}
 	}
 	for tick := day_start; tick <= day_end; tick += 2 * 3600_000 {
 		x := x_for_ms(tick, day_start, day_end, bar.left, width)

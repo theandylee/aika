@@ -339,8 +339,10 @@ GROUP BY a.GroupId
 ORDER BY ms DESC;
 ```
 
-This does not clamp activities that cross the day boundary. The UI clamps them
-before summing.
+This SQL example does not clamp activities that cross the day boundary. The UI's
+shared day snapshot clips them before rendering lists, tooltips, bars and totals,
+while retaining their original full bounds separately. Repository day reads
+return saved endpoints only; queued/live overlays are a presentation concern.
 
 ### Computer usage periods
 

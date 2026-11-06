@@ -15,7 +15,7 @@ global_app: ^App
 
 load_day :: proc(app: ^App) -> bool {
 	app.last_load_attempt_ms = monotonic_ms()
-	activities, result := db_load_activities(&app.db, app.date, app.tracker.current.persisted_id)
+	activities, result := db_load_activities(&app.db, app.date)
 	app.load_result = result
 	if result != .Ok {
 		// Keep both the old data and its date, never render cached rows as a
@@ -117,6 +117,9 @@ main :: proc() {
 	// A GUI operation must not sleep for the CLI/import busy timeout. Tracker
 	// writes retry on subsequent timer ticks on this same thread.
 	sqlite3_busy_timeout(app.db.handle, 0)
+	// This date identifies the write-through cache even if the first read fails.
+	// load_result still reports that the historical baseline could not be loaded.
+	app.loaded_date = app.date
 	tracker_init(&app)
 	load_day(&app)
 

@@ -95,7 +95,7 @@ verified. References describe the source at audit time; line numbers may drift.
   check for jumps; tasks stop at their acknowledged endpoint. Backward jumps can
   overlap earlier spells in UTC; old history is deliberately not shifted/repaired.
 
-- [ ] **5. Live activity presentation has inconsistent implementations.**
+- [x] **5. Live activity presentation has inconsistent implementations.**
   References: `src/main.odin:16–23`, `src/ui.odin:478–505`,
   `src/ui.odin:537–583`, `src/ui.odin:637–683`.
   Bars use live tracker state while lists/totals mostly use periodically loaded
@@ -107,12 +107,21 @@ verified. References describe the source at audit time; line numbers may drift.
   Produce one effective snapshot merging persisted rows and live state by ID,
   clipped by interval overlap. Use it for bars, lists, totals, tooltips, and the
   overview.
+  Fixed: one pure day snapshot overlays queued/live application, usage and task
+  rows by ID, then clips by overlap. All Day views share it and its captured time.
+  Missing persisted live rows are added; acknowledged writes update the selected
+  cache immediately so completed intervals stay visible before reload. Idle
+  publication is deferred until COMMIT, and failed reads retain the cache.
+  Tasks intentionally stop at saved endpoints rather than guessing past neighbors.
 
-- [ ] **6. Daily list durations are not clipped to the day.**
+- [x] **6. Daily list durations are not clipped to the day.**
   Reference: `src/ui.odin:547–564`.
   `build_rows` calculates clipped bounds but stores the original activity bounds.
   Multi-day activity durations therefore disagree with clipped daily totals.
   Distinguish full activity bounds from displayed-day bounds explicitly.
+  Fixed: snapshot/list rows retain full source bounds separately and render/sum
+  clipped selected-day bounds. Tooltips use those same daily bounds; next midnight
+  is displayed as `24:00`. Empty and reversed projected intervals are omitted.
 
 - [x] **7. UTF-8 byte counts are passed to UTF-16 GDI APIs.**
   Reference: `src/winui.odin:235–266`.
@@ -286,6 +295,8 @@ verified. References describe the source at audit time; line numbers may drift.
   ID `1`. Raw Win32 messages/styles/control IDs are scattered through the UI.
   Use a named `Palette`, semantic names, typed state/constants, and centralized
   usage identity.
+  Partial progress: ComputerUsage rendering no longer assumes Active has group ID
+  1; snapshot usage identity comes from tracker state/resolved group metadata.
 
 - [ ] **24. DPI and keyboard behavior need a coherent UI policy.**
   References: `assets/aika.manifest`, `src/winui.odin:853–870`,
@@ -369,6 +380,19 @@ verified. References describe the source at audit time; line numbers may drift.
   tests passed. Tests with global popup lookup were not run alongside that GUI.
 - Unified live snapshots, cross-midnight overlays, daily list-duration clipping,
   general resource ownership and measured optimizations remain later steps.
+
+## Follow-up verification — step 5
+
+- `odin check src -vet` and all 58 tests passed. Snapshot tests cover pre/post
+  persistence and reloads, absent cached rows, midnight/full-day clipping,
+  pending-write identity/recovery, failed reads, rollback-safe cache publication,
+  frozen clock/idle endpoints, tasks and half-open pixel hit targets.
+- The normal `build.bat` succeeded after confirming no existing aika process was
+  running. CLI import integration and isolated native task, persistence, tags,
+  totals-tree, theme/date, panes, Settings and tray smoke tests passed against
+  `build/aika.exe` / `build/aika-cli.exe`.
+- Resource-scope safety during nested native message loops, derived-view caching
+  and measured performance/resource work remain step 6, not implied by these tests.
 
 ## Guardrails for follow-up work
 
