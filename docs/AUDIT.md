@@ -65,7 +65,7 @@ verified. References describe the source at audit time; line numbers may drift.
   pending tracker writes can be saved. Unused legacy deletion and other tag/import
   repository APIs have not all been migrated to the typed result contract.
 
-- [ ] **3. Idle backdating can produce negative durations and overlapping history.**
+- [x] **3. Idle backdating can produce negative durations and overlapping history.**
   References: `src/tracker.odin:230–238`, `src/tracker.odin:145`.
   Away is backdated to `now - idle_threshold_ms`, checked only against usage
   start. An automatic foreground change during the idle timeout can create a
@@ -75,8 +75,13 @@ verified. References describe the source at audit time; line numbers may drift.
   The database accepts negative-duration rows, as reproduced during the audit.
   Make idle transitions interval-reconciliation operations and enforce
   `end >= start`, including affected persisted rows.
+  Fixed: one retryable transaction replays pending writes, clips/removes all
+  affected current-spell-owned application rows, finishes Active and creates Away.
+  Failure preserves live/queued state and prevents Exit. Explicit ID/spell ownership
+  protects unrelated/imported/previous-clock history. Repository writes reject
+  reversed intervals; old malformed rows and direct SQL bypasses are not repaired.
 
-- [ ] **4. Scheduling uses an adjustable wall clock.**
+- [x] **4. Scheduling uses an adjustable wall clock.**
   References: `src/tracker.odin:217–225`, `src/winui.odin:285–295`,
   `src/task.odin:31–33`.
   Sampling, refresh intervals, and write throttling use UTC wall-clock
@@ -84,6 +89,11 @@ verified. References describe the source at audit time; line numbers may drift.
   forward jumps can manufacture large intervals.
   Use a monotonic clock for scheduling, UTC for stored timestamps, and define how
   clock discontinuities affect active intervals.
+  Fixed: monotonic sampling, insertion/write throttles, task saves and day reloads.
+  A wall/monotonic delta mismatch over 2 seconds closes tracker intervals at the
+  last observation and begins a new spell at the new UTC instant. Pause/Exit also
+  check for jumps; tasks stop at their acknowledged endpoint. Backward jumps can
+  overlap earlier spells in UTC; old history is deliberately not shifted/repaired.
 
 - [ ] **5. Live activity presentation has inconsistent implementations.**
   References: `src/main.odin:16–23`, `src/ui.odin:478–505`,
@@ -256,12 +266,16 @@ verified. References describe the source at audit time; line numbers may drift.
   apparently empty successful list. The test-only count convenience query and
   some boolean repository helpers retain their older contracts.
 
-- [ ] **22. Time interval conventions are inconsistent.**
+- [x] **22. Time interval conventions are inconsistent.**
   References: `src/win32.odin:274–280`, `src/db.odin:390–400`.
   Tags use half-open intervals, but day bounds end one millisecond before next
   midnight. Rendering compensates with `day_end + 1` expressions.
   Adopt `[start, end)` consistently, including day bounds, to simplify durations,
   adjacency, midnight clipping, and DST behavior.
+  Fixed: exclusive next-midnight day bounds, UTC day-overlap predicates, and
+  removal of the overview's `day_end + 1` compensation. Explicit Windows timezone
+  rules test 23/25-hour days without changing the machine's timezone. Daily list
+  clipping and live overlays remain separate step-5 work.
 
 - [ ] **23. Constants, names, and palette representation invite mistakes.**
   References: `src/theme.odin:42–54`, `src/ui.odin:601–607`,
@@ -295,7 +309,8 @@ verified. References describe the source at audit time; line numbers may drift.
   deterministic tests without real foreground inspection. Tests cover sampling,
   insertion/update thresholds, group/title identity, pause/resume/shutdown, stable
   foreground idle transitions, and failed live inserts. Failure acknowledgment,
-  reconciliation, clock discontinuities, import tests and shared UI helpers remain.
+  reconciliation, clock discontinuities and imports were added in steps 2–4;
+  shared PID-scoped UI helpers and soak checks remain.
   Step 1 verification: `odin check src -vet`, all 16 tests in `odin test src -vet`,
   both builds, and isolated Settings/task UI smoke tests passed. The task script's
   stale toolbar click coordinate was corrected. This does not establish a GDI soak
@@ -338,6 +353,22 @@ verified. References describe the source at audit time; line numbers may drift.
 - Isolated PID-scoped task and persistence UI tests passed against the alternate
   GUI build. Tests with global popup lookup were avoided while another aika
   instance was running.
+
+## Follow-up verification — step 4
+
+- Monotonic scheduling, clock-spell splitting, backward short-switch attribution,
+  half-open day bounds and atomic idle reconciliation are implemented. Retryable
+  idle transitions retain pending/live ownership until commit; reconciliation
+  touches only application IDs owned by the current Active spell.
+- Verification uses injected clocks/inputs and explicit Windows DST rules; it
+  does not adjust system time, timezone or the user's live tracking database.
+- `odin check src -vet` and all 47 tests passed, including clock jumps during
+  failed idle retries. GUI/CLI alternate builds succeeded (`build/aika-step4.exe`,
+  `build/aika-step4-cli.exe`); the user's running normal GUI was not stopped or
+  replaced. Isolated CLI import integration and PID-scoped task/persistence UI
+  tests passed. Tests with global popup lookup were not run alongside that GUI.
+- Unified live snapshots, cross-midnight overlays, daily list-duration clipping,
+  general resource ownership and measured optimizations remain later steps.
 
 ## Guardrails for follow-up work
 

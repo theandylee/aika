@@ -3,7 +3,7 @@ package main
 import "core:testing"
 
 Tracker_Test_Input :: struct {
-	now, idle: i64,
+	now, idle, mono: i64,
 	info: WindowInfo,
 	focus_ok: bool,
 	samples, inserts, updates: int,
@@ -35,6 +35,7 @@ tracker_test_app :: proc(input: ^Tracker_Test_Input) -> (App, bool) {
 	app := App{db = db}
 	app.tracker.io = Tracker_IO{
 		data = input, now = tracker_test_now, idle = tracker_test_idle,
+		monotonic = tracker_test_now,
 		foreground = tracker_test_foreground, insert = tracker_test_insert,
 		update_end = tracker_test_update,
 	}
@@ -260,7 +261,8 @@ tracker_pending_endpoint_is_not_reused_by_quick_return :: proc(t: ^testing.T) {
 	tracker_test_tick(&app, &input, start + 8000)
 	last, result := db_last_activity(&app.db, TIMELINE_APPS)
 	defer delete(last.display_name)
-	testing.expect(t, result == .Ok && last.id == id && last.end_ms == start + 6000)
+	testing.expect(t, result == .Ok && last.id == id && last.end_ms == start + 7000,
+		"The short switch is merged backward into the queued predecessor")
 }
 
 @(test)
@@ -297,8 +299,9 @@ tracker_usage_transition_preserves_failed_writes :: proc(t: ^testing.T) {
 	input.fail_insert, input.fail_update = true, true
 	input.idle = 60_000
 	tracker_test_tick(&app, &input, start + 70_000)
-	testing.expect(t, app.tracker.pending_count == 2)
-	testing.expect(t, app.tracker.usage_kind == .Away && app.tracker.usage_active && app.tracker.usage_id == 0)
+	testing.expect(t, app.tracker.pending_count == 0 && app.tracker.idle_pending)
+	testing.expect(t, app.tracker.usage_kind == .Active && app.tracker.usage_active && app.tracker.usage_id > 0,
+		"A failed atomic transition keeps the original live state for retry")
 	input.fail_insert, input.fail_update = false, false
 	tracker_test_tick(&app, &input, start + 71_000)
 	testing.expect(t, app.tracker.pending_count == 0 && app.tracker.usage_id > 0)

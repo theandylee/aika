@@ -111,15 +111,15 @@ systemtime_to_unix_ms :: proc(st: WIN_TIME) -> i64 {
 	return windows.FILETIME_as_unix_nanoseconds(ft) / 1_000_000
 }
 
-local_to_utc :: proc(local: WIN_TIME) -> WIN_TIME {
+local_to_utc :: proc(local: WIN_TIME, zone: ^windows.TIME_ZONE_INFORMATION = nil) -> WIN_TIME {
 	local_copy := local
 	utc: WIN_TIME
-	TzSpecificLocalTimeToSystemTime(nil, &local_copy, &utc)
+	TzSpecificLocalTimeToSystemTime(zone, &local_copy, &utc)
 	return utc
 }
 
-local_systemtime_to_unix_ms :: proc(local: WIN_TIME) -> i64 {
-	utc := local_to_utc(local)
+local_systemtime_to_unix_ms :: proc(local: WIN_TIME, zone: ^windows.TIME_ZONE_INFORMATION = nil) -> i64 {
+	utc := local_to_utc(local, zone)
 	return systemtime_to_unix_ms(utc)
 }
 
@@ -277,13 +277,13 @@ today_date_int :: proc() -> int {
 	return date_int_from_systemtime(now_local())
 }
 
-day_bounds_ms :: proc(date_int: int) -> (start_ms, end_ms: i64) {
+day_bounds_ms :: proc(date_int: int, zone: ^windows.TIME_ZONE_INFORMATION = nil) -> (start_ms, end_ms: i64) {
 	local_start := date_systemtime(date_int)
-	start_ms = local_systemtime_to_unix_ms(local_start)
+	start_ms = local_systemtime_to_unix_ms(local_start, zone)
 
 	next_date := add_days(date_int, 1)
 	local_next := date_systemtime(next_date)
-	end_ms = local_systemtime_to_unix_ms(local_next) - 1
+	end_ms = local_systemtime_to_unix_ms(local_next, zone)
 	return
 }
 

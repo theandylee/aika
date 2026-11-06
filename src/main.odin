@@ -14,7 +14,7 @@ TIMELINE_DOCS :: i64(4)
 global_app: ^App
 
 load_day :: proc(app: ^App) -> bool {
-	app.last_load_attempt_ms = now_ms()
+	app.last_load_attempt_ms = monotonic_ms()
 	activities, result := db_load_activities(&app.db, app.date, app.tracker.current.persisted_id)
 	app.load_result = result
 	if result != .Ok {
@@ -28,7 +28,7 @@ load_day :: proc(app: ^App) -> bool {
 	free_activities(app.activities)
 	app.activities = activities
 	app.loaded_date = app.date
-	app.last_load_ms = now_ms()
+	app.last_load_ms = monotonic_ms()
 	return true
 }
 

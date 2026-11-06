@@ -73,11 +73,20 @@ These have caused bugs before. Do not break them casually.
 ### Activity lifecycle
 - A new activity shorter than **5 seconds** is merged backward; do not persist
   every transient switch.
+  Without an adjacent predecessor in the same Active spell it is omitted, not
+  merged forward. Pause/Exit force-save; idle reconciliation preserves any
+  positive pre-cutoff portion and trims/deletes all affected spell-owned rows.
 - The current activity is held in memory and appears as a UI overlay.
 - It is inserted once it reaches 5 seconds.
 - Its `EndTime` is extended every **10 seconds** while active.
 - On graceful exit, `tracker_shutdown` flushes the current activity.
 - A forced kill can lose the last few seconds. That is accepted.
+- Scheduling uses monotonic milliseconds; stored intervals/days are half-open
+  `[start, end)` in UTC. A wall/monotonic delta mismatch over 2 seconds splits
+  tracker spells and stops a running task at its last acknowledged endpoint.
+- Idle reconciliation is transactional and retryable; never acknowledge IDs or
+  clear pending/live ownership before COMMIT. Do not reconcile unrelated history
+  based on timestamp overlap alone (especially after backward clock adjustments).
 
 ### ManicTime database semantics
 - `StartLocalDate` / `EndLocalDate` are **days since 2000-01-01**, not `yyyyMMdd`.
@@ -116,6 +125,7 @@ These have caused bugs before. Do not break them casually.
 src/
   main.odin       Entry point, args, message loop, date load
   tracker.odin    Focus polling, idle/away state, activity lifecycle
+  tracker_intervals.odin  Atomic idle reconciliation, short merges, clock endpoints
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
   db.odin         SQLite schema, repository, activity/group queries, import helpers
   db_import.odin  Import group resolution, guarded activity updates, provenance

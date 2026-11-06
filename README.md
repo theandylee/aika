@@ -18,6 +18,11 @@ PowerShell exporter used to read ManicTime's proprietary `.sdf` file.
 > **Working on the code?** Start with [`AGENTS.md`](AGENTS.md), then read the
 > focused docs in [`docs/`](docs/).
 
+Tracking uses a monotonic clock for scheduling. Large system-clock adjustments
+split tracking intervals rather than filling the clock jump; a running task stops
+at its last saved endpoint. Backward jumps can leave separate intervals overlapping
+in UTC—existing history is not moved or repaired automatically.
+
 ## Status
 
 Working MVP:

@@ -295,8 +295,9 @@ app_tick :: proc(app: ^App) {
 		app.task = RunningTask{}
 		message_box("Task tracking stopped because its tag block could not be updated. The last saved time is preserved.", "aika", 0x10)
 	}
-	if (app.date != app.loaded_date || app.load_result != .Ok || now - app.last_load_ms >= 10_000) &&
-	   now - app.last_load_attempt_ms >= 1000 {
+	mono := monotonic_ms()
+	if (app.date != app.loaded_date || app.load_result != .Ok || mono - app.last_load_ms >= 10_000) &&
+	   mono - app.last_load_attempt_ms >= 1000 {
 		load_day(app)
 		sync_date_picker(app)
 	}

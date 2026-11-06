@@ -135,7 +135,7 @@ draw_zoom_bar :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_en
 			fill_rect(dc, x1, bar.bottom - 5, max(1, x2 - x1), 4, color)
 		}
 	}
-	for tick := day_start; tick <= day_end + 1; tick += 2 * 3600_000 {
+	for tick := day_start; tick <= day_end; tick += 2 * 3600_000 {
 		x := x_for_ms(tick, day_start, day_end, bar.left, width)
 		line_v(dc, x, bar.top + 2, 3, C_DIM)
 		text := fmt_clock_hm(tick)

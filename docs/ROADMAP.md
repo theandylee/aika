@@ -25,13 +25,15 @@ fixes before expanding the tracker. Checkboxes reflect verified follow-up work.
   updates, tombstones, and additive schema version 1. Legacy exports need
   `--import-source`; existing unprovenanced history is not automatically adopted.
 
-- [ ] **A2. Reconcile application history when backdating idle**
+- [x] **A2. Reconcile application history when backdating idle**
   (`src/tracker.odin`, `src/db.odin`). Trim or remove all application intervals
   overlapping the backdated idle period, including persisted rows from title
   changes during the grace period. Reconcile the in-memory activity as well.
   **Acceptance:** title changes during the ten-minute idle grace period produce
   no negative-duration rows and no application activity within the resulting
   Away interval. Cover a current activity that starts after the transition time.
+  Implemented as an atomic, retryable transaction over current-spell-owned rows,
+  pending writes and Active/Away endpoints. Older/imported history is untouched.
 
 - [x] **A3. Preserve pending activity on database write failures**
   (`src/db.odin`, `src/tracker.odin`, `src/ui.odin`). Propagate SQLite write results,
@@ -43,12 +45,14 @@ fixes before expanding the tracker. Checkboxes reflect verified follow-up work.
 
 ### Medium priority
 
-- [ ] **A4. Merge short activities backward** (`src/tracker.odin`). Attribute a
+- [x] **A4. Merge short activities backward** (`src/tracker.odin`). Attribute a
   discarded activity shorter than five seconds to the preceding activity rather
   than backdating the next one. Define behavior when there is no preceding row.
   **Acceptance:** in A → B → C with B lasting two seconds, A receives those two
   seconds, C starts at its actual focus time, and no B row remains. Cover quick
   A → B → A switches and pause/away boundaries without bridging tracking gaps.
+  Implemented for adjacent persisted/queued predecessors in the same Active
+  spell; without a predecessor the short sample is omitted. Pause/Exit force-save.
 
 - [x] **A5. Return failing CLI exit codes** (`src/main.odin`). Return nonzero exit
   codes for database-open and import failures, including with `--quiet`.

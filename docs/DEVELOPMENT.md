@@ -343,6 +343,11 @@ reimports, source isolation, guarded updates, failure exit codes, and version-0
 schema upgrades, using only temporary databases. `src/importer_test.odin` adds
 ID/key collisions, alias groups, local-edit conflicts, deletion tombstones,
 malformed data, embedded NUL/Unicode text, and write/commit rollback tests.
+`src/intervals_test.odin` covers multi-row idle trimming/deletion, statement and
+commit rollback with pending ownership, unowned-history protection, backward/
+forward clock splits, pre-timer Exit, backward transient merging, midnight
+adjacency and explicit 23/25-hour Windows DST rules. All clocks are injected;
+these tests do not change the desktop timezone or system time.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.

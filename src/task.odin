@@ -4,6 +4,7 @@ package main
 // most the last second, and graceful exit saves the exact final endpoint.
 RunningTask :: struct {
 	id, start_ms, end_ms: i64,
+	last_wall, last_mono, save_mono: i64,
 }
 
 task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
@@ -24,13 +25,24 @@ task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
 		db_exec(&app.db, "ROLLBACK")
 		return false
 	}
-	app.task = RunningTask{id = id, start_ms = start, end_ms = start + 1}
+	mono := tracker_monotonic(app)
+	app.task = RunningTask{id = id, start_ms = start, end_ms = start + 1,
+		last_wall = start, last_mono = mono, save_mono = mono}
 	return true
 }
 
 task_tick :: proc(app: ^App, now: i64, force: bool = false) -> bool {
 	task := &app.task
-	if task.id == 0 || now <= task.end_ms || (!force && now - task.end_ms < 1000) { return true }
+	if task.id == 0 { return true }
+	mono := tracker_monotonic(app)
+	if abs((now - task.last_wall) - (mono - task.last_mono)) > CLOCK_JUMP_TOLERANCE_MS {
+		// A tag cannot be stretched across a wall-clock adjustment safely.
+		// Stop at the last acknowledged endpoint; the user can start a new task.
+		task^ = RunningTask{}
+		return true
+	}
+	task.last_wall, task.last_mono = now, mono
+	if now <= task.end_ms || (!force && mono - task.save_mono < 1000) { return true }
 	// Respect future/manual tags, including blocks outside the selected day.
 	stmt, ok := db_prepare(&app.db, `SELECT MIN(StartUtcMs) FROM Activity
 		WHERE TimelineId = 1 AND ActivityId <> ?1 AND StartUtcMs >= ?2 AND EndUtcMs > StartUtcMs`)
@@ -47,6 +59,7 @@ task_tick :: proc(app: ^App, now: i64, force: bool = false) -> bool {
 	if boundary > 0 { end = min(end, boundary) }
 	if !db_resize_tag(&app.db, task.id, task.start_ms, end) { return false }
 	task.end_ms = end
+	task.save_mono = mono
 	for &a in app.activities {
 		if a.id == task.id { a.end_ms = end }
 	}

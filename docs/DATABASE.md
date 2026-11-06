@@ -236,9 +236,20 @@ When querying a day:
 ```sql
 WHERE StartLocalDate <= :manicDate
   AND EndLocalDate   >= :manicDate
+  AND StartUtcMs < :nextLocalMidnightUtcMs
+  AND EndUtcMs > :localMidnightUtcMs
 ```
 
-This handles activities that span midnight.
+Intervals are half-open `[start, end)`. Local-day bounds are midnight through
+exclusive next midnight (23/24/25 hours as appropriate), not midnight minus 1 ms.
+The UTC predicates exclude an activity ending exactly at the selected day's
+start, while retaining activities that span midnight. Repository insert/endpoint
+updates reject reversed intervals; no migration repairs old malformed history.
+
+Idle reconciliation is one transaction over pending writes, current-spell-owned
+application rows, and Active/Away endpoints. It trims rows crossing the cutoff and
+deletes those starting after it. Ownership is by runtime ID/spell, not timestamp
+coincidence, so unrelated/imported history is not rewritten after a clock jump.
 
 ---
 
@@ -310,6 +321,7 @@ LEFT JOIN "Group" g ON g.GroupId = a.GroupId
 WHERE a.TimelineId = 3
   AND a.StartLocalDate <= :manic_date
   AND a.EndLocalDate   >= :manic_date
+  AND a.StartUtcMs < :day_end AND a.EndUtcMs > :day_start
 ORDER BY a.StartUtcMs;
 ```
 
@@ -322,6 +334,7 @@ JOIN "Group" g ON g.GroupId = a.GroupId
 WHERE a.TimelineId = 3
   AND a.StartLocalDate <= :manic_date
   AND a.EndLocalDate   >= :manic_date
+  AND a.StartUtcMs < :day_end AND a.EndUtcMs > :day_start
 GROUP BY a.GroupId
 ORDER BY ms DESC;
 ```

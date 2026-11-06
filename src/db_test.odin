@@ -89,6 +89,9 @@ db_partial_day_read_is_discarded :: proc(t: ^testing.T) {
 	testing.expect(t, prepared)
 	if !prepared { return }
 	bind_i64(stmt, 1, manic_date_from_date_int(20261106))
+	_, end := day_bounds_ms(20261106)
+	bind_i64(stmt, 2, start)
+	bind_i64(stmt, 3, end)
 	testing.expect(t, sqlite3_step(stmt) == SQLITE_ROW)
 	first_row_steps := progress.steps
 	sqlite3_finalize(stmt)

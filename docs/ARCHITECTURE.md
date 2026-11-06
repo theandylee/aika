@@ -40,10 +40,18 @@ Three representations are used:
 Key helpers in `src/win32.odin`:
 
 - `now_ms()` — current UTC Unix milliseconds.
+- `monotonic_ms()` — `GetTickCount64` milliseconds for scheduling (not a date).
 - `unix_ms_to_local()` / `unix_ms_to_utc()`.
 - `local_systemtime_to_unix_ms()` — respects the current DST rules.
 - `manic_date_from_date_int()` / `date_int_from_manic_date()`.
 - `day_bounds_ms(date_int)` — local midnight to next local midnight.
+
+Intervals and days are half-open `[start, end)`: next midnight is the exclusive
+day end, with no minus-one-millisecond adjustment. Day queries require UTC overlap
+(`start < day_end && end > day_start`) as well as the local-date prefilter.
+Repository activity insertion and endpoint updates reject `end < start`; tag
+ranges remain strictly nonempty. Existing invalid history is not repaired, and
+this is a repository contract, not a new SQL CHECK constraint/schema migration.
 
 The local date is intentionally computed with the Windows timezone API rather
 than by dividing UTC milliseconds by 86400000. This avoids off-by-one-day bugs
@@ -54,7 +62,22 @@ around midnight and DST.
 ### Entry point
 
 `tracker_tick()` is called every frame but returns unless at least 1000 ms have
-elapsed since `last_tick_ms`.
+elapsed on its injected monotonic clock since the last sample. Five-second live
+insertion and ten-second write throttles also use monotonic elapsed time. The
+day reload timer and task save throttle use monotonic time too; stored endpoints
+remain UTC wall-clock instants.
+
+A UTC delta differing from monotonic elapsed time by more than two seconds is a
+clock discontinuity. The tracker closes the old application/usage at the previous
+observed UTC instant and starts a new spell at the new instant, without filling
+the jump. Pause/Exit apply the same check even before the next timer. Backward
+jumps can therefore leave distinct spells overlapping in UTC; prior history is
+not shifted, deduplicated or rewritten to pretend UTC never changed. DST alone
+does not cause such a jump because stored time is UTC. Sleep/delayed timers with
+matching elapsed clocks are not classified as clock changes.
+
+A running task stops at its last acknowledged endpoint on a discontinuity rather
+than stretching a tag across it; the user can start another task afterward.
 
 It first determines the usage state:
 
@@ -106,10 +129,23 @@ When the user becomes idle:
 
 - The transition time is backdated to `now - idle_threshold_ms`, matching
   ManicTime's "away" semantics.
-- The current application activity is finished at that time.
-- If it was shorter than 5 seconds, it is discarded and the next activity is
-  backdated instead.
-- The current ComputerUsage activity is finished and replaced with `Away`.
+- The cutoff is clamped to the current Active spell's start, never an earlier
+  session. The transition uses one `BEGIN IMMEDIATE` transaction: replay pending
+  writes using tentative IDs, persist the current portion before the cutoff,
+  trim earlier owned application rows that cross it, delete owned rows beginning
+  within the Away interval, finish Active, and insert Away through the observation.
+- Ownership is explicit: application IDs inserted by this tracker spell are
+  retained in memory, and pending writes retain their spell identity. Imported,
+  legacy, previous-session and previous-clock-spell rows are never adopted just
+  because their timestamps overlap. The ID list is released on Away, a new Active
+  spell, or successful shutdown; it uses one ID per application row in the spell.
+- Any write/commit failure rolls back the entire transition. Live state, queue
+  ownership and acknowledged IDs remain unchanged; sampling is held while the
+  frozen transition retries. Normal Exit cannot bypass it. Queue contents and
+  frozen transitions remain memory-only and can be lost on forced termination.
+- A current activity beginning at/after the cutoff is discarded, not finalized
+  with a negative duration. A positive portion before the cutoff is retained even
+  if shorter than five seconds; idle reconciliation is not a transient switch.
 
 When input resumes:
 
@@ -143,13 +179,21 @@ Rules in `src/tracker.odin`:
 - `start_new_current()` stores cloned strings. It may merge with the last
   persisted row if the same app/title was just active.
 - `finish_current(end_ms, force_save)`:
-  - duration < 5 s and not forced → discard, return old start time
+  - duration < 5 s and not forced → extend the immediately adjacent predecessor
+    within this Active spell (including a queued predecessor); return the actual
+    switch time, never backdate the next activity
+  - if there is no predecessor, omit the short sample without bridging a gap;
+    if the lookup fails, retain it as a standalone sample instead of losing it
   - duration ≥ 5 s and not yet persisted → insert one row
   - already persisted → update end time
 - `extend_current(now)`:
   - if not persisted and duration ≥ 5 s → insert
   - if persisted and 10 s since last write → update end time
 - `tracker_shutdown()` calls `finish_current(..., force_save = true)`.
+
+Quick-return reuse is limited to rows owned by this spell and nonnegative gaps
+of at most one second, with no pending writes. It never adopts imported rows or
+bridges pause/Away/clock boundaries.
 
 The UI draws the unpersisted current activity as an overlay, so the bar grows
 even before the 5-second threshold.

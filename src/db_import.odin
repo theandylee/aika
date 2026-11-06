@@ -87,6 +87,7 @@ db_import_local_fingerprint :: proc(db: ^DB, id: i64) -> (string, DB_Result) {
 // id==0 allocates a fresh local ID. A positive id may only come from a checked
 // provenance mapping, never directly from ImportActivity.activityId.
 db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, group: i64) -> (i64, DB_Result) {
+	if activity.endUtcMs < activity.startUtcMs { return 0, .Failed }
 	sql := `INSERT INTO Activity (TimelineId, DisplayName, GroupId,
 		StartLocalDate, StartLocalTime, StartUtcTime, EndLocalDate, EndLocalTime, EndUtcTime,
 		StartUtcMs, EndUtcMs, TextData, UpdatedTimestamp)

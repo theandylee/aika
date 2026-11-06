@@ -10,6 +10,7 @@ Pending_Activity :: struct {
 	start_ms, end_ms: i64,
 	title: string, // owned only while queued
 	usage_kind: UsageKind, // resolve a missing usage group again on retry
+	spell: u64, // ownership survives retries and wall-clock discontinuities
 }
 
 tracker_write :: proc(app: ^App, write: ^Pending_Activity) -> DB_Result {
@@ -19,7 +20,7 @@ tracker_write :: proc(app: ^App, write: ^Pending_Activity) -> DB_Result {
 		if result != .Ok { return result }
 		write.group = group
 	}
-	id, result := tracker_insert(app, write.timeline, write.title, write.group, write.start_ms, write.end_ms)
+	id, result := tracker_insert(app, write.timeline, write.title, write.group, write.start_ms, write.end_ms, write.spell)
 	if result == .Ok { write.id = id }
 	return result
 }
@@ -29,6 +30,7 @@ tracker_queue :: proc(app: ^App, write: Pending_Activity, result: DB_Result) {
 	// Tick/resume reserve space for both live intervals before accepting input.
 	assert(t.pending_count < TRACKER_PENDING_LIMIT)
 	owned := write
+	if owned.spell == 0 { owned.spell = t.spell }
 	owned.title = strings.clone(write.title)
 	t.pending[t.pending_count] = owned
 	t.pending_count += 1
@@ -54,7 +56,7 @@ tracker_retry :: proc(app: ^App, budget: int = TRACKER_RETRY_BATCH) {
 
 tracker_write_error :: proc(app: ^App) -> DB_Result {
 	t := &app.tracker
-	for result in ([4]DB_Result{t.pending_result, t.current_result, t.usage_result, t.focus_result}) {
+	for result in ([5]DB_Result{t.idle_result, t.pending_result, t.current_result, t.usage_result, t.focus_result}) {
 		if result != .Ok { return result }
 	}
 	return .Ok
@@ -62,6 +64,7 @@ tracker_write_error :: proc(app: ^App) -> DB_Result {
 
 app_storage_status :: proc(app: ^App) -> string {
 	if app.tracker.retry_paused { return "Tracking paused: save queue full; retrying" }
+	if app.tracker.idle_pending { return "Tracking save error: idle transition held; retrying" }
 	if tracker_write_error(app) != .Ok || app.tracker.pending_count > 0 {
 		return "Tracking save error: retrying; keep aika open"
 	}

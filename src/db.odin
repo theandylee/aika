@@ -328,6 +328,7 @@ db_ensure_group_id :: proc(db: ^DB, timeline_id: i64, key: string, display_name:
 }
 
 db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, group_id: i64, start_ms, end_ms: i64) -> (i64, DB_Result) {
+	if end_ms < start_ms { return 0, .Failed }
 	start_local := unix_ms_to_local(start_ms)
 	start_utc := unix_ms_to_utc(start_ms)
 	end_local := unix_ms_to_local(end_ms)
@@ -371,7 +372,7 @@ db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) -> DB_Res
 	stmt, ok := db_prepare(db, `
 		UPDATE Activity SET
 			EndLocalDate = ?1, EndLocalTime = ?2, EndUtcTime = ?3, EndUtcMs = ?4, UpdatedTimestamp = ?5
-		WHERE ActivityId = ?6
+		WHERE ActivityId = ?6 AND StartUtcMs <= ?4
 	`)
 	if !ok {
 		return db_failure(db)
@@ -544,6 +545,7 @@ LOAD_ACTIVITIES_SQL :: `
 		LEFT JOIN "Group" g ON g.GroupId = a.GroupId
 		WHERE a.TimelineId IN (1, 2, 3)
 		  AND a.StartLocalDate <= ?1 AND a.EndLocalDate >= ?1
+		  AND a.StartUtcMs < ?3 AND a.EndUtcMs > ?2
 		ORDER BY a.StartUtcMs ASC, a.ActivityId ASC
 	`
 
@@ -553,7 +555,9 @@ db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> 
 		return nil, db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
-	bound := db_result(bind_i64(stmt, 1, manic_date_from_date_int(date_int)))
+	day_start, day_end := day_bounds_ms(date_int)
+	bound := db_bind_result(bind_i64(stmt, 1, manic_date_from_date_int(date_int)),
+		bind_i64(stmt, 2, day_start), bind_i64(stmt, 3, day_end))
 	if bound != .Ok { return nil, bound }
 
 	now := now_ms()

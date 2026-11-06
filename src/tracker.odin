@@ -32,7 +32,9 @@ CurrentActivity :: struct {
 	title:              string,
 	exe_path:           string,
 	start_ms:           i64,
+	start_mono:         i64,
 	last_db_update_ms:  i64,
+	last_save_mono:     i64,
 }
 
 Tracker :: struct {
@@ -44,7 +46,16 @@ Tracker :: struct {
 	usage_active:          bool,
 	usage_start_ms:        i64,
 	usage_last_db_update:  i64,
-	last_tick_ms:          i64,
+	last_tick_ms:          i64, // monotonic scheduling; never a UTC endpoint
+	last_wall_ms:          i64,
+	last_wall_mono:        i64,
+	clock_ready:           bool,
+	usage_save_mono:       i64,
+	idle_pending:          bool,
+	idle_cutoff, idle_observed: i64,
+	idle_result:           DB_Result,
+	spell:                 u64,
+	spell_rows:            [dynamic]i64,
 	idle_threshold_ms:     i64,
 	pending:               [TRACKER_PENDING_LIMIT]Pending_Activity,
 	pending_count:         int,
@@ -74,11 +85,17 @@ clear_current :: proc(c: ^CurrentActivity) {
 }
 
 start_usage :: proc(app: ^App, kind: UsageKind, start_ms: i64) {
+	if kind == .Active {
+		app.tracker.spell += 1
+		delete(app.tracker.spell_rows)
+		app.tracker.spell_rows = nil
+	}
 	app.tracker.usage_active = true
 	app.tracker.usage_kind = kind
 	app.tracker.usage_start_ms = start_ms
 	app.tracker.usage_id = 0
 	app.tracker.usage_last_db_update = 0
+	app.tracker.usage_save_mono = tracker_monotonic(app)
 	extend_usage(app, start_ms)
 }
 
@@ -86,7 +103,7 @@ finish_usage :: proc(app: ^App, end_ms: i64) {
 	t := &app.tracker
 	if !t.usage_active { return }
 	write := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER,
-		start_ms = t.usage_start_ms, end_ms = end_ms,
+		start_ms = t.usage_start_ms, end_ms = max(end_ms, t.usage_start_ms),
 		title = usage_display_name(t.usage_kind), usage_kind = t.usage_kind}
 	result := tracker_write(app, &write)
 	if result != .Ok { tracker_queue(app, write, result) }
@@ -98,7 +115,7 @@ finish_usage :: proc(app: ^App, end_ms: i64) {
 extend_usage :: proc(app: ^App, now: i64) {
 	t := &app.tracker
 	if !t.usage_active { return }
-	if t.usage_id > 0 && now - t.usage_last_db_update < 10_000 { return }
+	if t.usage_id > 0 && tracker_monotonic(app) - t.usage_save_mono < 10_000 { return }
 	write := Pending_Activity{id = t.usage_id, timeline = TIMELINE_COMPUTER,
 		start_ms = t.usage_start_ms, end_ms = now,
 		title = usage_display_name(t.usage_kind), usage_kind = t.usage_kind}
@@ -106,6 +123,7 @@ extend_usage :: proc(app: ^App, now: i64) {
 	if t.usage_result == .Ok {
 		t.usage_id = write.id
 		t.usage_last_db_update = now
+		t.usage_save_mono = tracker_monotonic(app)
 	}
 }
 
@@ -116,7 +134,7 @@ start_new_current :: proc(app: ^App, group_id: i64, color: u32, app_name, title,
 	if result != .Ok && result != .Not_Found { app.tracker.focus_result = result }
 	if result == .Ok {
 		defer if len(last.display_name) > 0 { delete(last.display_name) }
-		if app.tracker.pending_count == 0 && last.group_id == group_id && last.display_name == title && start_ms - last.end_ms <= 1000 && start_ms >= last.start_ms {
+		if app.tracker.pending_count == 0 && last.group_id == group_id && last.display_name == title && start_ms - last.end_ms >= 0 && start_ms - last.end_ms <= 1000 && tracker_owns_row(app, last.id) {
 			app.tracker.current = CurrentActivity{
 				active = true,
 				persisted_id = last.id,
@@ -127,6 +145,7 @@ start_new_current :: proc(app: ^App, group_id: i64, color: u32, app_name, title,
 				exe_path = strings.clone(exe_path),
 				start_ms = last.start_ms,
 				last_db_update_ms = last.end_ms,
+				last_save_mono = tracker_monotonic(app),
 			}
 			app.tracker.current_result = tracker_update_end(app, last.id, start_ms)
 			if app.tracker.current_result == .Ok {
@@ -144,21 +163,24 @@ start_new_current :: proc(app: ^App, group_id: i64, color: u32, app_name, title,
 		title = strings.clone(title),
 		exe_path = strings.clone(exe_path),
 		start_ms = start_ms,
+		start_mono = tracker_monotonic(app),
+		last_save_mono = tracker_monotonic(app),
 	}
 }
 
-// Returns the time at which the next activity should start. If a very short
-// activity is discarded, this is the discarded activity's start (backdating).
-finish_current :: proc(app: ^App, end_ms: i64, force_save: bool) -> i64 {
+// Short unpersisted switches extend the immediately preceding application,
+// never backdate the next one. Without a predecessor the short sample is omitted.
+finish_current :: proc(app: ^App, requested_end: i64, force_save: bool) -> i64 {
 	c := &app.tracker.current
 	if !c.active {
-		return end_ms
+		return requested_end
 	}
+	end_ms := max(requested_end, c.start_ms)
 	duration := end_ms - c.start_ms
-	next_start := end_ms
+	next_start := requested_end
 
-	if c.persisted_id == 0 && duration < 5000 && !force_save {
-		next_start = c.start_ms
+	if c.persisted_id == 0 && tracker_monotonic(app) - c.start_mono < 5000 && !force_save {
+		tracker_merge_short(app, end_ms)
 		clear_current(c)
 		app.tracker.current_result = .Ok
 		return next_start
@@ -180,17 +202,21 @@ extend_current :: proc(app: ^App, now: i64) {
 		return
 	}
 	if c.persisted_id == 0 {
-		if now - c.start_ms >= 5000 {
+		if tracker_monotonic(app) - c.start_mono >= 5000 && now >= c.start_ms {
 			id, result := tracker_insert(app, TIMELINE_APPS, c.title, c.group_id, c.start_ms, now)
 			app.tracker.current_result = result
 			if result == .Ok {
 				c.persisted_id = id
 				c.last_db_update_ms = now
+				c.last_save_mono = tracker_monotonic(app)
 			}
 		}
-	} else if now - c.last_db_update_ms >= 10_000 {
+	} else if tracker_monotonic(app) - c.last_save_mono >= 10_000 {
 		app.tracker.current_result = tracker_update_end(app, c.persisted_id, now)
-		if app.tracker.current_result == .Ok { c.last_db_update_ms = now }
+		if app.tracker.current_result == .Ok {
+			c.last_db_update_ms = now
+			c.last_save_mono = tracker_monotonic(app)
+		}
 	}
 }
 
@@ -239,20 +265,34 @@ tracker_init :: proc(app: ^App) {
 	app.tracker.idle_threshold_ms = i64(settings_load_minutes(app.db_path)) * 60_000
 	app.tracker.last_tick_ms = 0
 	now := tracker_now(app)
+	app.tracker.last_wall_ms = now
+	app.tracker.last_tick_ms = tracker_monotonic(app)
+	app.tracker.last_wall_mono = app.tracker.last_tick_ms
+	app.tracker.clock_ready = true
 	start_usage(app, .Active, now)
 	poll_focus(app, now)
 }
 
 tracker_tick :: proc(app: ^App, now: i64) {
 	t := &app.tracker
-	if now - t.last_tick_ms < 1000 {
+	mono := tracker_monotonic(app)
+	if t.clock_ready && mono - t.last_tick_ms < 1000 {
 		return
 	}
-	t.last_tick_ms = now
+	jump := t.clock_ready && abs((now - t.last_wall_ms) - (mono - t.last_wall_mono)) > CLOCK_JUMP_TOLERANCE_MS
+	previous := t.last_wall_ms
+	t.last_tick_ms = mono
+	if t.idle_pending {
+		if !tracker_reconcile_idle(app) { return }
+	}
+	t.last_wall_ms = now
+	t.last_wall_mono = mono
+	t.clock_ready = true
 	tracker_retry(app)
 	if t.retry_paused && t.pending_count == 0 {
 		t.retry_paused = false
 		tracker_resume(app)
+		return
 	}
 	if !t.enabled { return }
 	// Reserve enough space to finish both live intervals, even on shutdown
@@ -263,19 +303,24 @@ tracker_tick :: proc(app: ^App, now: i64) {
 		t.retry_paused = true
 		return
 	}
+	if jump {
+		finish_current(app, previous, true)
+		finish_usage(app, max(previous, t.usage_start_ms))
+		kind: UsageKind = .Away if tracker_idle(app) >= t.idle_threshold_ms else .Active
+		start_usage(app, kind, now)
+		if kind == .Active { poll_focus(app, now) }
+		return
+	}
 
 	idle := tracker_idle(app)
 	desired: UsageKind = .Away if idle >= t.idle_threshold_ms else .Active
 
 	if desired != t.usage_kind {
 		if desired == .Away {
-			transition := now - t.idle_threshold_ms
-			if transition < t.usage_start_ms {
-				transition = now
-			}
-			finish_current(app, transition, false)
-			finish_usage(app, transition)
-			start_usage(app, .Away, transition)
+			t.idle_cutoff = max(t.usage_start_ms, now - t.idle_threshold_ms)
+			t.idle_observed = now
+			t.idle_pending = true
+			tracker_reconcile_idle(app)
 		} else {
 			finish_usage(app, now)
 			start_usage(app, .Active, now)
@@ -295,10 +340,11 @@ tracker_tick :: proc(app: ^App, now: i64) {
 }
 
 tracker_pause :: proc(app: ^App) {
+	if app.tracker.idle_pending && !tracker_reconcile_idle(app) { return }
 	if !app.tracker.enabled {
 		return
 	}
-	now := tracker_now(app)
+	now := tracker_safe_endpoint(app)
 	finish_current(app, now, true)
 	finish_usage(app, now)
 	app.tracker.enabled = false
@@ -315,17 +361,25 @@ tracker_resume :: proc(app: ^App) {
 	now := tracker_now(app)
 	app.tracker.enabled = true
 	app.tracker.retry_paused = false
-	app.tracker.last_tick_ms = 0
+	app.tracker.last_tick_ms = tracker_monotonic(app)
+	app.tracker.last_wall_mono = app.tracker.last_tick_ms
+	app.tracker.last_wall_ms = now
+	app.tracker.clock_ready = true
 	start_usage(app, .Active, now)
 	poll_focus(app, now)
 }
 
 tracker_shutdown :: proc(app: ^App) -> bool {
-	now := tracker_now(app)
+	if app.tracker.idle_pending && !tracker_reconcile_idle(app) { return false }
+	now := tracker_safe_endpoint(app)
 	finish_current(app, now, true)
 	finish_usage(app, now)
 	app.tracker.enabled = false
 	tracker_retry(app, TRACKER_PENDING_LIMIT)
+	if app.tracker.pending_count == 0 {
+		delete(app.tracker.spell_rows)
+		app.tracker.spell_rows = nil
+	}
 	return app.tracker.pending_count == 0
 }
 
