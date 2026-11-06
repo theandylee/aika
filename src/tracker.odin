@@ -36,6 +36,7 @@ CurrentActivity :: struct {
 }
 
 Tracker :: struct {
+	io:                    Tracker_IO,
 	enabled:               bool,
 	current:               CurrentActivity,
 	usage_kind:            UsageKind,
@@ -70,20 +71,20 @@ start_usage :: proc(app: ^App, kind: UsageKind, start_ms: i64) {
 	group_id := db_usage_group(&app.db, kind)
 	app.tracker.usage_kind = kind
 	app.tracker.usage_start_ms = start_ms
-	app.tracker.usage_last_db_update = now_ms()
-	app.tracker.usage_id = db_insert_activity(&app.db, TIMELINE_COMPUTER, name, group_id, start_ms, start_ms)
+	app.tracker.usage_last_db_update = tracker_now(app)
+	app.tracker.usage_id = tracker_insert(app, TIMELINE_COMPUTER, name, group_id, start_ms, start_ms)
 }
 
 finish_usage :: proc(app: ^App, end_ms: i64) {
 	if app.tracker.usage_id > 0 {
-		db_update_activity_end(&app.db, app.tracker.usage_id, end_ms)
+		tracker_update_end(app, app.tracker.usage_id, end_ms)
 		app.tracker.usage_id = 0
 	}
 }
 
 extend_usage :: proc(app: ^App, now: i64) {
 	if app.tracker.usage_id > 0 && now - app.tracker.usage_last_db_update >= 10_000 {
-		db_update_activity_end(&app.db, app.tracker.usage_id, now)
+		tracker_update_end(app, app.tracker.usage_id, now)
 		app.tracker.usage_last_db_update = now
 	}
 }
@@ -103,9 +104,9 @@ start_new_current :: proc(app: ^App, group_id: i64, color: u32, app_name, title,
 				title = strings.clone(title),
 				exe_path = strings.clone(exe_path),
 				start_ms = last.start_ms,
-				last_db_update_ms = now_ms(),
+				last_db_update_ms = tracker_now(app),
 			}
-			db_update_activity_end(&app.db, last.id, start_ms)
+			tracker_update_end(app, last.id, start_ms)
 			return
 		}
 	}
@@ -138,11 +139,11 @@ finish_current :: proc(app: ^App, end_ms: i64, force_save: bool) -> i64 {
 			return next_start
 		}
 		if duration > 0 {
-			c.persisted_id = db_insert_activity(&app.db, TIMELINE_APPS, c.title, c.group_id, c.start_ms, end_ms)
-			c.last_db_update_ms = now_ms()
+			c.persisted_id = tracker_insert(app, TIMELINE_APPS, c.title, c.group_id, c.start_ms, end_ms)
+			c.last_db_update_ms = tracker_now(app)
 		}
 	} else {
-		db_update_activity_end(&app.db, c.persisted_id, end_ms)
+		tracker_update_end(app, c.persisted_id, end_ms)
 	}
 	clear_current(c)
 	return next_start
@@ -155,17 +156,17 @@ extend_current :: proc(app: ^App, now: i64) {
 	}
 	if c.persisted_id == 0 {
 		if now - c.start_ms >= 5000 {
-			c.persisted_id = db_insert_activity(&app.db, TIMELINE_APPS, c.title, c.group_id, c.start_ms, now)
+			c.persisted_id = tracker_insert(app, TIMELINE_APPS, c.title, c.group_id, c.start_ms, now)
 			c.last_db_update_ms = now
 		}
 	} else if now - c.last_db_update_ms >= 10_000 {
-		db_update_activity_end(&app.db, c.persisted_id, now)
+		tracker_update_end(app, c.persisted_id, now)
 		c.last_db_update_ms = now
 	}
 }
 
 poll_focus :: proc(app: ^App, now: i64) {
-	info, ok := get_foreground_window_info()
+	info, ok := tracker_foreground(app)
 	if !ok {
 		return
 	}
@@ -209,7 +210,7 @@ tracker_init :: proc(app: ^App) {
 	app.tracker.enabled = true
 	app.tracker.idle_threshold_ms = i64(settings_load_minutes(app.db_path)) * 60_000
 	app.tracker.last_tick_ms = 0
-	now := now_ms()
+	now := tracker_now(app)
 	start_usage(app, .Active, now)
 	poll_focus(app, now)
 }
@@ -224,7 +225,7 @@ tracker_tick :: proc(app: ^App, now: i64) {
 	}
 	t.last_tick_ms = now
 
-	idle := idle_ms()
+	idle := tracker_idle(app)
 	desired: UsageKind = .Away if idle >= t.idle_threshold_ms else .Active
 
 	if desired != t.usage_kind {
@@ -258,7 +259,7 @@ tracker_pause :: proc(app: ^App) {
 	if !app.tracker.enabled {
 		return
 	}
-	now := now_ms()
+	now := tracker_now(app)
 	finish_current(app, now, true)
 	finish_usage(app, now)
 	app.tracker.enabled = false
@@ -268,7 +269,7 @@ tracker_resume :: proc(app: ^App) {
 	if app.tracker.enabled {
 		return
 	}
-	now := now_ms()
+	now := tracker_now(app)
 	app.tracker.enabled = true
 	app.tracker.last_tick_ms = 0
 	start_usage(app, .Active, now)
@@ -276,7 +277,7 @@ tracker_resume :: proc(app: ^App) {
 }
 
 tracker_shutdown :: proc(app: ^App) {
-	now := now_ms()
+	now := tracker_now(app)
 	finish_current(app, now, true)
 	finish_usage(app, now)
 }

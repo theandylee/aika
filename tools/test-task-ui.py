@@ -58,7 +58,8 @@ with tempfile.TemporaryDirectory(prefix="aika-task-", dir=root) as folder:
         assert hwnd
 
         def click_task():
-            point = (50 << 16) | 320
+            # Task button follows the 232px date picker (client x=388..520).
+            point = (50 << 16) | 450
             send(hwnd, 0x0201, 1, point)
             send(hwnd, 0x0202, 0, point)
 

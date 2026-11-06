@@ -10,6 +10,12 @@ foreign import aika_k32 "system:kernel32.lib"
 foreign import aika_u32 "system:user32.lib"
 foreign import aika_theme "system:uxtheme.lib"
 foreign import aika_dwm "system:dwmapi.lib"
+foreign import aika_gdi "system:gdi32.lib"
+
+@(default_calling_convention = "system")
+foreign aika_gdi {
+	GetPixel :: proc(dc: windows.HDC, x, y: i32) -> windows.COLORREF ---
+}
 
 @(default_calling_convention = "system")
 foreign aika_dwm {

@@ -323,6 +323,14 @@ Check:
 ## Testing checklist
 
 Run `odin test src -vet` for zoom/tag interaction and tag persistence tests.
+Tracker tests use per-instance `Tracker_IO` overrides (`src/tracker_io.odin`) for
+time, idle duration, foreground samples, and activity writes, with an in-memory
+database. Nil callbacks retain the production Win32/SQLite behavior. Keep the
+injected clock synchronized with the timestamp passed to `tracker_tick`; see
+`tracker_test_tick`. Update callbacks currently mirror the repository's void
+return contract; write acknowledgment/retry semantics remain follow-up work.
+`src/text_test.odin` checks UTF-16 GDI measurement/rendering without a window and
+tracks ownership over repeated filter conversions.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.

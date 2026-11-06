@@ -233,15 +233,19 @@ line_h :: proc(dc: windows.HDC, x, y, w: i32, color: windows.COLORREF) {
 }
 
 _measure_text :: proc(s: string, font: windows.HFONT) -> (size: windows.SIZE) {
-	c := wtext(s)
 	dc := windows.GetDC(ui.hwnd)
 	defer windows.ReleaseDC(ui.hwnd, dc)
+	return measure_text_dc(dc, s, font)
+}
+
+measure_text_dc :: proc(dc: windows.HDC, s: string, font: windows.HFONT) -> (size: windows.SIZE) {
+	text := windows.utf8_to_utf16(s, context.temp_allocator)
 	old := windows.SelectObject(dc, windows.HGDIOBJ(font))
 	defer windows.SelectObject(dc, old)
-	if len(s) == 0 {
+	if len(text) == 0 {
 		return size
 	}
-	windows.GetTextExtentPoint32W(dc, c, i32(len(s)), &size)
+	windows.GetTextExtentPoint32W(dc, windows.LPCWSTR(raw_data(text)), i32(len(text)), &size)
 	return
 }
 
@@ -255,7 +259,8 @@ draw_string :: proc(dc: windows.HDC, s: string, x, y: i32, font: windows.HFONT, 
 	if len(s) == 0 || max_w <= 0 {
 		return
 	}
-	c := wtext(s)
+	text := windows.utf8_to_utf16(s, context.temp_allocator)
+	if len(text) == 0 { return }
 	windows.SetTextColor(dc, color)
 	dc_font := windows.SelectObject(dc, windows.HGDIOBJ(font))
 	defer windows.SelectObject(dc, dc_font)
@@ -263,7 +268,7 @@ draw_string :: proc(dc: windows.HDC, s: string, x, y: i32, font: windows.HFONT, 
 	flags := windows.DrawTextFormat.DT_SINGLELINE |
 		windows.DrawTextFormat.DT_NOPREFIX |
 		windows.DrawTextFormat.DT_END_ELLIPSIS
-	windows.DrawTextW(dc, c, i32(len(s)), &r, flags)
+	windows.DrawTextW(dc, windows.LPCWSTR(raw_data(text)), i32(len(text)), &r, flags)
 }
 
 // Button captions use the actual font metrics rather than a fixed baseline.
@@ -774,18 +779,21 @@ _update_mouse_client :: proc() {
 	}
 }
 
+// The caller owns the lowercase result; the conversion never escapes.
+filter_from_utf16 :: proc(text: []u16) -> string {
+	s, _ := windows.utf16_to_utf8(text, context.allocator)
+	defer delete(s)
+	return strings.to_lower(s)
+}
+
 read_filter :: proc() {
 	buf: [512]u16
 	n := windows.GetWindowTextW(ui.edit, &buf[0], 512)
 	if n < 0 { n = 0 }
-	s := ""
-	if n > 0 {
-		s, _ = windows.utf16_to_utf8(buf[:n], context.allocator)
-	}
 	if len(ui.filter) > 0 {
 		delete(ui.filter)
 	}
-	ui.filter = strings.to_lower(s)
+	ui.filter = filter_from_utf16(buf[:n])
 	ui.list_scroll.pos = 0
 }
 
