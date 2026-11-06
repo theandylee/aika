@@ -19,8 +19,8 @@ task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
 		db_exec(&app.db, "ROLLBACK")
 		return false
 	}
-	id := db_insert_activity(&app.db, TIMELINE_TAGS, name, tag_id, start, start + 1)
-	if id <= 0 || !db_exec(&app.db, "COMMIT") {
+	id, result := db_insert_activity(&app.db, TIMELINE_TAGS, name, tag_id, start, start + 1)
+	if result != .Ok || !db_exec(&app.db, "COMMIT") {
 		db_exec(&app.db, "ROLLBACK")
 		return false
 	}

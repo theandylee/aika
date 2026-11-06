@@ -772,6 +772,11 @@ draw_status_bar :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	dot := C_GREEN if app.tracker.enabled else rgb(200, 204, 208)
 	dot_x := 8 + text_pixel_width(clock, ui.font_normal) + 6
 	fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, dot)
+	status := app_storage_status(app)
+	if status != "" {
+		fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, C_ORANGE)
+		draw_string(dc, status, dot_x + 16, lay.status_y + 4, ui.font_normal, C_TXT, w - dot_x - 24)
+	}
 }
 
 // --- Hit testing ---

@@ -13,14 +13,23 @@ TIMELINE_DOCS :: i64(4)
 // Native window app pointer, read by wnd_proc (single-window app).
 global_app: ^App
 
-load_day :: proc(app: ^App) {
-	if app.activities != nil {
-		free_activities(app.activities)
-		app.activities = nil
+load_day :: proc(app: ^App) -> bool {
+	app.last_load_attempt_ms = now_ms()
+	activities, result := db_load_activities(&app.db, app.date, app.tracker.current.persisted_id)
+	app.load_result = result
+	if result != .Ok {
+		// Keep both the old data and its date, never render cached rows as a
+		// different selected day after failed navigation.
+		if app.loaded_date != 0 {
+			app.date = app.loaded_date
+		}
+		return false
 	}
-	app.activities = db_load_activities(&app.db, app.date, app.tracker.current.persisted_id)
+	free_activities(app.activities)
+	app.activities = activities
 	app.loaded_date = app.date
 	app.last_load_ms = now_ms()
+	return true
 }
 
 main :: proc() {
@@ -84,6 +93,9 @@ main :: proc() {
 		db_path = strings.clone(db_path),
 	}
 	global_app = &app
+	// A GUI operation must not sleep for the CLI/import busy timeout. Tracker
+	// writes retry on subsequent timer ticks on this same thread.
+	sqlite3_busy_timeout(app.db.handle, 0)
 	tracker_init(&app)
 	load_day(&app)
 
@@ -92,7 +104,9 @@ main :: proc() {
 		if !task_stop(&app, now_ms()) {
 			message_box("Could not save the final task time. The last saved time is preserved.", "aika", 0x10)
 		}
-		tracker_shutdown(&app)
+		if !tracker_shutdown(&app) {
+			message_box("Tracking writes remain unsaved. Normal Exit should be retried before closing.", "aika", 0x10)
+		}
 		ui_shutdown()
 		free_activities(app.activities)
 		db_close(&app.db)

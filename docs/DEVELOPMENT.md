@@ -327,10 +327,17 @@ Tracker tests use per-instance `Tracker_IO` overrides (`src/tracker_io.odin`) fo
 time, idle duration, foreground samples, and activity writes, with an in-memory
 database. Nil callbacks retain the production Win32/SQLite behavior. Keep the
 injected clock synchronized with the timestamp passed to `tracker_tick`; see
-`tracker_test_tick`. Update callbacks currently mirror the repository's void
-return contract; write acknowledgment/retry semantics remain follow-up work.
+`tracker_test_tick`. Activity writes return explicit `DB_Result` outcomes; failed
+updates must not advance acknowledged timestamps. Tests cover completed-write
+ownership, usage retries, queue exhaustion/recovery, and repeatable shutdown.
 `src/text_test.odin` checks UTF-16 GDI measurement/rendering without a window and
 tracks ownership over repeated filter conversions.
+`src/db_test.odin` checks failed/ignored writes, missing versus empty results,
+interrupted reads after a first row, and cache preservation on load failure.
+`python tools/test-persistence-ui.py build/aika.exe` holds a real SQLite writer
+lock against an isolated DB, checks UI responsiveness and error visibility,
+verifies Exit cancellation while writes are pending, then releases the lock and
+checks recovery and successful Exit. Native UI tests should run sequentially.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.

@@ -11,6 +11,24 @@ DB :: struct {
 	path:   string,
 }
 
+// Empty successful reads are Ok; a missing individual record is Not_Found.
+// Busy is retryable contention, while Failed needs attention (and may still
+// recover, e.g. after disk space or permissions are restored).
+DB_Result :: enum { Ok, Not_Found, Busy, Failed }
+
+db_result :: proc(rc: c.int) -> DB_Result {
+	switch rc & 0xFF {
+	case SQLITE_OK, SQLITE_DONE, SQLITE_ROW: return .Ok
+	case SQLITE_BUSY, SQLITE_LOCKED: return .Busy
+	}
+	return .Failed
+}
+
+db_failure :: proc(db: ^DB) -> DB_Result {
+	result := db_result(sqlite3_errcode(db.handle))
+	return .Failed if result == .Ok else result
+}
+
 SCHEMA_SQL :: `
 CREATE TABLE IF NOT EXISTS Timeline (
 	TimelineId INTEGER PRIMARY KEY,
@@ -169,21 +187,28 @@ db_prepare :: proc(db: ^DB, sql: string) -> (^sqlite3_stmt, bool) {
 	return stmt, true
 }
 
-bind_text :: proc(stmt: ^sqlite3_stmt, idx: int, s: string) {
+bind_text :: proc(stmt: ^sqlite3_stmt, idx: int, s: string) -> c.int {
 	cstr := strings.clone_to_cstring(s, context.temp_allocator)
-	sqlite3_bind_text(stmt, c.int(idx), cstr, -1, SQLITE_TRANSIENT)
+	return sqlite3_bind_text(stmt, c.int(idx), cstr, -1, SQLITE_TRANSIENT)
 }
 
-bind_i64 :: proc(stmt: ^sqlite3_stmt, idx: int, v: i64) {
-	sqlite3_bind_int64(stmt, c.int(idx), v)
+bind_i64 :: proc(stmt: ^sqlite3_stmt, idx: int, v: i64) -> c.int {
+	return sqlite3_bind_int64(stmt, c.int(idx), v)
 }
 
-bind_i32 :: proc(stmt: ^sqlite3_stmt, idx: int, v: i32) {
-	sqlite3_bind_int(stmt, c.int(idx), c.int(v))
+bind_i32 :: proc(stmt: ^sqlite3_stmt, idx: int, v: i32) -> c.int {
+	return sqlite3_bind_int(stmt, c.int(idx), c.int(v))
 }
 
-bind_null :: proc(stmt: ^sqlite3_stmt, idx: int) {
-	sqlite3_bind_null(stmt, c.int(idx))
+bind_null :: proc(stmt: ^sqlite3_stmt, idx: int) -> c.int {
+	return sqlite3_bind_null(stmt, c.int(idx))
+}
+
+db_bind_result :: proc(codes: ..c.int) -> DB_Result {
+	for rc in codes {
+		if rc != SQLITE_OK { return db_result(rc) }
+	}
+	return .Ok
 }
 
 col_i64 :: proc(stmt: ^sqlite3_stmt, col: int) -> i64 {
@@ -231,45 +256,48 @@ key_hash :: proc(key: string) -> string {
 	return encoded
 }
 
-db_ensure_group :: proc(db: ^DB, timeline_id: i64, key: string, display_name: string, text_data: string) -> (i64, u32) {
+db_ensure_group :: proc(db: ^DB, timeline_id: i64, key: string, display_name: string, text_data: string) -> (i64, u32, DB_Result) {
 	stmt, ok := db_prepare(db, `SELECT GroupId, Color FROM "Group" WHERE TimelineId = ?1 AND Key = ?2 LIMIT 1`)
 	if !ok {
-		return 0, 0
+		return 0, 0, db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
-	bind_i64(stmt, 1, timeline_id)
-	bind_text(stmt, 2, key)
-	if sqlite3_step(stmt) == SQLITE_ROW {
+	bound := db_bind_result(bind_i64(stmt, 1, timeline_id), bind_text(stmt, 2, key))
+	if bound != .Ok { return 0, 0, bound }
+	rc := sqlite3_step(stmt)
+	if rc == SQLITE_ROW {
 		id := col_i64(stmt, 0)
 		color := u32(col_i64(stmt, 1))
-		return id, color
+		return id, color, .Ok
 	}
+	if rc != SQLITE_DONE { return 0, 0, db_result(rc) }
 
 	color := group_color_for_key(key)
 	insert, ok2 := db_prepare(db, `INSERT INTO "Group" (TimelineId, DisplayName, Color, TextData, Key, UpdatedTimestamp) VALUES (?1, ?2, ?3, ?4, ?5, ?6)`)
 	if !ok2 {
-		return 0, 0
+		return 0, 0, db_failure(db)
 	}
 	defer sqlite3_finalize(insert)
-	bind_i64(insert, 1, timeline_id)
-	bind_text(insert, 2, display_name)
-	bind_i64(insert, 3, i64(color))
-	bind_text(insert, 4, text_data)
-	bind_text(insert, 5, key)
-	bind_i64(insert, 6, now_ms() / 1000)
-	if sqlite3_step(insert) != SQLITE_DONE {
+	bound = db_bind_result(
+		bind_i64(insert, 1, timeline_id), bind_text(insert, 2, display_name),
+		bind_i64(insert, 3, i64(color)), bind_text(insert, 4, text_data),
+		bind_text(insert, 5, key), bind_i64(insert, 6, now_ms() / 1000))
+	if bound != .Ok { return 0, color, bound }
+	rc = sqlite3_step(insert)
+	if rc != SQLITE_DONE {
 		fmt.eprintln("group insert failed:", db_error(db))
-		return 0, color
+		return 0, color, db_result(rc)
 	}
-	return sqlite3_last_insert_rowid(db.handle), color
+	if sqlite3_changes(db.handle) != 1 { return 0, color, .Failed }
+	return sqlite3_last_insert_rowid(db.handle), color, .Ok
 }
 
 db_ensure_group_id :: proc(db: ^DB, timeline_id: i64, key: string, display_name: string, text_data: string) -> i64 {
-	id, _ := db_ensure_group(db, timeline_id, key, display_name, text_data)
+	id, _, _ := db_ensure_group(db, timeline_id, key, display_name, text_data)
 	return id
 }
 
-db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, group_id: i64, start_ms, end_ms: i64) -> i64 {
+db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, group_id: i64, start_ms, end_ms: i64) -> (i64, DB_Result) {
 	start_local := unix_ms_to_local(start_ms)
 	start_utc := unix_ms_to_utc(start_ms)
 	end_local := unix_ms_to_local(end_ms)
@@ -284,31 +312,29 @@ db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, grou
 		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12)
 	`)
 	if !ok {
-		return 0
+		return 0, db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
-	bind_i64(stmt, 1, timeline_id)
-	bind_text(stmt, 2, display_name)
-	bind_i64(stmt, 3, group_id)
-	bind_i64(stmt, 4, manic_date_from_date_int(date_int_from_systemtime(start_local)))
-	bind_text(stmt, 5, format_systemtime(start_local))
-	bind_text(stmt, 6, format_systemtime(start_utc))
-	bind_i64(stmt, 7, manic_date_from_date_int(date_int_from_systemtime(end_local)))
-	bind_text(stmt, 8, format_systemtime(end_local))
-	bind_text(stmt, 9, format_systemtime(end_utc))
-	bind_i64(stmt, 10, start_ms)
-	bind_i64(stmt, 11, end_ms)
-	bind_i64(stmt, 12, now_ms() / 1000)
-	if sqlite3_step(stmt) != SQLITE_DONE {
+	bound := db_bind_result(
+		bind_i64(stmt, 1, timeline_id), bind_text(stmt, 2, display_name), bind_i64(stmt, 3, group_id),
+		bind_i64(stmt, 4, manic_date_from_date_int(date_int_from_systemtime(start_local))),
+		bind_text(stmt, 5, format_systemtime(start_local)), bind_text(stmt, 6, format_systemtime(start_utc)),
+		bind_i64(stmt, 7, manic_date_from_date_int(date_int_from_systemtime(end_local))),
+		bind_text(stmt, 8, format_systemtime(end_local)), bind_text(stmt, 9, format_systemtime(end_utc)),
+		bind_i64(stmt, 10, start_ms), bind_i64(stmt, 11, end_ms), bind_i64(stmt, 12, now_ms() / 1000))
+	if bound != .Ok { return 0, bound }
+	rc := sqlite3_step(stmt)
+	if rc != SQLITE_DONE {
 		fmt.eprintln("activity insert failed:", db_error(db))
-		return 0
+		return 0, db_result(rc)
 	}
-	return sqlite3_last_insert_rowid(db.handle)
+	if sqlite3_changes(db.handle) != 1 { return 0, .Failed }
+	return sqlite3_last_insert_rowid(db.handle), .Ok
 }
 
-db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) {
+db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) -> DB_Result {
 	if activity_id <= 0 {
-		return
+		return .Not_Found
 	}
 	end_local := unix_ms_to_local(end_ms)
 	end_utc := unix_ms_to_utc(end_ms)
@@ -318,16 +344,18 @@ db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) {
 		WHERE ActivityId = ?6
 	`)
 	if !ok {
-		return
+		return db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
-	bind_i64(stmt, 1, manic_date_from_date_int(date_int_from_systemtime(end_local)))
-	bind_text(stmt, 2, format_systemtime(end_local))
-	bind_text(stmt, 3, format_systemtime(end_utc))
-	bind_i64(stmt, 4, end_ms)
-	bind_i64(stmt, 5, now_ms() / 1000)
-	bind_i64(stmt, 6, activity_id)
-	sqlite3_step(stmt)
+	bound := db_bind_result(
+		bind_i64(stmt, 1, manic_date_from_date_int(date_int_from_systemtime(end_local))),
+		bind_text(stmt, 2, format_systemtime(end_local)), bind_text(stmt, 3, format_systemtime(end_utc)),
+		bind_i64(stmt, 4, end_ms), bind_i64(stmt, 5, now_ms() / 1000), bind_i64(stmt, 6, activity_id))
+	if bound != .Ok { return bound }
+	rc := sqlite3_step(stmt)
+	if rc != SQLITE_DONE { return db_result(rc) }
+	if sqlite3_changes(db.handle) != 1 { return .Not_Found }
+	return .Ok
 }
 
 db_delete_activity :: proc(db: ^DB, activity_id: i64) {
@@ -357,16 +385,21 @@ db_delete_tag_block :: proc(db: ^DB, id: i64) -> bool {
 	return sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db.handle) == 1
 }
 
-db_load_tags :: proc(db: ^DB) -> []Tag {
+db_load_tags :: proc(db: ^DB) -> ([]Tag, DB_Result) {
 	stmt, ok := db_prepare(db, `SELECT GroupId, DisplayName FROM "Group"
 		WHERE TimelineId = 1 AND COALESCE(DisplayName, '') <> '' ORDER BY DisplayName COLLATE NOCASE`)
-	if !ok { return nil }
+	if !ok { return nil, db_failure(db) }
 	defer sqlite3_finalize(stmt)
 	tags := make([dynamic]Tag)
-	for sqlite3_step(stmt) == SQLITE_ROW {
+	for {
+		rc := sqlite3_step(stmt)
+		if rc == SQLITE_DONE { return tags[:], .Ok }
+		if rc != SQLITE_ROW {
+			free_tags(tags[:])
+			return nil, db_result(rc)
+		}
 		append(&tags, Tag{col_i64(stmt, 0), col_text(stmt, 1)})
 	}
-	return tags[:]
 }
 
 free_tags :: proc(tags: []Tag) {
@@ -378,7 +411,8 @@ free_tags :: proc(tags: []Tag) {
 db_ensure_tag :: proc(db: ^DB, raw_name: string) -> i64 {
 	name := strings.trim_space(raw_name)
 	if name == "" { return 0 }
-	tags := db_load_tags(db)
+	tags, result := db_load_tags(db)
+	if result != .Ok { return 0 }
 	defer free_tags(tags)
 	lower := strings.to_lower(name, context.temp_allocator)
 	for tag in tags {
@@ -434,7 +468,7 @@ LastActivity :: struct {
 	end_ms:       i64,
 }
 
-db_last_activity :: proc(db: ^DB, timeline_id: i64) -> (LastActivity, bool) {
+db_last_activity :: proc(db: ^DB, timeline_id: i64) -> (LastActivity, DB_Result) {
 	stmt, ok := db_prepare(db, `
 		SELECT ActivityId, COALESCE(GroupId, 0), COALESCE(DisplayName, ''), StartUtcMs, EndUtcMs
 		FROM Activity
@@ -443,20 +477,21 @@ db_last_activity :: proc(db: ^DB, timeline_id: i64) -> (LastActivity, bool) {
 		LIMIT 1
 	`)
 	if !ok {
-		return {}, false
+		return {}, db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
-	bind_i64(stmt, 1, timeline_id)
-	if sqlite3_step(stmt) != SQLITE_ROW {
-		return {}, false
-	}
+	bound := db_result(bind_i64(stmt, 1, timeline_id))
+	if bound != .Ok { return {}, bound }
+	rc := sqlite3_step(stmt)
+	if rc == SQLITE_DONE { return {}, .Not_Found }
+	if rc != SQLITE_ROW { return {}, db_result(rc) }
 	return LastActivity{
 		id = col_i64(stmt, 0),
 		group_id = col_i64(stmt, 1),
 		display_name = col_text(stmt, 2),
 		start_ms = col_i64(stmt, 3),
 		end_ms = col_i64(stmt, 4),
-	}, true
+	}, .Ok
 }
 
 Activity :: struct {
@@ -471,8 +506,7 @@ Activity :: struct {
 	color:        u32,
 }
 
-db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> []Activity {
-	stmt, ok := db_prepare(db, `
+LOAD_ACTIVITIES_SQL :: `
 		SELECT a.ActivityId, a.TimelineId, COALESCE(a.DisplayName, ''), COALESCE(a.GroupId, 0),
 		       a.StartUtcMs, a.EndUtcMs, a.StartLocalDate,
 		       COALESCE(g.DisplayName, ''), COALESCE(g.Color, 0)
@@ -481,16 +515,26 @@ db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> 
 		WHERE a.TimelineId IN (1, 2, 3)
 		  AND a.StartLocalDate <= ?1 AND a.EndLocalDate >= ?1
 		ORDER BY a.StartUtcMs ASC, a.ActivityId ASC
-	`)
+	`
+
+db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> ([]Activity, DB_Result) {
+	stmt, ok := db_prepare(db, LOAD_ACTIVITIES_SQL)
 	if !ok {
-		return nil
+		return nil, db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
-	bind_i64(stmt, 1, manic_date_from_date_int(date_int))
+	bound := db_result(bind_i64(stmt, 1, manic_date_from_date_int(date_int)))
+	if bound != .Ok { return nil, bound }
 
 	now := now_ms()
 	result := make([dynamic]Activity, 0, 256)
-	for sqlite3_step(stmt) == SQLITE_ROW {
+	for {
+		rc := sqlite3_step(stmt)
+		if rc == SQLITE_DONE { return result[:], .Ok }
+		if rc != SQLITE_ROW {
+			free_activities(result[:])
+			return nil, db_result(rc)
+		}
 		a := Activity{
 			id = col_i64(stmt, 0),
 			timeline_id = col_i64(stmt, 1),
@@ -507,7 +551,6 @@ db_load_activities :: proc(db: ^DB, date_int: int, include_current: i64 = 0) -> 
 		}
 		append(&result, a)
 	}
-	return result[:]
 }
 
 free_activities :: proc(activities: []Activity) {
@@ -536,7 +579,7 @@ db_count_activities :: proc(db: ^DB) -> i64 {
 	return 0
 }
 
-db_usage_group :: proc(db: ^DB, which: UsageKind) -> i64 {
+db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, DB_Result) {
 	key: string
 	switch which {
 	case .Active:
@@ -550,14 +593,15 @@ db_usage_group :: proc(db: ^DB, which: UsageKind) -> i64 {
 	}
 	stmt, ok := db_prepare(db, `SELECT GroupId FROM "Group" WHERE TimelineId = 2 AND Key = ?1 LIMIT 1`)
 	if !ok {
-		return 0
+		return 0, db_failure(db)
 	}
 	defer sqlite3_finalize(stmt)
-	bind_text(stmt, 1, key)
-	if sqlite3_step(stmt) == SQLITE_ROW {
-		return col_i64(stmt, 0)
-	}
-	return 0
+	bound := db_result(bind_text(stmt, 1, key))
+	if bound != .Ok { return 0, bound }
+	rc := sqlite3_step(stmt)
+	if rc == SQLITE_ROW { return col_i64(stmt, 0), .Ok }
+	if rc == SQLITE_DONE { return 0, .Not_Found }
+	return 0, db_result(rc)
 }
 
 // Used by the importer.

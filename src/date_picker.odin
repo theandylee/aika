@@ -43,8 +43,8 @@ date_calendar_accept :: proc() {
 	st: windows.SYSTEMTIME
 	if windows.SendMessageW(ui.date_calendar, 0x1001, 0, windows.LPARAM(uintptr(&st))) != 0 {
 		global_app.date = date_int_from_systemtime(st)
-		sync_date_picker(global_app)
 		load_day(global_app)
+		sync_date_picker(global_app)
 		windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
 	}
 	date_calendar_close(true)

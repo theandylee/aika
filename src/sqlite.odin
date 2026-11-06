@@ -8,6 +8,8 @@ sqlite3 :: struct {}
 sqlite3_stmt :: struct {}
 
 SQLITE_OK :: 0
+SQLITE_BUSY :: 5
+SQLITE_LOCKED :: 6
 SQLITE_ROW :: 100
 SQLITE_DONE :: 101
 
@@ -29,6 +31,7 @@ foreign aika_sqlite {
 	sqlite3_open_v2 :: proc(filename: cstring, ppDb: ^^sqlite3, flags: c.int, zVfs: cstring) -> c.int ---
 	sqlite3_close_v2 :: proc(db: ^sqlite3) -> c.int ---
 	sqlite3_errmsg :: proc(db: ^sqlite3) -> cstring ---
+	sqlite3_errcode :: proc(db: ^sqlite3) -> c.int ---
 	sqlite3_exec :: proc(db: ^sqlite3, sql: cstring, callback: rawptr, arg: rawptr, errmsg: ^cstring) -> c.int ---
 	sqlite3_free :: proc(ptr: rawptr) ---
 	sqlite3_busy_timeout :: proc(db: ^sqlite3, ms: c.int) -> c.int ---
@@ -47,4 +50,5 @@ foreign aika_sqlite {
 	sqlite3_column_type :: proc(stmt: ^sqlite3_stmt, col: c.int) -> c.int ---
 	sqlite3_last_insert_rowid :: proc(db: ^sqlite3) -> i64 ---
 	sqlite3_changes :: proc(db: ^sqlite3) -> c.int ---
+	sqlite3_progress_handler :: proc(db: ^sqlite3, instructions: c.int, callback: proc "c" (data: rawptr) -> c.int, data: rawptr) ---
 }

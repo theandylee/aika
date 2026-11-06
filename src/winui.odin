@@ -1,6 +1,7 @@
 package main
 
 import "core:strings"
+import "core:fmt"
 import "core:sys/windows"
 
 // Native Win32 window layer: message loop, GDI helpers, UI state.
@@ -289,17 +290,41 @@ draw_button_text :: proc(dc: windows.HDC, label: string, bounds: windows.RECT, c
 
 app_tick :: proc(app: ^App) {
 	now := now_ms()
-	if app.tracker.enabled {
-		tracker_tick(app, now)
-	}
+	tracker_tick(app, now) // also retries pending writes while sampling is paused
 	if !task_tick(app, now) {
 		app.task = RunningTask{}
 		message_box("Task tracking stopped because its tag block could not be updated. The last saved time is preserved.", "aika", 0x10)
 	}
-	if app.date != app.loaded_date || now - app.last_load_ms >= 10_000 {
+	if (app.date != app.loaded_date || app.load_result != .Ok || now - app.last_load_ms >= 10_000) &&
+	   now - app.last_load_attempt_ms >= 1000 {
 		load_day(app)
+		sync_date_picker(app)
 	}
+	ui_storage_title(app)
 	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+}
+
+ui_storage_title :: proc(app: ^App) {
+	status := app_storage_status(app)
+	title := "aika" if status == "" else fmt.tprintf("aika - %s", status)
+	windows.SetWindowTextW(ui.hwnd, wtext(title))
+}
+
+ui_request_exit :: proc(app: ^App) -> bool {
+	// Do not destroy the window/message loop while it owns unsaved intervals.
+	// A failed Exit stays visible and retries; a later Exit can then succeed.
+	if !task_stop(app, now_ms()) {
+		message_box("Could not save the final task time. Exit cancelled; please try again.", "aika", 0x10)
+		return false
+	}
+	if !tracker_shutdown(app) {
+		tracker_resume(app)
+		ui_restore()
+		ui_storage_title(app)
+		message_box("Tracking writes remain unsaved. Exit cancelled; aika will retry. Please try Exit again after the save error clears.", "aika", 0x10)
+		return false
+	}
+	return true
 }
 
 // --- Resize handling ---
@@ -726,6 +751,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			case TRAY_OPEN: ui_restore(); return 0
 			case TRAY_SETTINGS: ui_restore(); settings_open(); return 0
 			case TRAY_EXIT:
+				if !ui_request_exit(app) { return 0 }
 				settings_close()
 				if tag_ui.popup != nil { tag_picker_close() }
 				windows.DestroyWindow(hwnd)
@@ -818,16 +844,16 @@ handle_click :: proc(app: ^App, x, y: i32) {
 		ui.zoom_start, ui.zoom_end = 0, 1
 	case id == HIT_BTN_PREV:
 		app.date = add_days(app.date, -1)
-		sync_date_picker(app)
 		load_day(app)
+		sync_date_picker(app)
 	case id == HIT_BTN_NEXT:
 		app.date = add_days(app.date, 1)
-		sync_date_picker(app)
 		load_day(app)
+		sync_date_picker(app)
 	case id == HIT_BTN_TODAY:
 		app.date = today_date_int()
-		sync_date_picker(app)
 		load_day(app)
+		sync_date_picker(app)
 	case id == HIT_BTN_TASK:
 		if app.task.id != 0 {
 			if !task_stop(app, now_ms()) {

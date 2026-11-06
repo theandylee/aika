@@ -310,8 +310,8 @@ tag_picker_accept :: proc(create: bool) {
 		app.date = today_date_int()
 		ui.lane = 0
 		ui.list_scroll.pos, ui.totals_scroll.pos = 0, 0
-		sync_date_picker(app)
 		load_day(app)
+		sync_date_picker(app)
 		return
 	}
 	if !db_exec(&app.db, "BEGIN IMMEDIATE") {
@@ -327,7 +327,10 @@ tag_picker_accept :: proc(create: bool) {
 	}
 	if create { id = db_ensure_tag(&app.db, name) }
 	ok := id > 0
-	if ok { ok = db_insert_activity(&app.db, TIMELINE_TAGS, name, id, tag_ui.start_ms, tag_ui.end_ms) > 0 }
+	if ok {
+		_, result := db_insert_activity(&app.db, TIMELINE_TAGS, name, id, tag_ui.start_ms, tag_ui.end_ms)
+		ok = result == .Ok
+	}
 	if ok { ok = db_exec(&app.db, "COMMIT") }
 	if !ok {
 		db_exec(&app.db, "ROLLBACK")
@@ -392,7 +395,13 @@ tag_picker_open :: proc() {
 	tag_picker_control("BUTTON", "Use tag", windows.WS_TABSTOP | 1, 12, 268, 100, 28, 103)
 	tag_ui.create = tag_picker_control("BUTTON", "Create tag", windows.WS_TABSTOP, 120, 268, 140, 28, 104)
 	tag_picker_control("BUTTON", "Cancel", windows.WS_TABSTOP, 272, 268, 120, 28, 105)
-	tag_ui.tags = db_load_tags(&global_app.db)
+	tags, result := db_load_tags(&global_app.db)
+	if result != .Ok {
+		tag_picker_close()
+		message_box("Could not load tags. Please try again.", "aika", 0x10)
+		return
+	}
+	tag_ui.tags = tags
 	tag_picker_filter()
 	windows.EnableWindow(ui.hwnd, windows.FALSE)
 	windows.ShowWindow(tag_ui.popup, windows.SW_SHOW)

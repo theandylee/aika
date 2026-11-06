@@ -43,7 +43,7 @@ verified. References describe the source at audit time; line numbers may drift.
   Introduce source-to-local ID mapping, resolve group identity independently of
   source IDs, and define an explicit, idempotent import strategy.
 
-- [ ] **2. Persistence failures are silently treated as success.**
+- [x] **2. Persistence failures are silently treated as success.**
   References: `src/db.odin:309–344`, `src/tracker.odin:68–88`,
   `src/tracker.odin:126–164`.
   `db_update_activity_end` ignores `sqlite3_step` and returns nothing. Callers
@@ -53,6 +53,12 @@ verified. References describe the source at audit time; line numbers may drift.
   GUI users generally cannot see stderr diagnostics.
   Return explicit database results, acknowledge persistence only after success,
   retain pending writes for retry, and expose a persistent tracking-error state.
+  Fixed for tracker activity/usage writes: explicit results and affected-row
+  checks gate acknowledgments. Failed final writes move to an owned, bounded
+  queue; failed live/usage writes retry without losing their original start.
+  The status bar/window title show errors, and normal Exit is cancelled until
+  pending tracker writes can be saved. Unused legacy deletion and other tag/import
+  repository APIs have not all been migrated to the typed result contract.
 
 - [ ] **3. Idle backdating can produce negative durations and overlapping history.**
   References: `src/tracker.odin:230–238`, `src/tracker.odin:145`.
@@ -179,12 +185,17 @@ verified. References describe the source at audit time; line numbers may drift.
   Cache derived data by data revision, date, lane, filter, and tree state; update
   live durations separately. Measure before adding complex rendering machinery.
 
-- [ ] **16. SQLite busy waits block tracking and UI.**
+- [x] **16. SQLite busy waits block tracking and UI.**
   References: `src/db.odin:137`, `src/winui.odin:285–295`.
   The five-second busy timeout runs on the same thread as sampling and painting;
   multiple operations can compound stalls.
   Preserve the single-threaded design but use bounded busy/retry handling,
   pending writes, and visible error state.
+  Fixed: the GUI connection disables SQLite busy sleeping after startup; CLI/import
+  startup retains its existing timeout. Timer ticks retry at most four queued
+  writes, stopping at the first failure. Tracking pauses before the 256-entry
+  queue fills and automatically resumes with new intervals after it drains.
+  Task/tag actions still report failure directly rather than entering this queue.
 
 - [ ] **17. Hot-path statements are repeatedly prepared/finalized.**
   References: `src/db.odin`, `src/importer.odin:51–71`.
@@ -218,7 +229,7 @@ verified. References describe the source at audit time; line numbers may drift.
   Add repository operations such as `create_tag_block`, `start_task`, and
   `extend_task_until_boundary`, backed by shared timestamp-binding helpers.
 
-- [ ] **21. Database reads conflate empty, not found, and failed.**
+- [x] **21. Database reads conflate empty, not found, and failed.**
   References: `src/db.odin:360–369`, `src/db.odin:437–459`,
   `src/db.odin:474–510`, `src/main.odin:16–23`.
   Read loops stop on any result other than `SQLITE_ROW`, without distinguishing
@@ -226,6 +237,12 @@ verified. References describe the source at audit time; line numbers may drift.
   successful replacement, so errors can present as empty/partial days.
   Return data plus explicit results; replace the cache only after a complete,
   successful read.
+  Fixed for day/tag lists, latest activity, and tracker group lookups: empty,
+  missing, contention, and failed outcomes are distinct. Failed/partial list
+  reads free their allocations. Day loading keeps the previous cache and date
+  on failure, and the tag picker reports load errors instead of showing an
+  apparently empty successful list. The test-only count convenience query and
+  some boolean repository helpers retain their older contracts.
 
 - [ ] **22. Time interval conventions are inconsistent.**
   References: `src/win32.odin:274–280`, `src/db.odin:390–400`.
@@ -279,6 +296,19 @@ verified. References describe the source at audit time; line numbers may drift.
   guidance versus code that backdates the next activity.
   Resolve behavioral contracts first, especially short-activity merge direction,
   then update documentation. Preserve deliberate platform/tracking invariants.
+
+## Follow-up verification — step 2
+
+- `odin check src -vet` and all 26 tests in `odin test src -vet` passed.
+- Both GUI and CLI builds succeeded.
+- The isolated sample CLI import succeeded with 202 activities and 2,745 groups.
+- Isolated native persistence, task, Settings, tray, theme/date, and tag tests
+  passed. The persistence test held a real SQLite write lock, verified responsive
+  timer calls and persistent error state, exercised cancelled Exit, then verified
+  automatic retry recovery and clean Exit after releasing the lock.
+- Pending writes remain memory-only; forced termination during an outage can
+  lose them. Import identity, idle reconciliation, wall-clock scheduling and
+  effective live-view consistency remain separate unchecked work.
 
 ## Guardrails for follow-up work
 

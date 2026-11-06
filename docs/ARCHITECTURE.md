@@ -175,6 +175,34 @@ Important functions:
 | `db_import_group` | Import a group preserving ids/colors |
 | `db_insert_activity_full` | Import an activity with explicit id |
 
+### Persistence failures and retries
+
+Tracker activity writes and the day/tag/latest/group reads return `DB_Result`:
+`Ok`, `Not_Found`, `Busy`, or `Failed`. Successful empty lists are `Ok`.
+Activity insert/update success requires an affected row; acknowledgments advance
+only after success. Day/tag list readers discard partial results on error.
+`load_day` replaces the cache only after a complete read; failed navigation keeps
+the previous loaded date and data. Automatic failed-read retries are limited to
+once per second.
+
+The GUI disables SQLite's busy sleep after DB startup; the CLI/import retains
+the startup timeout. All operations remain on the main thread. Live application
+and usage failures retain their original start and retry on subsequent ticks.
+Failed final writes transfer their title and exact interval into the owned queue
+in `src/tracker_writes.odin`, allowing the next foreground activity to proceed.
+Rows with pending final writes are not reused by quick-return merging.
+
+The queue holds at most 256 entries. A tick retries up to four entries, stopping
+on the first failure. Space is reserved to finalize both live intervals before
+the queue fills; tracking then pauses and shows a warning instead of dropping
+writes or accumulating unbounded memory. It automatically resumes with new
+intervals after the queue drains; the suspended period is not tracked. The status
+bar and window title retain save/load warnings while the problem persists.
+Normal tray Exit is cancelled when final tracker writes cannot be saved, leaving
+the process available to retry. Pending writes are in memory, not a crash journal:
+a forced kill during an outage can lose them. Task/tag actions retain their
+existing direct error reporting rather than joining the tracker retry queue.
+
 Timeline IDs:
 
 ```

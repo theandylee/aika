@@ -17,16 +17,17 @@ tracker_test_foreground :: proc(data: rawptr) -> (WindowInfo, bool) {
 	input.samples += 1
 	return input.info, input.focus_ok
 }
-tracker_test_insert :: proc(data: rawptr, db: ^DB, timeline: i64, title: string, group: i64, start, end: i64) -> i64 {
+tracker_test_insert :: proc(data: rawptr, db: ^DB, timeline: i64, title: string, group: i64, start, end: i64) -> (i64, DB_Result) {
 	input := (^Tracker_Test_Input)(data)
 	input.inserts += 1
-	if input.fail_insert { return 0 }
+	if input.fail_insert { return 0, .Busy }
 	return db_insert_activity(db, timeline, title, group, start, end)
 }
-tracker_test_update :: proc(data: rawptr, db: ^DB, id, end: i64) {
+tracker_test_update :: proc(data: rawptr, db: ^DB, id, end: i64) -> DB_Result {
 	input := (^Tracker_Test_Input)(data)
 	input.updates += 1
-	if !input.fail_update { db_update_activity_end(db, id, end) }
+	if input.fail_update { return .Busy }
+	return db_update_activity_end(db, id, end)
 }
 
 tracker_test_app :: proc(input: ^Tracker_Test_Input) -> (App, bool) {
@@ -86,11 +87,11 @@ tracker_sampling_and_write_thresholds :: proc(t: ^testing.T) {
 	testing.expect(t, id > 0, "Persist once at five seconds")
 	tracker_test_tick(&app, &input, start + 14_000)
 	last, found := db_last_activity(&app.db, TIMELINE_APPS)
-	testing.expect(t, found && last.id == id && last.end_ms == start + 5000)
+	testing.expect(t, found == .Ok && last.id == id && last.end_ms == start + 5000)
 	delete(last.display_name)
 	tracker_test_tick(&app, &input, start + 15_000)
 	last, found = db_last_activity(&app.db, TIMELINE_APPS)
-	testing.expect(t, found && last.id == id && last.end_ms == start + 15_000)
+	testing.expect(t, found == .Ok && last.id == id && last.end_ms == start + 15_000)
 	delete(last.display_name)
 	testing.expect(t, db_count_activities(&app.db) == 2, "One usage row and one application row")
 }
@@ -137,7 +138,7 @@ tracker_pause_resume_and_shutdown_use_injected_time :: proc(t: ^testing.T) {
 	tracker_pause(&app)
 	testing.expect(t, !app.tracker.enabled && !app.tracker.current.active)
 	last, found := db_last_activity(&app.db, TIMELINE_APPS)
-	testing.expect(t, found && last.start_ms == start && last.end_ms == start + 2000,
+	testing.expect(t, found == .Ok && last.start_ms == start && last.end_ms == start + 2000,
 		"Pause force-saves even a short activity")
 	delete(last.display_name)
 	input.now += 10_000
@@ -146,7 +147,7 @@ tracker_pause_resume_and_shutdown_use_injected_time :: proc(t: ^testing.T) {
 	input.now += 2000
 	tracker_shutdown(&app)
 	last, found = db_last_activity(&app.db, TIMELINE_APPS)
-	testing.expect(t, found && last.end_ms == input.now)
+	testing.expect(t, found == .Ok && last.end_ms == input.now)
 	delete(last.display_name)
 }
 
@@ -166,7 +167,7 @@ tracker_idle_transition_with_stable_foreground :: proc(t: ^testing.T) {
 	testing.expect(t, app.tracker.usage_kind == .Away && !app.tracker.current.active)
 	testing.expect(t, app.tracker.usage_start_ms == start + 10_000)
 	last, found := db_last_activity(&app.db, TIMELINE_APPS)
-	testing.expect(t, found && last.end_ms == start + 10_000)
+	testing.expect(t, found == .Ok && last.end_ms == start + 10_000)
 	delete(last.display_name)
 	input.idle = 0
 	tracker_test_tick(&app, &input, start + 71_000)
@@ -192,13 +193,170 @@ tracker_failed_live_insert_can_be_retried :: proc(t: ^testing.T) {
 	tracker_test_tick(&app, &input, start + 6000)
 	testing.expect(t, app.tracker.current.persisted_id > 0)
 	testing.expect(t, app.tracker.current.start_ms == start)
-	// Exercise failed update injection without blessing the existing lost-ack
-	// behavior. Retry/acknowledgment assertions belong to the persistence fix.
 	input.fail_update = true
 	tracker_test_tick(&app, &input, start + 16_000)
 	testing.expect(t, input.updates > 0)
 	last, found := db_last_activity(&app.db, TIMELINE_APPS)
-	testing.expect(t, found && last.end_ms == start + 6000)
+	testing.expect(t, found == .Ok && last.end_ms == start + 6000)
 	delete(last.display_name)
+	testing.expect(t, app.tracker.current.last_db_update_ms == start + 6000,
+		"A failed update must not advance the acknowledgment timestamp")
+	testing.expect(t, tracker_write_error(&app) == .Busy && app_storage_status(&app) != "")
 	input.fail_update = false
+	tracker_test_tick(&app, &input, start + 17_000)
+	testing.expect(t, app.tracker.current.last_db_update_ms == start + 17_000)
+	testing.expect(t, tracker_write_error(&app) == .Ok && app_storage_status(&app) == "")
+}
+
+@(test)
+tracker_failed_final_insert_owns_completed_interval :: proc(t: ^testing.T) {
+	input: Tracker_Test_Input
+	app, ok := tracker_test_app(&input)
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&app.db)
+	tracker_init(&app)
+	defer tracker_shutdown(&app)
+	start := input.now
+	input.fail_insert = true
+	input.info.title = "Next document"
+	tracker_test_tick(&app, &input, start + 6000)
+	testing.expect(t, app.tracker.pending_count == 1)
+	testing.expect(t, app.tracker.current.title == "Next document")
+	testing.expect(t, app.tracker.pending[0].title == "Document")
+	testing.expect(t, app.tracker.pending[0].start_ms == start && app.tracker.pending[0].end_ms == start + 6000)
+	input.fail_insert = false
+	tracker_test_tick(&app, &input, start + 7000)
+	testing.expect(t, app.tracker.pending_count == 0)
+	last, result := db_last_activity(&app.db, TIMELINE_APPS)
+	defer delete(last.display_name)
+	testing.expect(t, result == .Ok && last.display_name == "Document")
+	testing.expect(t, last.start_ms == start && last.end_ms == start + 6000)
+	tracker_test_tick(&app, &input, start + 8000)
+	testing.expect(t, db_count_activities(&app.db) == 2, "Retrying cannot duplicate completed inserts")
+}
+
+@(test)
+tracker_pending_endpoint_is_not_reused_by_quick_return :: proc(t: ^testing.T) {
+	input: Tracker_Test_Input
+	app, ok := tracker_test_app(&input)
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&app.db)
+	tracker_init(&app)
+	defer tracker_shutdown(&app)
+	start := input.now
+	tracker_test_tick(&app, &input, start + 5000)
+	id := app.tracker.current.persisted_id
+	input.fail_update = true
+	input.info.title = "Transient"
+	tracker_test_tick(&app, &input, start + 6000)
+	input.info.title = "Document"
+	tracker_test_tick(&app, &input, start + 7000)
+	testing.expect(t, app.tracker.pending_count == 1)
+	testing.expect(t, app.tracker.current.persisted_id == 0,
+		"Do not reuse a row with an older queued final endpoint")
+	input.fail_update = false
+	tracker_test_tick(&app, &input, start + 8000)
+	last, result := db_last_activity(&app.db, TIMELINE_APPS)
+	defer delete(last.display_name)
+	testing.expect(t, result == .Ok && last.id == id && last.end_ms == start + 6000)
+}
+
+@(test)
+tracker_usage_insert_retries_without_state_transition :: proc(t: ^testing.T) {
+	input: Tracker_Test_Input
+	app, ok := tracker_test_app(&input)
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&app.db)
+	input.fail_insert = true
+	tracker_init(&app)
+	defer tracker_shutdown(&app)
+	start := input.now
+	testing.expect(t, app.tracker.usage_active && app.tracker.usage_id == 0)
+	testing.expect(t, app.tracker.usage_last_db_update == 0)
+	input.fail_insert = false
+	tracker_test_tick(&app, &input, start + 1000)
+	testing.expect(t, app.tracker.usage_id > 0 && app.tracker.usage_start_ms == start)
+	testing.expect(t, app.tracker.usage_last_db_update == start + 1000)
+	testing.expect(t, tracker_write_error(&app) == .Ok)
+}
+
+@(test)
+tracker_usage_transition_preserves_failed_writes :: proc(t: ^testing.T) {
+	input: Tracker_Test_Input
+	app, ok := tracker_test_app(&input)
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&app.db)
+	tracker_init(&app)
+	defer tracker_shutdown(&app)
+	start := input.now
+	tracker_test_tick(&app, &input, start + 5000)
+	input.fail_insert, input.fail_update = true, true
+	input.idle = 60_000
+	tracker_test_tick(&app, &input, start + 70_000)
+	testing.expect(t, app.tracker.pending_count == 2)
+	testing.expect(t, app.tracker.usage_kind == .Away && app.tracker.usage_active && app.tracker.usage_id == 0)
+	input.fail_insert, input.fail_update = false, false
+	tracker_test_tick(&app, &input, start + 71_000)
+	testing.expect(t, app.tracker.pending_count == 0 && app.tracker.usage_id > 0)
+	testing.expect(t, app.tracker.usage_start_ms == start + 10_000)
+	testing.expect(t, db_count_activities(&app.db) == 3)
+	testing.expect(t, tracker_write_error(&app) == .Ok)
+}
+
+@(test)
+tracker_shutdown_reports_failure_and_can_be_retried :: proc(t: ^testing.T) {
+	input: Tracker_Test_Input
+	app, ok := tracker_test_app(&input)
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&app.db)
+	tracker_init(&app)
+	input.now += 2000
+	input.fail_insert, input.fail_update = true, true
+	testing.expect(t, !tracker_shutdown(&app))
+	testing.expect(t, app.tracker.pending_count == 2)
+	testing.expect(t, !app.tracker.current.active && !app.tracker.usage_active)
+	testing.expect(t, !tracker_shutdown(&app) && app.tracker.pending_count == 2,
+		"Repeated shutdown attempts do not duplicate queued intervals")
+	input.fail_insert, input.fail_update = false, false
+	testing.expect(t, tracker_shutdown(&app))
+	testing.expect(t, app.tracker.pending_count == 0 && db_count_activities(&app.db) == 2)
+	last, result := db_last_activity(&app.db, TIMELINE_APPS)
+	defer delete(last.display_name)
+	testing.expect(t, result == .Ok && last.end_ms == input.now)
+}
+
+@(test)
+tracker_outage_queue_is_bounded_and_recovers :: proc(t: ^testing.T) {
+	input: Tracker_Test_Input
+	app, ok := tracker_test_app(&input)
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&app.db)
+	tracker_init(&app)
+	defer tracker_shutdown(&app)
+	start := input.now
+	input.fail_insert, input.fail_update = true, true
+	for i in 0 ..< TRACKER_PENDING_LIMIT + 10 {
+		input.info.title = "A" if i % 2 == 0 else "B"
+		tracker_test_tick(&app, &input, start + i64(i + 1) * 6000)
+	}
+	testing.expect(t, app.tracker.retry_paused && !app.tracker.enabled)
+	testing.expect(t, app.tracker.pending_count <= TRACKER_PENDING_LIMIT && app.tracker.pending_count > 0)
+	testing.expect(t, !app.tracker.current.active && !app.tracker.usage_active)
+	samples := input.samples
+	tracker_test_tick(&app, &input, input.now + 1000)
+	testing.expect(t, input.samples == samples, "A full queue pauses sampling instead of dropping writes")
+	input.fail_insert, input.fail_update = false, false
+	for _ in 0 ..< TRACKER_PENDING_LIMIT {
+		tracker_test_tick(&app, &input, input.now + 1000)
+		if app.tracker.pending_count == 0 { break }
+	}
+	testing.expect(t, app.tracker.pending_count == 0 && app.tracker.enabled && !app.tracker.retry_paused)
+	testing.expect(t, app.tracker.current.active && app.tracker.current.start_ms == input.now)
+	testing.expect(t, app_storage_status(&app) == "")
 }
