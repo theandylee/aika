@@ -80,19 +80,15 @@ idle threshold fires.
 
 - Bind `WTSRegisterSessionNotification` / `WTSUnRegisterSessionNotification`
   from `wtsapi32.dll`.
-- Register using the raylib window handle (`GetWindowHandle`), or create a
-  hidden message-only window.
+- Register using the main window handle (`ui.hwnd`).
 - Handle `WM_WTSSESSION_CHANGE`:
   - `WTS_SESSION_LOCK` → finish app activity, emit `SessionLocked`
   - `WTS_SESSION_UNLOCK` → close lock row, emit `Active`, restart app poll
 - Handle `WM_POWERBROADCAST`:
   - `PBT_APMSUSPEND` → emit `PowerOff`
   - `PBT_APMRESUMEAUTOMATIC` / `PBT_APMRESUMESUSPEND` → emit `Active`
-- The raylib main loop does not expose a WndProc. Options:
-  1. Subclass the raylib HWND with `SetWindowLongPtrW(GWLP_WNDPROC, ...)`.
-  2. Create a separate hidden `WNDCLASS` window solely for session/power
-     messages.
-  3. Poll `WTSQuerySessionInformation` / `OpenInputDesktop` (less reliable).
+- The WndProc now lives in `src/winui.odin` — add these messages to the
+  existing switch.
 - Extend `UsageKind` transitions in `tracker_tick` to accept external events
   instead of only `idle_ms`.
 - Trim application activities to the lock/suspend timestamp.
@@ -224,7 +220,7 @@ DocumentInfo :: struct {
 - Day/week/month totals per application, document, tag.
 - Search by app/title/date.
 - Export to CSV.
-- Chart view: reuse `TimelineChart`-like stacked bars, or draw with raylib.
+- Chart view: reuse the stacked-bar drawing from `src/ui.odin`.
 
 Keep it read-only initially; do not build an editor until tags are stable.
 
@@ -255,7 +251,7 @@ Improvements:
 ### 8. Packaging
 
 - Add a Windows icon and version resource (`rsrc` or `.rc`).
-- Ship `aika.exe`, `aika-cli.exe`, `raylib.dll`, `README.md`.
+- Ship `aika.exe`, `aika-cli.exe`, `README.md`.
 - Add a small installer or portable ZIP.
 - Add "Start with Windows" using the Run key or Task Scheduler.
 - Add crash log file (`aika.log`) with rotation.
@@ -266,7 +262,8 @@ Improvements:
 - Hover highlight for all bars, not just app bars.
 - Zoom/pan (currently auto-fit only).
 - Keyboard shortcuts: `T` today, arrows for days, `Space` pause.
-- DPI scaling: raylib handles scaling but text sizes are fixed.
+- DPI scaling: GDI text sizes are fixed pixels today; `GetDpiForWindow` +
+  font recreation (or `SystemParametersInfo`) is a likely future step.
 - High-DPI font sizes.
 - Empty-state hints.
 

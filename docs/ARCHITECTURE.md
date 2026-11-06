@@ -6,7 +6,7 @@ to `AGENTS.md`.
 ## Process model
 
 aika is a single-process, single-threaded Win32 GUI application built with Odin
-and raylib/raygui.
+and native Win32/GDI drawing (no windowing toolkit, no OpenGL).
 
 ```
 main()
@@ -179,38 +179,53 @@ The UI currently loads **2** and **3** only.
 
 ## UI
 
-`src/ui.odin` is immediate-mode raylib drawing. Font sizes and layout are
-multiplied by a `UI_S` scale factor (see `docs/DEVELOPMENT.md` → "UI scale,
-fonts, and buttons"). Header buttons use a custom `gui_button` helper;
-raygui is linked only because it ships with the Odin vendor package and is not
-otherwise used.
+The GUI is split across two files:
+
+- `src/winui.odin` — the native window layer: window class + `wnd_proc`, a 500 ms
+  `WM_TIMER`, a double-buffered memory DC (all painting happens offscreen and is
+  `BitBlt`-ed once), the filter EDIT control, mouse/keyboard hit-testing, and
+  small GDI helpers (`fill_rect`, `line_v`/`line_h`, `draw_string` with ClearType
+  text and ellipsis truncation).
+- `src/ui.odin` — the ManicTime-style Day view renderer: tab strip, toolbar
+  (prev/next/Today, tracking toggle, Day start / Day end / Duration boxes), a
+  full 24 h ruler, four lanes (Tags, Computer Usage, Applications, Documents),
+  the details list, the totals panel, tooltips, filter row and status bar.
+
+Layout constants (`TAB_H`, `TOOLBAR_H`, `LANE_*`, `LIST_*`, ...) live at the top
+of `src/ui.odin`; `compute_layout()` derives every rect from the client size, so
+the window resizes correctly. Repaints are on-demand: the timer invalidates
+every 500 ms (which also drives the 1 Hz tracker sampling inside
+`tracker_tick`), and mouse movement/hover invalidates too. Palette constants
+are `COLORREF` literals (`0x00BBGGRR`).
+
+Odin note: `wnd_proc` uses a non-default calling convention, which makes it
+contextless; it starts with `context = rt.default_context()`. All paint-time
+allocations (UTF-16 text conversions, row lists) use `context.temp_allocator`
+and are released by the `free_all` after each message in `main`.
 
 ### Timeline
 
-`draw_timeline()`:
+`draw_day()`:
 
-- Gets day bounds via `day_bounds_ms()`.
-- Gets an auto-fit view range via `compute_view_range()`:
-  - includes all activities, current activity, current usage, and now
-  - adds 15 minutes of padding
-  - enforces a minimum 2-hour window
-  - clamps to the selected day
-- Draws a ruler with an adaptive step:
-  - ≤ 2 h → 15 min
-  - ≤ 4 h → 30 min
-  - ≤ 8 h → 1 h
-  - ≤ 14 h → 2 h
-  - otherwise 3 h
-- Draws application bars at one fixed lane height.
-- Draws computer usage bars below.
-- Draws a red "now" line on today.
-- Shows a tooltip for the activity under the mouse.
+- Uses the full local day 00:00–24:00 as the fixed axis (ManicTime-style);
+  `x_for_ms()` maps a timestamp to a pixel position.
+- Draws one lane per timeline; lanes without tracking (Tags, Documents) render
+  as labeled empty boxes. The selected lane (click anywhere on it) gets the
+  orange ManicTime frame and drives the details list and totals panel.
+- Draws application bars (stored/exported group colors) and computer usage bars
+  (green = Active, orange = Away).
+- Draws the live current-activity overlay and the growing usage bar.
+- Draws a red "now" line when the selected date is today.
+- Shows a tooltip for the innermost bar under the mouse.
 
-### Summary
+### Details list and totals
 
-`draw_summary()` aggregates Activities from timeline 3 by `group_id`, clamps
-each interval to the day, and sums durations. It includes the unpersisted
-current activity. Top 10 apps are listed.
+`build_rows()` (temp-allocated) builds the row list for the selected lane,
+respects the filter string, and includes the unpersisted current activity.
+`draw_list()` renders Title / Start / End / Duration columns with vertical-wheel
+scrolling. `build_totals()` aggregates timeline activities by `group_id` for the
+selected lane, sorted by duration; `draw_totals()` renders the totals panel with
+color chips and a pinned `Total: h:mm:ss` line.
 
 ### Header and footer
 
@@ -245,4 +260,6 @@ timezone.
   SQLite is embedded, stable, and easy to query.
 - **One-way import instead of `.sdf` writes.** Writing SQL CE without its engine
   is not realistic.
-- **Odin + raylib.** Small native binary, immediate-mode UI, no .NET runtime.
+- **Odin + native Win32/GDI.** Small native binary, immediate-style painting, no
+  .NET runtime, and no OpenGL driver cost — a running window uses roughly 6 MB
+  of private memory.

@@ -417,7 +417,7 @@ SELECT ... FROM DeletedEntity WHERE DeletedAfterTimestamp > @lastTimestamp
 | Documents/URLs | plugin retrievers | no |
 | Tags/folders/stats | yes | no |
 | DB import | n/a | one-way JSON exporter/importer |
-| UI | WPF | raylib/raygui |
+| UI | WPF | native Win32/GDI (Odin) |
 | Process architecture | tracker + WPF client | one process |
 
 ---

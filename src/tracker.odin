@@ -1,7 +1,6 @@
 package main
 
 import "core:strings"
-import rl "vendor:raylib"
 
 UsageKind :: enum {
 	Active,
@@ -54,8 +53,6 @@ App :: struct {
 	activities:     []Activity,
 	loaded_date:    int,
 	last_load_ms:   i64,
-	font:           rl.Font,
-	default_font:   rl.Font,
 	db_path:        string,
 	show_help:      bool,
 }

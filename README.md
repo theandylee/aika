@@ -1,6 +1,6 @@
 # aika
 
-A small Windows activity tracker and timeline viewer built with **Odin + raylib**.
+A small Windows activity tracker and timeline viewer built with **Odin + native Win32/GDI**.
 
 It follows the same core design as ManicTime:
 
@@ -24,10 +24,13 @@ Working MVP:
 
 - Foreground-window tracking at 1 Hz
 - Idle/away detection (`GetLastInputInfo`, 10 min threshold)
+- ManicTime-style day view: tab strip, date navigation, full 24 h timeline with
+  Tags / Computer Usage / Applications / Documents lanes
 - Application timeline with live current-activity bar
 - Computer usage lane (Active / Away)
-- Auto-fit timeline with adaptive ruler ticks
-- Per-application daily summary
+- Details list (Title / Start / End / Duration) for the selected lane
+- Per-application totals with color chips and a grand total
+- Filter box wired to the lists
 - Date navigation
 - Pause/resume tracking
 - ManicTime `.sdf` → JSON → SQLite importer
@@ -47,7 +50,6 @@ Requirements:
 
 - Windows
 - Odin (tested with `dev-2025-11-nightly`)
-- The bundled Odin `vendor:raylib` (includes raygui)
 - `vendor/sqlite/sqlite3.lib` (already built in this repo)
 
 Run:
@@ -60,11 +62,14 @@ run.bat
 or:
 
 ```bat
-odin build src -out:build\aika.exe -define:RAYLIB_SHARED=true -subsystem:windows
-odin build src -out:build\aika-cli.exe -define:RAYLIB_SHARED=true
-copy vendor\raylib\raylib.dll build\
+odin build src -out:build\aika.exe -subsystem:windows
+odin build src -out:build\aika-cli.exe
 build\aika.exe
 ```
+
+The UI is drawn with plain GDI (`user32` + `gdi32`, both system libraries), so no
+windowing toolkit ships with the binary. A running GUI window uses about 6 MB
+of private memory.
 
 The app writes `data\aika.db` by default. Override with `--db`.
 
@@ -157,18 +162,18 @@ Like ManicTime:
 
 ```
 src/
-  main.odin       entry point, window loop, date navigation
+  main.odin       entry point, native message loop, date navigation
   tracker.odin    foreground polling, idle/away state, activity lifecycle
   win32.odin      Win32 bindings, time helpers, version info, group identity
   db.odin         SQLite schema/repository, ManicTime-compatible dates
   sqlite.odin     SQLite C bindings
-  ui.odin         scaled text/drawing helpers, custom header buttons, timeline, summary
+  winui.odin      native window: WndProc, timer, GDI helpers, double buffer, hit tests
+  ui.odin         ManicTime-style day view (lanes, ruler, list, totals, tooltip)
   importer.odin   JSON import command
 tools/
   export-manictime.ps1
 vendor/
   sqlite/         SQLite 3.54.1 amalgamation + static lib
-  raylib/         raylib.dll for runtime
 docs/
   ARCHITECTURE.md
   DATABASE.md
@@ -182,6 +187,7 @@ docs/
 | Document | Contents |
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | Entry point for coding agents: invariants, commands, checklist |
+| [`docs/ODIN-PITFALLS.md`](docs/ODIN-PITFALLS.md) | Odin compiler pitfalls hit during the native-UI rewrite (read before touching GDI/UI code) |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Tracker, persistence, and UI internals |
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Schema, date/group semantics, example queries |
 | [`docs/MANICTIME.md`](docs/MANICTIME.md) | Reverse-engineering notes from the original app |

@@ -35,7 +35,6 @@ Build outputs:
 |---|---|
 | `build\aika.exe` | GUI build, Windows subsystem (no console) |
 | `build\aika-cli.exe` | Console build for imports/scripting |
-| `build\raylib.dll` | Runtime raylib DLL (copied by build.bat) |
 
 Default database: `data\aika.db` (relative to the working directory).
 Override with `--db <path>`.
@@ -96,13 +95,18 @@ These have caused bugs before. Do not break them casually.
   - `4` = Documents
 
 ### Runtime / build
-- `raylib` must be linked **shared**, not static. The static `raylib.lib` defines
-  `CloseWindow`, which collides with `user32.lib`.
-  Build with `-define:RAYLIB_SHARED=true` and ship `raylib.dll`.
+- The GUI is **native Win32 + GDI** (`src/winui.odin`, `src/ui.odin`): a
+  registered window class, a double-buffered paint (memory DC -> BitBlt), a
+  500 ms `WM_TIMER` that drives the tracker, and an EDIT control for the
+  filter bar. No OpenGL driver is loaded; a full window costs ~6 MB private
+  (the raylib/OpenGL version cost ~146 MB).
 - SQLite is statically linked from `vendor/sqlite/sqlite3.lib`.
 - The GUI build uses `-subsystem:windows`; the CLI build does not.
 - Do not allocate the font codepoint array with `context.temp_allocator`; freeing
-  it at function return hangs. Use the default allocator.
+  it at function return hangs. Use the default allocator. (Legacy raylib note;
+  kept for history.)
+- Procedures with non-default calling conventions (WndProc) are contextless in
+  Odin; start them with `context = rt.default_context()`.
 
 ---
 
@@ -110,18 +114,18 @@ These have caused bugs before. Do not break them casually.
 
 ```
 src/
-  main.odin       Entry point, args, window loop, date load
+  main.odin       Entry point, args, message loop, date load
   tracker.odin    Focus polling, idle/away state, activity lifecycle
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
   db.odin         SQLite schema, repository, activity/group queries, import helpers
   sqlite.odin     SQLite C bindings
-  ui.odin         scaled UI drawing (UI_S), custom header buttons, timeline, summary, tooltips
+  winui.odin      Native window: WndProc, timer, GDI helpers, double buffer, hit tests
+  ui.odin         ManicTime-style Day view drawn with GDI (lanes, list, totals, tooltip)
   importer.odin   JSON import command
 tools/
   export-manictime.ps1   Read ManicTime.sdf and write JSON
 vendor/
   sqlite/         SQLite 3.54.1 amalgamation + MSVC-built static lib
-  raylib/         raylib.dll runtime copy
 docs/
   ARCHITECTURE.md
   DATABASE.md
@@ -162,7 +166,7 @@ The detailed version is in `docs/ARCHITECTURE.md`.
 | Change Win32 calls / add process info | `src/win32.odin` |
 | Change schema, queries, date encoding | `src/db.odin` |
 | Change SQLite binding | `src/sqlite.odin` |
-| Change timeline rendering / layout | `src/ui.odin` |
+| Change timeline rendering / layout | `src/ui.odin` (drawing), `src/winui.odin` (window, input, GDI helpers) |
 | Change importer format | `src/importer.odin`, `tools/export-manictime.ps1` |
 | Change startup / args / build behavior | `src/main.odin`, `build.bat` |
 
@@ -208,7 +212,8 @@ Expected: exit code 0, 202 activities for the sample file, 2745 groups.
 - Session lock and power-off events are not implemented; only idle `Away`.
 - Documents/URLs are not tracked.
 - Tags, folders, statistics, editing, tray icon, and autostart are missing.
-- The UI only shows the Applications and ComputerUsage lanes.
+- The UI draws all four lanes, but only ComputerUsage and Applications have
+  data; Tags and Documents render as empty placeholders.
 - Import history assumes the same Windows timezone.
 - The exporter depends on the installed ManicTime SQL CE assemblies.
 - `aika` is not binary-compatible with `.sdf`; it is schema/semantics-compatible
@@ -219,6 +224,7 @@ Expected: exit code 0, 202 activities for the sample file, 2745 groups.
 ## 9. Documentation index
 
 - `docs/ARCHITECTURE.md` — how tracking, persistence, and UI work in detail.
+- `docs/ODIN-PITFALLS.md` — compiler traps hit during the native-UI rewrite; read before touching `src/winui.odin` / `src/ui.odin`.
 - `docs/DATABASE.md` — schema, ManicTime date/key semantics, example queries.
 - `docs/MANICTIME.md` — reverse-engineering notes from the original ManicTime.
 - `docs/DEVELOPMENT.md` — toolchain, build, debugging, common failures.

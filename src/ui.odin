@@ -3,544 +3,827 @@ package main
 import "core:fmt"
 import "core:slice"
 import "core:strings"
-import rl "vendor:raylib"
+import "core:sys/windows"
 
-// Global UI scale: font sizes and layout spacing are multiplied by this.
-UI_S :: 1.4
+// ManicTime-style Day view, drawn with GDI into the winui backbuffer.
+// Light theme, full 24h axis, four timeline lanes (Tags / Computer Usage /
+// Applications / Documents), details list + totals panel below.
+//
+// Memory note: everything allocated during a paint uses context.temp_allocator
+// and is released by the free_all(context.temp_allocator) call after each
+// message in main; nothing is cached between frames.
 
-COL_BG :: rl.Color{17, 17, 21, 255}
-COL_PANEL :: rl.Color{23, 23, 29, 255}
-COL_PANEL_2 :: rl.Color{29, 29, 37, 255}
-COL_LINE :: rl.Color{48, 48, 60, 255}
-COL_TEXT :: rl.Color{228, 228, 235, 255}
-COL_DIM :: rl.Color{146, 146, 160, 255}
-COL_ACCENT :: rl.Color{110, 190, 255, 255}
-COL_GREEN :: rl.Color{76, 201, 135, 255}
-COL_ORANGE :: rl.Color{240, 160, 80, 255}
-COL_BTN :: rl.Color{37, 37, 44, 255}
-COL_BTN_HOVER :: rl.Color{45, 45, 56, 255}
-COL_BTN_PRESSED :: rl.Color{58, 58, 68, 255}
-COL_BTN_BORDER :: rl.Color{64, 64, 76, 255}
-COL_BTN_BORDER_HOVER :: rl.Color{106, 106, 122, 255}
-COL_BTN_TEXT :: rl.Color{205, 205, 214, 255}
+// --- Palette (COLORREF = 0x00BBGGRR; comments show rgb(R,G,B)) ---
 
-cstring_temp :: proc(s: string) -> cstring {
-	c, _ := strings.clone_to_cstring(s, context.temp_allocator)
-	return c
+C_BG          :: 0x00FAF7F5 // rgb(245,247,250)
+C_PANEL       :: 0x00FFFFFF
+C_BORDER      :: 0x00C0AF9C // rgb(156,175,192)
+C_BORDER_SOFT :: 0x00E2D8CD // rgb(205,216,226)
+C_LANE_BG     :: 0x00F4ECE2 // rgb(226,236,244)
+C_LANE_GRID   :: 0x00E4D8CB // rgb(203,216,228)
+C_LANE_TXT    :: 0x00746658 // rgb(88,102,116)
+C_TXT         :: 0x0028221E // rgb(30,34,40)
+C_DIM         :: 0x00908478 // rgb(120,132,144)
+C_ACCENT      :: 0x0030A0F0 // rgb(240,160,48) - selected lane, ManicTime orange
+C_GREEN       :: 0x0087C94C // rgb(76,201,135)
+C_ORANGE      :: 0x0050A0F0 // rgb(240,160,80)
+C_RED         :: 0x005A5ADE // rgb(222,90,90)
+C_TAB_BG      :: 0x00F5EFE8 // rgb(232,239,245)
+C_TAB_ACTIVE  :: 0x00FFFFFF
+C_BTN_FACE    :: 0x00FFFFFF
+C_BTN_BORDER  :: 0x00EAB47E // rgb(126,180,234)
+C_BTN_HOVER   :: 0x00FCE0E4 // rgb(228,240,252)
+C_HEAD_BG     :: 0x00F8F4EF // rgb(239,244,248)
+C_ROW_ALT     :: 0x00FCF9F6 // rgb(246,249,252)
+C_TIP_BG      :: 0x00E1FFFF // rgb(255,255,225)
+C_TIP_BORDER  :: 0x008C8278 // rgb(120,130,140)
+
+TAB_H     :: 26
+TOOLBAR_H :: 52
+RULER_H   :: 24
+LANE_GAP  :: 4
+LIST_HDR  :: 22
+LIST_ROW  :: 20
+FILTER_H  :: 30
+STATUS_H  :: 22
+SIDEBAR_W :: 320
+MARGIN    :: 8
+
+// --- Layout ---
+
+Layout :: struct {
+	w, h:          i32,
+	toolbar_y:     i32,
+	ruler_y:       i32,
+	chart_x:       i32,
+	chart_w:       i32,
+	lane_y:        i32,
+	lane_h:        i32,
+	lanes_bottom:  i32,
+	list_top:      i32,
+	list_bottom:   i32, // exclusive; header row sits at the top
+	sidebar_x:     i32,
+	sidebar_w:     i32,
+	filter_y:      i32,
+	filter_edit_x, filter_edit_y: i32,
+	filter_edit_w, filter_edit_h: i32,
+	status_y:      i32,
+	btn_prev:      windows.RECT,
+	btn_next:      windows.RECT,
+	btn_today:     windows.RECT,
+	btn_track:     windows.RECT,
+	day_boxes:     [3]windows.RECT,
 }
 
-// Font sizes passed to these helpers are authored sizes; UI_S is applied here
-// so every call site scales consistently.
-draw_text :: proc(font: rl.Font, text: string, x, y: f32, size: f32, color: rl.Color) {
-	rl.DrawTextEx(font, cstring_temp(text), {x, y}, size * UI_S, 0.3 * UI_S, color)
+compute_layout :: proc(w, h: i32) -> Layout {
+	lay: Layout
+	lay.w = w
+	lay.h = h
+	bottom_limit := h - FILTER_H - STATUS_H
+
+	lay.toolbar_y = TAB_H
+	lay.ruler_y = TAB_H + TOOLBAR_H
+	lay.chart_x = MARGIN
+	lay.chart_w = w - MARGIN * 2 - 1
+
+	// Lane heights: leave room for a ~120px list area, cap lanes at 96px.
+	lane_area := bottom_limit - (lay.ruler_y + RULER_H) - 120 - LIST_HDR - 3 * LANE_GAP
+	lay.lane_h = min(96, max(44, lane_area / 4))
+	lay.lane_y = lay.ruler_y + RULER_H
+	lay.lanes_bottom = lay.lane_y + 4 * lay.lane_h + 3 * LANE_GAP
+	lay.list_top = lay.lanes_bottom + 8
+	lay.list_bottom = bottom_limit
+	lay.sidebar_x = w - SIDEBAR_W - MARGIN - 1
+	lay.sidebar_w = SIDEBAR_W
+
+	lay.filter_y = bottom_limit
+	lay.filter_edit_x = 56
+	lay.filter_edit_y = bottom_limit + 4
+	lay.filter_edit_w = w - 56 - 16
+	lay.filter_edit_h = FILTER_H - 8
+	lay.status_y = h - STATUS_H
+
+	bh := i32(26)
+	by := lay.toolbar_y + 12
+	lay.btn_prev = windows.RECT{left = MARGIN, top = by, right = MARGIN + 26, bottom = by + bh}
+	lay.btn_next = windows.RECT{left = MARGIN + 30, top = by, right = MARGIN + 56, bottom = by + bh}
+	lay.btn_today = windows.RECT{left = MARGIN + 64, top = by, right = MARGIN + 132, bottom = by + bh}
+	lay.btn_track = windows.RECT{left = MARGIN + 140, top = by, right = MARGIN + 272, bottom = by + bh}
+
+	// Day start / day end / duration boxes anchored to the right.
+	bw := i32(108)
+	bh2 := i32(36)
+	by2 := lay.toolbar_y + 8
+	bx := w - MARGIN - bw
+	for i := 2; i >= 0; i -= 1 {
+		lay.day_boxes[i] = windows.RECT{left = bx, top = by2, right = bx + bw, bottom = by2 + bh2}
+		bx -= bw + 4
+	}
+	return lay
 }
 
-measure_text :: proc(font: rl.Font, text: string, size: f32) -> f32 {
-	return rl.MeasureTextEx(font, cstring_temp(text), size * UI_S, 0.3 * UI_S).x
+compute_tabs :: proc(i: i32) -> windows.RECT {
+	txs := [3]i32{2, 58, 148}
+	tws := [3]i32{54, 88, 92}
+	return windows.RECT{left = txs[i], top = 0, right = txs[i] + tws[i], bottom = TAB_H}
 }
 
-draw_text_right :: proc(font: rl.Font, text: string, right, y: f32, size: f32, color: rl.Color) {
-	draw_text(font, text, right - measure_text(font, text, size), y, size, color)
+tab_name :: proc(i: i32) -> string {
+	switch i {
+	case 1: return "Timesheet"
+	case 2: return "Statistics"
+	}
+	return "Day"
 }
 
-truncate_to_width :: proc(font: rl.Font, text: string, size, max_w: f32) -> string {
-	if measure_text(font, text, size) <= max_w {
-		return text
+lane_name :: proc(i: i32) -> string {
+	switch i {
+	case 0: return "Tags"
+	case 1: return "Computer Usage"
+	case 2: return "Applications"
+	case 3: return "Documents"
 	}
-	if max_w <= 12 * UI_S {
-		return ""
-	}
-	ellipsis := "..."
-	n := len(text)
-	for n > 0 {
-		cand := fmt.tprintf("%s%s", text[:n], ellipsis)
-		if measure_text(font, cand, size) <= max_w {
-			return cand
-		}
-		n -= 1
-	}
-	return ellipsis
+	return ""
 }
 
-color_from_argb :: proc(c: u32) -> rl.Color {
-	a := u8((c >> 24) & 0xFF)
-	if a == 0 {
-		a = 255
+// 0 when the lane has no data yet (Tags / Documents).
+lane_timeline :: proc(i: i32) -> i64 {
+	switch i {
+	case 1: return TIMELINE_COMPUTER
+	case 2: return TIMELINE_APPS
 	}
-	return {u8((c >> 16) & 0xFF), u8((c >> 8) & 0xFF), u8(c & 0xFF), a}
+	return 0
 }
 
-activity_color :: proc(a: Activity) -> rl.Color {
-	c := a.color
-	if c == 0 {
-		c = GROUP_COLORS[int(a.group_id) % len(GROUP_COLORS)]
-	}
-	col := color_from_argb(c)
-	col.a = 235
-	return col
+// --- Formatting ---
+
+fmt_hm :: proc(ms: i64) -> string {
+	st := unix_ms_to_local(max(0, ms))
+	return fmt.tprintf("%d:%02d", st.hour, st.minute)
 }
 
-format_duration :: proc(ms: i64) -> string {
-	v := ms
-	if v < 0 {
-		v = 0
-	}
-	mins := v / 60000
-	if mins < 1 {
-		return "<1m"
-	}
-	if mins < 60 {
-		return fmt.tprintf("%dm", mins)
-	}
-	h := mins / 60
-	m := mins % 60
-	if m == 0 {
-		return fmt.tprintf("%dh", h)
-	}
-	return fmt.tprintf("%dh %02dm", h, m)
-}
-
-format_clock :: proc(ms: i64) -> string {
+fmt_clock_hm :: proc(ms: i64) -> string {
 	st := unix_ms_to_local(ms)
 	return fmt.tprintf("%02d:%02d", st.hour, st.minute)
 }
 
-time_to_x :: proc(ms, start_ms, end_ms: i64, x, w: f32) -> f32 {
-	if end_ms <= start_ms {
-		return x
+fmt_span_hm :: proc(ms: i64) -> string {
+	mins := max(0, ms) / 60000
+	return fmt.tprintf("%d:%02d", mins / 60, mins % 60)
+}
+
+fmt_hms :: proc(ms: i64) -> string {
+	v := max(0, ms)
+	return fmt.tprintf("%d:%02d:%02d", v / 3_600_000, (v / 60_000) % 60, (v / 1000) % 60)
+}
+
+// --- Top-level frame ---
+
+draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	fill_rect(dc, 0, 0, w, h, C_BG)
+	switch ui.tab {
+	case 0:
+		draw_day(app, dc, w, h)
+	case 1:
+		draw_placeholder(dc, w, h, "Timesheet", "Timesheets are not implemented yet (see docs/ROADMAP.md).")
+	case 2:
+		draw_placeholder(dc, w, h, "Statistics", "Statistics are not implemented yet (see docs/ROADMAP.md).")
 	}
-	frac := f32(ms - start_ms) / f32(end_ms - start_ms)
-	if frac < 0 { frac = 0 }
-	if frac > 1 { frac = 1 }
-	return x + frac * w
+	draw_filter_row(dc, w, h)
+	draw_status_bar(app, dc, w, h)
+	if ui.tab == 0 {
+		draw_tooltip(app, dc, w, h)
+	}
 }
 
-rect_contains :: proc(r: rl.Rectangle, p: rl.Vector2) -> bool {
-	return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height
+draw_placeholder :: proc(dc: windows.HDC, w, h: i32, title, note: string) {
+	draw_tabs(dc)
+	draw_toolbar_background_rect(dc, 0, TAB_H, w, h - TAB_H - FILTER_H - STATUS_H)
+	draw_string(dc, title, w / 2 - 120, h / 2 - 60, ui.font_title, C_TXT)
+	draw_string(dc, note, w / 2 - 190, h / 2, ui.font_normal, C_DIM)
 }
 
-Agg :: struct {
+// Fills the main content area between the tabs and the filter row.
+draw_toolbar_background_rect :: proc(dc: windows.HDC, x, y, w, h: i32) {
+	fill_rect(dc, x, y, w, h, C_PANEL)
+}
+
+draw_tabs :: proc(dc: windows.HDC) {
+	w := ui.mem_w
+	fill_rect(dc, 0, 0, w, TAB_H, C_TAB_BG)
+	line_h(dc, 0, TAB_H - 1, w, C_BORDER_SOFT)
+	for i := i32(0); i < 3; i += 1 {
+		t := compute_tabs(i32(i))
+		active := ui.tab == i
+		bg: windows.COLORREF = C_TAB_ACTIVE if active else C_TAB_BG
+		if !active && ui.mouse_valid && rect_hit(t, ui.mouse.x, ui.mouse.y) {
+			bg = rgb(244, 248, 252)
+		}		fill_rect(dc, t.left + 1, t.top, t.right - t.left - 1, TAB_H, bg)
+		if active {
+			line_h(dc, t.left + 1, t.top, t.right - t.left - 2, C_ACCENT)
+		}
+		fill_frame(dc, t.left, t.top + 1, t.right - t.left, TAB_H - 1, C_BORDER_SOFT)
+		tw := text_pixel_width(tab_name(i32(i)), ui.font_normal)
+		draw_string(dc, tab_name(i32(i)),
+			t.left + (t.right - t.left - tw) / 2, t.top + 6,
+			ui.font_normal, C_TXT if active else C_DIM)
+	}
+}
+
+// --- Toolbar (date navigation + day start/end/duration) ---
+
+draw_toolbar :: proc(app: ^App, dc: windows.HDC, lay: Layout) {
+	draw_toolbar_background_rect(dc, 0, lay.toolbar_y, lay.w, TOOLBAR_H)
+	draw_button(dc, lay.btn_prev, "<", HIT_BTN_PREV)
+	draw_button(dc, lay.btn_next, ">", HIT_BTN_NEXT)
+	draw_button(dc, lay.btn_today, "Today", HIT_BTN_TODAY)
+
+	label := "Tracking: ON" if app.tracker.enabled else "Tracking: OFF"
+	draw_button(dc, lay.btn_track, label, HIT_BTN_TRACK)
+
+	date_txt := date_label(app.date)
+	dx := lay.btn_track.right + 12
+	draw_string(dc, date_txt, dx, lay.toolbar_y + 18, ui.font_normal, C_DIM,
+		lay.day_boxes[0].left - 12 - dx)
+
+	// Day start / day end / duration, ManicTime-style.
+	day_start, day_end := day_bounds_ms(app.date)
+	min_ms, max_ms := day_span(app, day_start, day_end)
+	captions := [3]string{"Day start", "Day end", "Duration"}
+	values := [3]string{fmt_hm(min_ms), fmt_hm(max_ms), fmt_span_hm(max_ms - min_ms)}
+	if max_ms <= min_ms {
+		values = [3]string{"-:--", "-:--", "0:00"}
+	}
+	for i := 0; i < 3; i += 1 {
+		b := lay.day_boxes[i]
+		bw := b.right - b.left
+		bhh := b.bottom - b.top
+		fill_rect(dc, b.left + 1, b.top + 1, bw - 2, bhh - 2, C_PANEL)
+		fill_frame(dc, b.left, b.top, bw, bhh, C_BTN_BORDER)
+		draw_string(dc, captions[i], b.left + 8, b.top + 3, ui.font_small, C_DIM)
+		draw_string(dc, values[i], b.left + 8, b.top + 18, ui.font_bold, C_TXT)
+	}
+}
+
+// Day span across both tracked lanes, clamped to the selected date.
+day_span :: proc(app: ^App, day_start, day_end: i64) -> (min_ms, max_ms: i64) {
+	min_ms = day_end
+	max_ms = day_start
+	for a in app.activities {
+		if a.timeline_id != TIMELINE_COMPUTER && a.timeline_id != TIMELINE_APPS {
+			continue
+		}
+		if a.start_ms < min_ms && a.end_ms > day_start { min_ms = max(a.start_ms, day_start) }
+		if a.end_ms > max_ms && a.start_ms < day_end { max_ms = min(a.end_ms, day_end) }
+	}
+	if min_ms > max_ms {
+		min_ms, max_ms = day_end, day_start
+	}
+	return
+}
+
+draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: int) {
+	w := r.right - r.left
+	h := r.bottom - r.top
+	bg: windows.COLORREF = C_BTN_FACE
+	if ui.mouse_valid && rect_hit(r, ui.mouse.x, ui.mouse.y) {
+		bg = C_BTN_HOVER
+	}
+	fill_rect(dc, r.left + 1, r.top + 1, w - 2, h - 2, bg)
+	fill_frame(dc, r.left, r.top, w, h, C_BTN_BORDER)
+	tw := text_pixel_width(label, ui.font_normal)
+	draw_string(dc, label, r.left + (w - tw) / 2, r.top + (h - 15) / 2, ui.font_normal, C_TXT)
+}
+
+// --- Day view ---
+
+draw_day :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	lay := compute_layout(w, h)
+	draw_tabs(dc)
+	draw_toolbar(app, dc, lay)
+
+	day_start, day_end := day_bounds_ms(app.date)
+
+	// Ruler
+	draw_toolbar_background_rect(dc, lay.chart_x, lay.ruler_y, lay.chart_w, RULER_H)
+	hour_w := lay.chart_w / 24
+	label_every_h := i32(1)
+	if hour_w < 34 {
+		label_every_h = 2
+	}
+	for hour := i32(0); hour <= 24; hour += 1 {
+		x := lay.chart_x + hour * hour_w
+		if hour < 24 {
+			line_v(dc, x, lay.ruler_y, RULER_H + 4 * (lay.lane_h + LANE_GAP), C_BORDER_SOFT)
+		}
+		if hour % label_every_h == 0 || hour == 24 {
+			s := fmt.tprintf("%02d", hour % 24)
+			if hour == 24 { s = "24" }
+			draw_string(dc, s, x - 7, lay.ruler_y + 6, ui.font_small, C_DIM)
+		}
+	}
+
+	// Lanes
+	for i := 0; i < 4; i += 1 {
+		ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
+		draw_lane(app, dc, lay, i32(i), lay.chart_x, ly, lay.chart_w, lay.lane_h, day_start, day_end)
+	}
+
+	// Now marker (today only)
+	if app.date == today_date_int() {
+		nx := x_for_ms(now_ms(), day_start, day_end, lay.chart_x, lay.chart_w)
+		line_v(dc, nx, lay.ruler_y, lay.lanes_bottom - lay.ruler_y, C_RED)
+	}
+
+	// Details list + totals
+	draw_list(app, dc, lay, day_start, day_end)
+	draw_totals(app, dc, lay, day_start, day_end)
+}
+
+// fraction of the day, 0..1
+day_frac :: proc(ms, day_start, day_end: i64) -> f64 {
+	if day_end <= day_start { return 0 }
+	f := f64(ms - day_start) / f64(day_end - day_start)
+	return min(1.0, max(0.0, f))
+}
+
+x_for_ms :: proc(ms, day_start, day_end: i64, x, w: i32) -> i32 {
+	return x + i32(day_frac(ms, day_start, day_end) * f64(w))
+}
+
+argb_to_colorref :: proc(c: u32) -> windows.COLORREF {
+	if c == 0 { return 0 }
+	return rgb(i32((c >> 16) & 0xFF), i32((c >> 8) & 0xFF), i32(c & 0xFF))
+}
+
+activity_colorref :: proc(a: Activity) -> windows.COLORREF {
+	c := a.color
+	if c == 0 {
+		c = GROUP_COLORS[int(a.group_id) % len(GROUP_COLORS)]
+	}
+	return argb_to_colorref(c)
+}
+
+draw_lane :: proc(app: ^App, dc: windows.HDC, lay: Layout, idx, x, y, w, h: i32, day_start, day_end: i64) {
+	fill_rect(dc, x, y, w, h, C_LANE_BG)
+	for hour := i32(0); hour < 24; hour += 1 {
+		line_v(dc, x + hour * (w / 24), y, h, C_LANE_GRID)
+	}
+	draw_string(dc, lane_name(idx), x + 10, y + h / 2 - 9, ui.font_normal,
+		C_DIM if ui.lane == idx else C_LANE_TXT)
+
+	tl := lane_timeline(idx)
+	if tl != 0 {
+		draw_lane_bars(app, dc, idx, tl, x, y, w, h, day_start, day_end)
+	}
+
+	border := windows.COLORREF(C_BORDER)
+	if ui.lane == idx {
+		border = C_ACCENT
+		border_w := i32(2)
+		fill_rect(dc, x, y, w, border_w, C_ACCENT)
+		fill_rect(dc, x, y + h - border_w, w, border_w, C_ACCENT)
+		fill_rect(dc, x, y, border_w, h, C_ACCENT)
+		fill_rect(dc, x + w - border_w, y, border_w, h, C_ACCENT)
+	}
+	fill_frame(dc, x, y, w, h, border)
+}
+
+bar_rect_for_lane :: proc(idx: i32, x, y, w, h: i32) -> windows.RECT {
+	bh := h * 62 / 100
+	by := y + (h - bh) / 2
+	return windows.RECT{left = x, top = by, right = x + w, bottom = by + bh}
+}
+
+draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y, w, h: i32, day_start, day_end: i64) {
+	br := bar_rect_for_lane(lane_idx, x, y, w, h)
+	bar_h := br.bottom - br.top
+	bar_y := br.top
+
+	for a in app.activities {
+		if a.timeline_id != tl {
+			continue
+		}
+		s := max(a.start_ms, day_start)
+		e := min(a.end_ms, day_end)
+		if e <= s {
+			continue
+		}
+		x1 := x_for_ms(s, day_start, day_end, x, w)
+		x2 := x_for_ms(e, day_start, day_end, x, w)
+		bw := max(1, x2 - x1)
+		color := activity_colorref(a)
+		if tl == TIMELINE_COMPUTER && (a.group_id == 1 || a.group_name == "Active") {
+			color = C_GREEN
+		}
+		fill_rect(dc, x1, bar_y, bw, bar_h, color)
+	}
+
+	// Current (possibly unpersisted) activity grows live.
+	if tl == TIMELINE_APPS && app.tracker.current.active &&
+	   date_int_from_unix_ms(app.tracker.current.start_ms) == app.date {
+		c := &app.tracker.current
+		s := max(c.start_ms, day_start)
+		e := min(now_ms(), day_end)
+		if e > s {
+			x1 := x_for_ms(s, day_start, day_end, x, w)
+			x2 := x_for_ms(e, day_start, day_end, x, w)
+			bw := max(1, x2 - x1)
+			color := activity_colorref(Activity{group_id = c.group_id, color = c.group_color})
+			fill_rect(dc, x1, bar_y, bw, bar_h, color)
+			fill_frame(dc, x1, bar_y, bw, bar_h, rgb(255, 255, 255))
+		}
+	}
+	if tl == TIMELINE_COMPUTER && app.tracker.usage_id > 0 &&
+	   date_int_from_unix_ms(app.tracker.usage_start_ms) == app.date {
+		s := max(app.tracker.usage_start_ms, day_start)
+		e := min(now_ms(), day_end)
+		if e > s {
+			x1 := x_for_ms(s, day_start, day_end, x, w)
+			x2 := x_for_ms(e, day_start, day_end, x, w)
+			bw := max(1, x2 - x1)
+			color: windows.COLORREF = C_GREEN if app.tracker.usage_kind == .Active else C_ORANGE
+			fill_rect(dc, x1, bar_y, bw, bar_h, color)
+			fill_frame(dc, x1, bar_y, bw, bar_h, rgb(255, 255, 255))
+		}
+	}
+}
+
+// --- Details list (bottom left) ---
+
+ListRow :: struct {
+	group_id:   i64,
+	name:       string, // points into activity data or temp storage
+	start_ms:   i64,
+	end_ms:     i64,
+	color:      u32,
+	is_current: bool,
+}
+
+TotRow :: struct {
 	group_id: i64,
 	name:     string,
 	color:    u32,
 	ms:       i64,
 }
 
-compute_view_range :: proc(app: ^App) -> (view_start, view_end: i64) {
-	day_start, day_end := day_bounds_ms(app.date)
-	min_ms := i64(1 << 62)
-	max_ms := i64(-1 << 62)
-
-	include :: proc(min_ms, max_ms: ^i64, s, e, clamp_s, clamp_e: i64) {
-		if e <= clamp_s || s >= clamp_e {
-			return
-		}
-		if s < min_ms^ { min_ms^ = s }
-		if e > max_ms^ { max_ms^ = e }
+filter_matches :: proc(name: string) -> bool {
+	if len(ui.filter) == 0 {
+		return true
 	}
+	l := strings.to_lower(name)
+	defer delete(l)
+	return strings.contains(l, ui.filter)
+}
 
+// Builds the row list for the selected lane. Allocated with the temp
+// allocator: released by the post-message free_all in main.
+build_rows :: proc(app: ^App, day_start, day_end: i64) -> []ListRow {
+	tl := lane_timeline(i32(ui.lane))
+	if tl == 0 {
+		return nil
+	}
+	rows := make([dynamic]ListRow, 0, 64, context.temp_allocator)
 	for a in app.activities {
-		include(&min_ms, &max_ms, a.start_ms, a.end_ms, day_start, day_end)
+		if a.timeline_id != tl {
+			continue
+		}
+		s := max(a.start_ms, day_start)
+		e := min(a.end_ms, day_end)
+		if e <= s {
+			continue
+		}
+		name := a.display_name
+		if tl == TIMELINE_COMPUTER && len(a.group_name) > 0 {
+			name = a.group_name
+		}
+		if !filter_matches(name) {
+			continue
+		}
+		append(&rows, ListRow{
+			group_id = a.group_id,
+			name     = name,
+			start_ms = a.start_ms,
+			end_ms   = a.end_ms,
+			color    = a.color,
+		})
 	}
 	c := &app.tracker.current
-	if c.active && date_int_from_unix_ms(c.start_ms) == app.date {
-		include(&min_ms, &max_ms, c.start_ms, now_ms(), day_start, day_end)
+	if tl == TIMELINE_APPS && c.active && c.persisted_id == 0 &&
+	   date_int_from_unix_ms(c.start_ms) == app.date {
+		s := max(c.start_ms, day_start)
+		e := min(now_ms(), day_end)
+		if e > s && filter_matches(c.title) {
+			append(&rows, ListRow{
+				group_id   = c.group_id,
+				name       = c.title,
+				start_ms   = c.start_ms,
+				end_ms     = e,
+				color      = c.group_color,
+				is_current = true,
+			})
+		}
 	}
-	if app.tracker.usage_id > 0 && date_int_from_unix_ms(app.tracker.usage_start_ms) == app.date {
-		include(&min_ms, &max_ms, app.tracker.usage_start_ms, now_ms(), day_start, day_end)
-	}
-	now := now_ms()
-	if app.date == today_date_int() && now >= day_start && now <= day_end {
-		include(&min_ms, &max_ms, now - 60_000, now + 60_000, day_start, day_end)
-	}
+	return rows[:]
+}
 
-	if min_ms > max_ms {
-		view_start = day_start + 8 * 3_600_000
-		view_end = day_start + 18 * 3_600_000
+draw_list :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i64) {
+	x := lay.chart_x
+	w := lay.sidebar_x - lay.chart_x - 8
+
+	fill_rect(dc, x, lay.list_top, w, lay.list_bottom - lay.list_top, C_PANEL)
+
+	// Header
+	fill_rect(dc, x, lay.list_top, w, LIST_HDR, C_HEAD_BG)
+	fill_frame(dc, x, lay.list_top, w, LIST_HDR, C_BORDER_SOFT)
+	col_start := x + w - 64 // duration column left edge
+	col_end := x + w - 128
+	col_dur := x + w - 186
+	draw_string(dc, "Title", x + 8, lay.list_top + 4, ui.font_normal, C_TXT, col_dur - x - 16)
+	draw_string(dc, "Start", col_dur + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
+	draw_string(dc, "End", col_end + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
+	draw_string(dc, "Duration", col_start + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
+
+	tl := lane_timeline(i32(ui.lane))
+	if tl == 0 {
+		msg := "No tags recorded yet." if ui.lane == 0 else "Documents are not tracked yet."
+		draw_string(dc, msg, x + 8, lay.list_top + LIST_HDR + 8, ui.font_normal, C_DIM)
 		return
 	}
 
-	pad := i64(15 * 60_000)
-	view_start = min_ms - pad
-	view_end = max_ms + pad
-	if view_end - view_start < 2 * 3_600_000 {
-		center := (view_start + view_end) / 2
-		view_start = center - 3_600_000
-		view_end = center + 3_600_000
-	}
-	if view_start < day_start { view_start = day_start }
-	if view_end > day_end { view_end = day_end }
-	return
-}
+	rows := build_rows(app, day_start, day_end)
 
-draw_timeline :: proc(app: ^App, bounds: rl.Rectangle) {
-	font := app.font
-	start_ms, end_ms := day_bounds_ms(app.date)
-	view_start, view_end := compute_view_range(app)
-	now := now_ms()
+	rows_view_h := lay.list_bottom - lay.list_top - LIST_HDR
+	visible := rows_view_h / LIST_ROW
+	max_scroll := max(0, i32(len(rows)) * LIST_ROW - rows_view_h)
+	ui.list_scroll = clamp_scroll(ui.list_scroll, max_scroll)
+	skip := ui.list_scroll / LIST_ROW
 
-	rl.DrawRectangleRec(bounds, COL_PANEL)
-	rl.DrawRectangleLinesEx(bounds, 1, COL_LINE)
-
-	draw_text(font, "Activity timeline", bounds.x + 16 * UI_S, bounds.y + 12 * UI_S, 22, COL_TEXT)
-	draw_text(font, date_label(app.date), bounds.x + 190 * UI_S, bounds.y + 16 * UI_S, 16, COL_DIM)
-
-	gutter: f32 = 96 * UI_S
-	chart_x := bounds.x + gutter
-	chart_w := bounds.width - gutter - 18 * UI_S
-	ruler_y := bounds.y + 58 * UI_S
-	chart_bottom := bounds.y + bounds.height - 18 * UI_S
-
-	apps_y := ruler_y + 34 * UI_S
-	apps_h: f32 = 300 * UI_S
-	if bounds.height < 450 * UI_S {
-		apps_h = bounds.height * 0.55
-	}
-	usage_y := apps_y + 34 * UI_S + apps_h
-	usage_h: f32 = 54 * UI_S
-	if usage_y + usage_h > chart_bottom {
-		usage_h = max(28 * UI_S, chart_bottom - usage_y)
+	if len(rows) == 0 {
+		draw_string(dc, "No activity recorded for this day.", x + 8, lay.list_top + LIST_HDR + 8, ui.font_normal, C_DIM)
+		return
 	}
 
-	// Ruler and grid (adaptive to the visible range)
-	span_h := f32(view_end - view_start) / 3_600_000.0
-	step_min: i64 = 180
-	if span_h <= 2.0 {
-		step_min = 15
-	} else if span_h <= 4.0 {
-		step_min = 30
-	} else if span_h <= 8.0 {
-		step_min = 60
-	} else if span_h <= 14.0 {
-		step_min = 120
-	}
-	step_ms := step_min * 60_000
-	tick := ((view_start + step_ms - 1) / step_ms) * step_ms
-	for tick <= view_end {
-		x := time_to_x(tick, view_start, view_end, chart_x, chart_w)
-		rl.DrawLineEx({x, ruler_y}, {x, chart_bottom}, 1, COL_LINE)
-		label := format_clock(tick)
-		label_w := measure_text(font, label, 13)
-		draw_text(font, label, x - label_w / 2, ruler_y - 20 * UI_S, 13, COL_DIM)
-		tick += step_ms
-	}
-
-	// Lane backgrounds
-	rl.DrawRectangleRec({chart_x, apps_y, chart_w, apps_h}, {20, 20, 26, 255})
-	rl.DrawRectangleRec({chart_x, usage_y, chart_w, usage_h}, {20, 20, 26, 255})
-	rl.DrawRectangleLinesEx({chart_x, apps_y, chart_w, apps_h}, 1, {38, 38, 48, 255})
-	rl.DrawRectangleLinesEx({chart_x, usage_y, chart_w, usage_h}, 1, {38, 38, 48, 255})
-
-	draw_text(font, "Applications", bounds.x + 14 * UI_S, apps_y + 8 * UI_S, 16, COL_DIM)
-	draw_text(font, "Computer usage", bounds.x + 14 * UI_S, usage_y + 16 * UI_S, 16, COL_DIM)
-
-	hovered: ^Activity = nil
-	mouse := rl.GetMousePosition()
-
-	// Application bars
-	bar_y := apps_y + 10 * UI_S
-	bar_h: f32 = 30 * UI_S
-	for i in 0 ..< len(app.activities) {
-		a := &app.activities[i]
-		if a.timeline_id != TIMELINE_APPS {
-			continue
-		}
-		s := max(a.start_ms, start_ms)
-		e := min(a.end_ms, end_ms)
-		if e <= s {
-			continue
-		}
-		x1 := time_to_x(s, view_start, view_end, chart_x, chart_w)
-		x2 := time_to_x(e, view_start, view_end, chart_x, chart_w)
-		w := max(1.5, x2 - x1 - 1)
-		col := activity_color(a^)
-		rl.DrawRectangleRec({x1, bar_y, w, bar_h}, col)
-		rl.DrawRectangleLinesEx({x1, bar_y, w, bar_h}, 1, {0, 0, 0, 120})
-
-		if rect_contains({x1, bar_y, w, bar_h}, mouse) {
-			hovered = a
-		}
-	}
-
-	// Current application overlay (grows in real time)
-	if app.tracker.current.active && date_int_from_unix_ms(app.tracker.current.start_ms) == app.date {
-		c := &app.tracker.current
-		s := max(c.start_ms, start_ms)
-		e := min(now, end_ms)
-		if e > s {
-			x1 := time_to_x(s, view_start, view_end, chart_x, chart_w)
-			x2 := time_to_x(e, view_start, view_end, chart_x, chart_w)
-			w := max(1.5, x2 - x1 - 1)
-			col := color_from_argb(c.group_color)
-			col.a = 255
-			rl.DrawRectangleRec({x1, bar_y, w, bar_h}, col)
-			rl.DrawRectangleLinesEx({x1, bar_y, w, bar_h}, 1.5, {255, 255, 255, 190})
-		}
-	}
-
-	// Computer usage bars
-	u_y := usage_y + 12 * UI_S
-	u_h: f32 = 28 * UI_S
-	for i in 0 ..< len(app.activities) {
-		a := &app.activities[i]
-		if a.timeline_id != TIMELINE_COMPUTER {
-			continue
-		}
-		s := max(a.start_ms, start_ms)
-		e := min(a.end_ms, end_ms)
-		if e <= s {
-			continue
-		}
-		x1 := time_to_x(s, view_start, view_end, chart_x, chart_w)
-		x2 := time_to_x(e, view_start, view_end, chart_x, chart_w)
-		w := max(1.5, x2 - x1 - 1)
-		col := activity_color(a^)
-		if a.group_id == 1 || a.group_name == "Active" {
-			col = {34, 70, 56, 255}
-		}
-		rl.DrawRectangleRec({x1, u_y, w, u_h}, col)
-		rl.DrawRectangleLinesEx({x1, u_y, w, u_h}, 1, {0, 0, 0, 100})
-	}
-
-	if app.tracker.usage_id > 0 && date_int_from_unix_ms(app.tracker.usage_start_ms) == app.date {
-		s := max(app.tracker.usage_start_ms, start_ms)
-		e := min(now, end_ms)
-		if e > s {
-			x1 := time_to_x(s, view_start, view_end, chart_x, chart_w)
-			x2 := time_to_x(e, view_start, view_end, chart_x, chart_w)
-			w := max(1.5, x2 - x1 - 1)
-			col := COL_GREEN if app.tracker.usage_kind == .Active else COL_ORANGE
-			col.a = 235
-			rl.DrawRectangleRec({x1, u_y, w, u_h}, col)
-			rl.DrawRectangleLinesEx({x1, u_y, w, u_h}, 1, {255, 255, 255, 120})
-		}
-	}
-
-	// Now line
-	if app.date == today_date_int() {
-		x := time_to_x(now, view_start, view_end, chart_x, chart_w)
-		rl.DrawLineEx({x, ruler_y - 8 * UI_S}, {x, chart_bottom}, 1.5 * UI_S, {255, 90, 90, 220})
-		draw_text(font, "now", x + 5 * UI_S, ruler_y - 20 * UI_S, 12, {255, 130, 130, 255})
-	}
-
-	// Tooltip
-	if hovered != nil {
-		a := hovered
-		lines := []string{
-			a.group_name,
-			truncate_to_width(font, a.display_name, 15, 420 * UI_S),
-			fmt.tprintf("%s – %s  (%s)", format_clock(a.start_ms), format_clock(a.end_ms), format_duration(a.end_ms - a.start_ms)),
-		}
-		max_w: f32 = 0
-		for line in lines {
-			max_w = max(max_w, measure_text(font, line, 15))
-		}
-		tip_w := max_w + 20 * UI_S
-		tip_h: f32 = 72 * UI_S
-		tx := mouse.x + 14 * UI_S
-		ty := mouse.y + 14 * UI_S
-		if tx + tip_w > f32(rl.GetScreenWidth()) - 8 {
-			tx = mouse.x - tip_w - 14 * UI_S
-		}
-		if ty + tip_h > f32(rl.GetScreenHeight()) - 8 {
-			ty = mouse.y - tip_h - 14 * UI_S
-		}
-		rl.DrawRectangleRec({tx, ty, tip_w, tip_h}, {14, 14, 18, 245})
-		rl.DrawRectangleLinesEx({tx, ty, tip_w, tip_h}, 1, COL_LINE)
-		draw_text(font, lines[0], tx + 10 * UI_S, ty + 8 * UI_S, 15, COL_ACCENT)
-		draw_text(font, lines[1], tx + 10 * UI_S, ty + 28 * UI_S, 15, COL_TEXT)
-		draw_text(font, lines[2], tx + 10 * UI_S, ty + 48 * UI_S, 13, COL_DIM)
+	n_rows := i32(len(rows))
+	for i := skip; i < n_rows && i < skip + visible; i += 1 {
+		row := rows[i]
+		ry := lay.list_top + LIST_HDR + i32(i - skip) * LIST_ROW
+		fill_rect(dc, x, ry, w, LIST_ROW, C_ROW_ALT if (i - skip) % 2 == 1 else C_PANEL)
+		color := activity_colorref(Activity{group_id = row.group_id, color = row.color})
+		fill_rect(dc, x + 2, ry + 4, 4, LIST_ROW - 8, color)
+		draw_string(dc, row.name, x + 10, ry + 3, ui.font_normal, C_TXT, col_dur - x - 18)
+		draw_string(dc, fmt_clock_hm(row.start_ms), col_dur + 4, ry + 3, ui.font_normal, C_DIM, 60)
+		draw_string(dc, fmt_clock_hm(row.end_ms), col_end + 4, ry + 3, ui.font_normal, C_DIM, 60)
+		draw_string(dc, fmt_span_hm(row.end_ms - row.start_ms), col_start + 4, ry + 3, ui.font_normal, C_DIM, 60)
 	}
 }
 
-draw_summary :: proc(app: ^App, bounds: rl.Rectangle) {
-	font := app.font
-	start_ms, end_ms := day_bounds_ms(app.date)
+clamp_scroll :: proc(scroll, max_scroll: i32) -> i32 {
+	return clamp(scroll, 0, max(scroll, 0))
+}
 
-	rl.DrawRectangleRec(bounds, COL_PANEL)
-	rl.DrawRectangleLinesEx(bounds, 1, COL_LINE)
+// --- Totals panel (bottom right) ---
 
-	draw_text(font, "Summary", bounds.x + 16 * UI_S, bounds.y + 12 * UI_S, 22, COL_TEXT)
-	draw_text(font, "selected day", bounds.x + 120 * UI_S, bounds.y + 16 * UI_S, 14, COL_DIM)
-
-	aggs: map[i64]Agg
-	defer delete(aggs)
-
+build_totals :: proc(app: ^App, day_start, day_end: i64) -> []TotRow {
+	tl := lane_timeline(i32(ui.lane))
+	if tl == 0 {
+		return nil
+	}
+	m := make(map[i64]TotRow)
+	defer delete(m)
 	for a in app.activities {
-		if a.timeline_id != TIMELINE_APPS {
+		if a.timeline_id != tl {
 			continue
 		}
-		s := max(a.start_ms, start_ms)
-		e := min(a.end_ms, end_ms)
+		s := max(a.start_ms, day_start)
+		e := min(a.end_ms, day_end)
 		if e <= s {
 			continue
 		}
-		entry, exists := aggs[a.group_id]
-		if !exists {
-			name := a.group_name
-			if name == "" {
-				name = a.display_name
-			}
-			entry = Agg{group_id = a.group_id, name = name, color = a.color}
+		name := a.group_name
+		if len(name) == 0 {
+			name = a.display_name
+		}
+		entry, ok := m[a.group_id]
+		if !ok {
+			entry = TotRow{group_id = a.group_id, name = name, color = a.color}
 		}
 		entry.ms += e - s
-		aggs[a.group_id] = entry
+		m[a.group_id] = entry
 	}
-
-	// Include the unpersisted current activity.
 	c := &app.tracker.current
 	if c.active && c.persisted_id == 0 && date_int_from_unix_ms(c.start_ms) == app.date {
-		s := max(c.start_ms, start_ms)
-		e := min(now_ms(), end_ms)
+		s := max(c.start_ms, day_start)
+		e := min(now_ms(), day_end)
 		if e > s {
-			entry, exists := aggs[c.group_id]
-			if !exists {
-				entry = Agg{group_id = c.group_id, name = c.app_name, color = c.group_color}
+			entry, ok := m[c.group_id]
+			if !ok {
+				entry = TotRow{group_id = c.group_id, name = c.app_name, color = c.group_color}
 			}
 			entry.ms += e - s
-			aggs[c.group_id] = entry
+			m[c.group_id] = entry
 		}
 	}
-
-	list := make([dynamic]Agg, 0, len(aggs))
-	defer delete(list[:])
-	total: i64 = 0
-	for _, a in aggs {
-		append(&list, a)
-		total += a.ms
+	list := make([dynamic]TotRow, 0, len(m))
+	for _, v in m {
+		append(&list, v)
 	}
-	slice.sort_by(list[:], proc(a, b: Agg) -> bool { return a.ms > b.ms })
+	slice.sort_by(list[:], proc(a, b: TotRow) -> bool { return a.ms > b.ms })
+	return list[:]
+}
 
-	draw_text(font, "Tracked", bounds.x + 16 * UI_S, bounds.y + 54 * UI_S, 14, COL_DIM)
-	draw_text(font, format_duration(total), bounds.x + 16 * UI_S, bounds.y + 72 * UI_S, 30, COL_TEXT)
+draw_totals :: proc(app: ^App, dc: windows.HDC, lay: Layout, day_start, day_end: i64) {
+	x := lay.sidebar_x
+	w := lay.sidebar_w
+	total_h := lay.list_bottom - lay.list_top
 
-	y := bounds.y + 124 * UI_S
-	draw_text(font, "Applications", bounds.x + 16 * UI_S, y, 14, COL_DIM)
-	y += 26 * UI_S
+	fill_rect(dc, x, lay.list_top, w, total_h, C_PANEL)
+	fill_frame(dc, x, lay.list_top, w, total_h, C_BORDER_SOFT)
 
-	limit := min(10, len(list))
-	for i in 0 ..< limit {
-		a := list[i]
-		col := color_from_argb(a.color)
-		if a.color == 0 {
-			col = color_from_argb(GROUP_COLORS[int(a.group_id) % len(GROUP_COLORS)])
+	totals := build_totals(app, day_start, day_end)
+	defer free_totals_slice(totals)
+
+	total_ms: i64
+	for t in totals {
+		total_ms += t.ms
+	}
+
+	draw_string(dc, "Totals", x + 8, lay.list_top + 6, ui.font_bold, C_TXT)
+	line_h(dc, x + 1, lay.list_top + 24, w - 2, C_BORDER_SOFT)
+
+	view_h := total_h - 52
+	visible := view_h / LIST_ROW
+	max_scroll := max(0, i32(len(totals)) * LIST_ROW - view_h)
+	scroll := clamp_scroll(ui.list_scroll, max_scroll)
+	skip := scroll / LIST_ROW
+
+	y := lay.list_top + 32
+	n_totals := i32(len(totals))
+	for i := skip; i < n_totals && i < skip + visible; i += 1 {		t := totals[i]
+		color := argb_to_colorref(t.color)
+		if color == 0 {
+			color = activity_colorref(Activity{group_id = t.group_id})
 		}
-		rl.DrawRectangleRec({bounds.x + 16 * UI_S, y + 3 * UI_S, 11 * UI_S, 11 * UI_S}, col)
-		name := truncate_to_width(font, a.name, 15, bounds.width - 120 * UI_S)
-		draw_text(font, name, bounds.x + 34 * UI_S, y, 15, COL_TEXT)
-		draw_text_right(font, format_duration(a.ms), bounds.x + bounds.width - 16 * UI_S, y, 14, COL_DIM)
-		y += 23 * UI_S
-	}
-	if limit == 0 {
-		draw_text(font, "No activity recorded for this day.", bounds.x + 16 * UI_S, y + 4 * UI_S, 14, COL_DIM)
+		fill_rect(dc, x + 8, y + 4, 10, 10, color)
+		draw_string(dc, t.name, x + 24, y + 2, ui.font_normal, C_TXT, w - 90)
+		dur := fmt_span_hm(t.ms)
+		dw := text_pixel_width(dur, ui.font_normal)
+		draw_string(dc, dur, x + w - 8 - dw, y + 2, ui.font_normal, C_DIM)
+		y += LIST_ROW
 	}
 
-	// Current focus
-	y = bounds.y + bounds.height - 82 * UI_S
-	rl.DrawLineEx({bounds.x + 16 * UI_S, y - 10 * UI_S}, {bounds.x + bounds.width - 16 * UI_S, y - 10 * UI_S}, 1, COL_LINE)
-	draw_text(font, "Current window", bounds.x + 16 * UI_S, y, 13, COL_DIM)
-	if c.active {
-		draw_text(font, truncate_to_width(font, c.app_name, 16, bounds.width - 32 * UI_S), bounds.x + 16 * UI_S, y + 18 * UI_S, 16, COL_ACCENT)
-		draw_text(font, truncate_to_width(font, c.title, 13, bounds.width - 32 * UI_S), bounds.x + 16 * UI_S, y + 38 * UI_S, 13, COL_DIM)
-	} else {
-		draw_text(font, "not tracking", bounds.x + 16 * UI_S, y + 18 * UI_S, 15, COL_DIM)
+	// Total line pinned to the bottom.
+	draw_string(dc, "Total:", x + 8, lay.list_bottom - 20, ui.font_bold, C_TXT)
+	tval := fmt_hms(total_ms)
+	tv_w := text_pixel_width(tval, ui.font_bold)
+	draw_string(dc, tval, x + w - 8 - tv_w, lay.list_bottom - 20, ui.font_bold, C_TXT)
+}
+
+// list was made with the default allocator (defer-safe delete).
+free_totals_slice :: proc(list: []TotRow) {
+	if len(list) > 0 {
+		delete(list)
 	}
 }
 
-gui_button :: proc(app: ^App, bounds: rl.Rectangle, label: string) -> bool {
-	hover := rect_contains(bounds, rl.GetMousePosition())
-	if hover {
-		rl.DrawRectangleRec(bounds, COL_BTN_HOVER)
-		rl.DrawRectangleLinesEx(bounds, 1, COL_BTN_BORDER_HOVER)
-	} else {
-		rl.DrawRectangleRec(bounds, COL_BTN)
-		rl.DrawRectangleLinesEx(bounds, 1, COL_BTN_BORDER)
-	}
-	if rl.IsMouseButtonPressed(.LEFT) && hover {
-		rl.DrawRectangleRec(bounds, COL_BTN_PRESSED)
-	}
-	text_size: f32 = 15
-	w := measure_text(app.font, label, text_size)
-	line_h := text_size * UI_S * 0.72
-	draw_text(app.font, label, bounds.x + (bounds.width - w) / 2, bounds.y + (bounds.height - line_h) / 2, text_size, COL_BTN_TEXT)
-	return hover && rl.IsMouseButtonReleased(.LEFT)
+// --- Filter row + status bar ---
+
+draw_filter_row :: proc(dc: windows.HDC, w, h: i32) {
+	lay := compute_layout(w, h)
+	fill_rect(dc, 0, lay.filter_y, w, FILTER_H, C_BG)
+	draw_string(dc, "Filter", 12, lay.filter_edit_y + 4, ui.font_normal, C_DIM)
+	// The EDIT child control draws itself between x=56 and the right edge.
 }
 
-draw_header :: proc(app: ^App, width: f32) {
-	font := app.font
-	h: f32 = 72 * UI_S
-	rl.DrawRectangleRec({0, 0, width, h}, COL_PANEL_2)
-	rl.DrawLineEx({0, h}, {width, h}, 1, COL_LINE)
+draw_status_bar :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	lay := compute_layout(w, h)
+	fill_rect(dc, 0, lay.status_y, w, STATUS_H, C_PANEL)
+	line_h(dc, 0, lay.status_y, w, C_BORDER)
 
-	btn_h: f32 = 32 * UI_S
-	btn_y: f32 = 20 * UI_S
-	// Buttons are anchored to the left; widths follow the scaled font.
-	btn_x: f32 = 24 * UI_S
-	if gui_button(app, {btn_x, btn_y, 38 * UI_S, btn_h}, "<") {
-		app.date = add_days(app.date, -1)
-		load_day(app)
-	}
-	if gui_button(app, {btn_x + 44 * UI_S, btn_y, 78 * UI_S, btn_h}, "Today") {
-		app.date = today_date_int()
-		load_day(app)
-	}
-	if gui_button(app, {btn_x + 128 * UI_S, btn_y, 38 * UI_S, btn_h}, ">") {
-		app.date = add_days(app.date, 1)
-		load_day(app)
-	}
+	st: windows.SYSTEMTIME
+	GetLocalTime(&st)
+	clock := fmt.tprintf("%02d.%02d.%04d %02d:%02d:%02d", st.day, st.month, st.year, st.hour, st.minute, st.second)
+	draw_string(dc, clock, 8, lay.status_y + 4, ui.font_normal, C_TXT)
 
-	label := "Tracking: ON" if app.tracker.enabled else "Tracking: OFF"
-	if gui_button(app, {btn_x + 188 * UI_S, btn_y, 150 * UI_S, btn_h}, label) {
-		if app.tracker.enabled {
-			tracker_pause(app)
-		} else {
-			tracker_resume(app)
-		}
-		load_day(app)
-	}
+	dot := C_GREEN if app.tracker.enabled else rgb(200, 204, 208)
+	dot_x := 8 + text_pixel_width(clock, ui.font_normal) + 6
+	fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, dot)
 
-	draw_text(font, date_label(app.date), (btn_x + 188 * UI_S + 150 * UI_S + 40 * UI_S), 27 * UI_S, 18, COL_DIM)
+	version := "aika (native ui)"
+	tw := text_pixel_width(version, ui.font_normal)
+	draw_string(dc, version, w - 8 - tw, lay.status_y + 4, ui.font_normal, C_DIM)
+}
 
-	if app.tracker.current.active {
-		x: f32 = 820 * UI_S
-		max_w := width - x - 24 * UI_S
-		if max_w > 0 {
-			line := fmt.tprintf("%s  —  %s", app.tracker.current.app_name, app.tracker.current.title)
-			draw_text(font, truncate_to_width(font, line, 15, max_w), x, 20 * UI_S, 15, COL_TEXT)
-			draw_text(font, "recording", x, 42 * UI_S, 12, COL_GREEN)
+// --- Hit testing ---
+
+rect_hit :: proc(r: windows.RECT, x, y: i32) -> bool {
+	return x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
+
+hit_test :: proc(x, y, w, h: i32) -> int {
+	for i := 0; i < 3; i += 1 {
+		if rect_hit(compute_tabs(i32(i)), x, y) {
+			return HIT_TAB_BASE + i
 		}
 	}
+	lay := compute_layout(w, h)
+	if y >= lay.ruler_y && x >= lay.chart_x && x < lay.chart_x + lay.chart_w {
+		for i := 0; i < 4; i += 1 {
+			ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
+			if y >= ly && y < ly + lay.lane_h {
+				return HIT_LANE_BASE + i
+			}
+		}
+	}
+	if rect_hit(lay.btn_prev, x, y) { return HIT_BTN_PREV }
+	if rect_hit(lay.btn_next, x, y) { return HIT_BTN_NEXT }
+	if rect_hit(lay.btn_today, x, y) { return HIT_BTN_TODAY }
+	if rect_hit(lay.btn_track, x, y) { return HIT_BTN_TRACK }
+	return HIT_NONE
 }
 
-draw_footer :: proc(app: ^App, width, height: f32) {
-	font := app.font
-	y := height - 30 * UI_S
-	rl.DrawLineEx({0, y - 8 * UI_S}, {width, y - 8 * UI_S}, 1, COL_LINE)
-	info := fmt.tprintf("db: %s    activities: %d    idle: %s", app.db_path, len(app.activities), format_duration(idle_ms()))
-	draw_text(font, info, 24 * UI_S, y, 13, COL_DIM)
+// --- Tooltip ---
+
+draw_tooltip :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
+	if !ui.mouse_valid || ui.tab != 0 { return }
+	mx, my := ui.mouse.x, ui.mouse.y
+	lay := compute_layout(w, h)
+	if mx < lay.chart_x || mx >= lay.chart_x + lay.chart_w { return }
+
+	found: ^Activity = nil
+	day_start, day_end := day_bounds_ms(app.date)
+
+	for lane_i := 1; lane_i <= 2; lane_i += 1 {
+		ly := lay.lane_y + i32(lane_i) * (lay.lane_h + LANE_GAP)
+		if my < ly || my >= ly + lay.lane_h { continue }
+		br := bar_rect_for_lane(i32(lane_i), lay.chart_x, ly, lay.chart_w, lay.lane_h)
+		if my < br.top || my >= br.bottom { return }
+		tl := lane_timeline(i32(lane_i))
+
+		// The live (possibly unpersisted) current activity first.
+		if c := &app.tracker.current; tl == TIMELINE_APPS && c.active &&
+		   date_int_from_unix_ms(c.start_ms) == app.date {
+			s := max(c.start_ms, day_start)
+			e := min(now_ms(), day_end)
+			if e > s {
+				x1 := x_for_ms(s, day_start, day_end, lay.chart_x, lay.chart_w)
+				x2 := x_for_ms(e, day_start, day_end, lay.chart_x, lay.chart_w)
+				if mx >= x1 && mx <= x2 {
+					if !filter_matches(c.title) { return }
+					draw_tooltip_box(dc, w, h, c.app_name, c.title,
+						fmt.tprintf("%s - %s", fmt_clock_hm(c.start_ms), fmt_clock_hm(e)))
+					return
+				}
+			}
+		}
+
+		// Innermost matching bar wins (activities can visually overlap).
+		best_w := lay.chart_w + 1
+		for a, ai in app.activities {
+			if a.timeline_id != tl { continue }
+			s := max(a.start_ms, day_start)
+			e := min(a.end_ms, day_end)
+			if e <= s { continue }
+			x1 := x_for_ms(s, day_start, day_end, lay.chart_x, lay.chart_w)
+			x2 := x_for_ms(e, day_start, day_end, lay.chart_x, lay.chart_w)
+			if mx >= x1 && mx <= x2 && x2 - x1 < best_w {
+				if len(a.display_name) > 0 && !filter_matches(a.display_name) {
+					continue
+				}
+				best_w = x2 - x1
+				found = &app.activities[ai]
+			}
+		}
+		if found != nil {
+			a := found
+			title := a.display_name
+			if tl == TIMELINE_COMPUTER && len(a.group_name) > 0 {
+				title = a.group_name
+			}
+			draw_tooltip_box(dc, w, h,
+				a.group_name,
+				title,
+				fmt.tprintf("%s - %s  (%s)", fmt_clock_hm(a.start_ms), fmt_clock_hm(a.end_ms),
+					fmt_span_hm(a.end_ms - a.start_ms)))
+		}
+		return
+	}
 }
 
-draw_frame :: proc(app: ^App) {
-	width := f32(rl.GetScreenWidth())
-	height := f32(rl.GetScreenHeight())
-
-	rl.BeginDrawing()
-	rl.ClearBackground(COL_BG)
-
-	draw_header(app, width)
-	draw_footer(app, width, height)
-
-	panel_top := f32(92 * UI_S)
-	panel_bottom := height - 48 * UI_S
-	panel_h := panel_bottom - panel_top
-	right_w: f32 = 320 * UI_S
-	timeline_w := width - 48 * UI_S - right_w - 16 * UI_S
-
-	timeline_bounds := rl.Rectangle{24 * UI_S, panel_top, timeline_w, panel_h}
-	summary_bounds := rl.Rectangle{24 * UI_S + timeline_w + 16 * UI_S, panel_top, right_w, panel_h}
-
-	draw_timeline(app, timeline_bounds)
-	draw_summary(app, summary_bounds)
-
-	rl.EndDrawing()
+draw_tooltip_box :: proc(dc: windows.HDC, w, h: i32, line1, line2, line3: string) {
+	tw := max(
+		max(text_pixel_width(line1, ui.font_normal), text_pixel_width(line2, ui.font_normal) + 40),
+		text_pixel_width(line3, ui.font_small)) + 20
+	th := i32(58)
+	tx := ui.mouse.x + 14
+	ty := ui.mouse.y + 14
+	if tx + tw > w - 8 { tx = ui.mouse.x - tw - 14 }
+	if ty + th > h - 8 { ty = ui.mouse.y - th - 14 }
+	if tx < 0 { tx = 0 }
+	if ty < 0 { ty = 0 }
+	fill_rect(dc, tx, ty, tw, th, C_TIP_BG)
+	fill_frame(dc, tx, ty, tw, th, C_TIP_BORDER)
+	draw_string(dc, line1, tx + 8, ty + 6, ui.font_normal, C_TXT, tw - 16)
+	draw_string(dc, line2, tx + 8, ty + 22, ui.font_normal, C_TXT, tw - 16)
+	draw_string(dc, line3, tx + 8, ty + 38, ui.font_small, C_DIM, tw - 16)
 }

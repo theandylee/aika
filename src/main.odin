@@ -1,15 +1,17 @@
 ﻿package main
 
-import "core:c"
 import "core:fmt"
 import "core:os"
+import "core:sys/windows"
 import "core:strings"
-import rl "vendor:raylib"
 
 TIMELINE_TAGS :: i64(1)
 TIMELINE_COMPUTER :: i64(2)
 TIMELINE_APPS :: i64(3)
 TIMELINE_DOCS :: i64(4)
+
+// Native window app pointer, read by wnd_proc (single-window app).
+global_app: ^App
 
 load_day :: proc(app: ^App) {
 	if app.activities != nil {
@@ -19,28 +21,6 @@ load_day :: proc(app: ^App) {
 	app.activities = db_load_activities(&app.db, app.date, app.tracker.current.persisted_id)
 	app.loaded_date = app.date
 	app.last_load_ms = now_ms()
-}
-
-load_ui_font :: proc() -> rl.Font {
-	default_font := rl.GetFontDefault()
-	path := "C:/Windows/Fonts/segoeui.ttf"
-	if !os.exists(path) {
-		return default_font
-	}
-	cpath := strings.clone_to_cstring(path, context.temp_allocator)
-
-	codepoints := make([]rune, 0x500 - 32)
-	defer delete(codepoints)
-	for cp in 32 ..< 0x500 {
-		codepoints[cp - 32] = rune(cp)
-	}
-	// Load at a larger base size so text drawn at scaled UI sizes stays sharp.
-	font := rl.LoadFontEx(cpath, 48, raw_data(codepoints), c.int(len(codepoints)))
-	if font.texture.id == 0 {
-		return default_font
-	}
-	rl.SetTextureFilter(font.texture, .BILINEAR)
-	return font
 }
 
 main :: proc() {
@@ -103,49 +83,28 @@ main :: proc() {
 		date = today_date_int(),
 		db_path = strings.clone(db_path),
 	}
+	global_app = &app
 	tracker_init(&app)
 	load_day(&app)
 
-	rl.SetConfigFlags({.WINDOW_RESIZABLE, .MSAA_4X_HINT})
-	rl.InitWindow(1320, 860, "aika вЂ” activity timeline")
-	defer rl.CloseWindow()
-	rl.SetTargetFPS(60)
-
-	app.default_font = rl.GetFontDefault()
-	app.font = load_ui_font()
-
-	for !rl.WindowShouldClose() {
-		now := now_ms()
-		if app.tracker.enabled {
-			tracker_tick(&app, now)
+	ui_bootstrap()
+	defer {
+		tracker_shutdown(&app)
+		ui_shutdown()
+		free_activities(app.activities)
+		db_close(&app.db)
+		if len(app.db_path) > 0 {
+			delete(app.db_path)
 		}
-		if app.date != app.loaded_date || now - app.last_load_ms >= 10_000 {
-			load_day(&app)
-		}
+	}
 
-		draw_frame(&app)
+	// Message loop. The 500 ms timer drives the tracker (which samples at
+	// 1 Hz internally) and repaints; temp allocations from each message
+	// (text conversions, paint structures) are released after dispatch.
+	msg: windows.MSG
+	for windows.GetMessageW(&msg, nil, 0, 0) > 0 {
+		windows.TranslateMessage(&msg)
+		windows.DispatchMessageW(&msg)
 		free_all(context.temp_allocator)
 	}
-
-	tracker_shutdown(&app)
-	if app.font.texture.id != 0 && app.font.texture.id != app.default_font.texture.id {
-		rl.UnloadFont(app.font)
-	}
-	free_activities(app.activities)
-	db_close(&app.db)
-	if len(app.db_path) > 0 {
-		delete(app.db_path)
-	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
