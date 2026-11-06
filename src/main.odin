@@ -89,6 +89,9 @@ main :: proc() {
 
 	ui_bootstrap()
 	defer {
+		if !task_stop(&app, now_ms()) {
+			message_box("Could not save the final task time. The last saved time is preserved.", "aika", 0x10)
+		}
 		tracker_shutdown(&app)
 		ui_shutdown()
 		free_activities(app.activities)

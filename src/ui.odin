@@ -134,7 +134,7 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay.btn_track = windows.RECT{left = MARGIN + 148 + DATE_PICK_W, top = by, right = MARGIN + 280 + DATE_PICK_W, bottom = by + bh}
 
 	// Day start / day end / duration boxes anchored to the right.
-	bw := i32(108)
+	bw := min(i32(108), (w - lay.btn_track.right - 24) / 3 - 4)
 	bh2 := i32(36)
 	by2 := lay.toolbar_y + 8
 	bx := w - MARGIN - bw
@@ -277,8 +277,9 @@ draw_toolbar :: proc(app: ^App, dc: windows.HDC, lay: Layout) {
 	draw_button(dc, lay.btn_next, ">", HIT_BTN_NEXT)
 	draw_button(dc, lay.btn_today, "Today", HIT_BTN_TODAY)
 
-	label := "Tracking: ON" if app.tracker.enabled else "Tracking: OFF"
-	draw_button(dc, lay.btn_track, label, HIT_BTN_TRACK)
+	label := "Start task"
+	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s", fmt_hms(now_ms() - app.task.start_ms)) }
+	draw_button(dc, lay.btn_track, label, HIT_BTN_TASK)
 
 	date_txt := date_label(app.date)
 	dx := lay.btn_track.right + 12
@@ -470,7 +471,7 @@ draw_lane_bars :: proc(app: ^App, dc: windows.HDC, lane_idx: i32, tl: i64, x, y,
 			if bw > 6 { line_v(dc, x2 - 3, bar_y + bar_h / 2 - 5, 10, C_PANEL) }
 		}
 	}
-	if tl == TIMELINE_TAGS && (tag_ui.drag == 1 || tag_ui.popup != nil) {
+	if tl == TIMELINE_TAGS && (tag_ui.drag == 1 || (tag_ui.popup != nil && !tag_ui.task_picker)) {
 		lay := compute_layout(ui.mem_w, ui.mem_h)
 		tag_draw_range(dc, lay, day_start, day_end)
 	}
@@ -795,7 +796,7 @@ hit_test :: proc(x, y, w, h: i32) -> int {
 	if rect_hit(lay.btn_prev, x, y) { return HIT_BTN_PREV }
 	if rect_hit(lay.btn_next, x, y) { return HIT_BTN_NEXT }
 	if rect_hit(lay.btn_today, x, y) { return HIT_BTN_TODAY }
-	if rect_hit(lay.btn_track, x, y) { return HIT_BTN_TRACK }
+	if rect_hit(lay.btn_track, x, y) { return HIT_BTN_TASK }
 	return HIT_NONE
 }
 

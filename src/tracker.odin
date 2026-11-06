@@ -49,6 +49,7 @@ Tracker :: struct {
 App :: struct {
 	db:             DB,
 	tracker:        Tracker,
+	task:           RunningTask,
 	date:           int,
 	activities:     []Activity,
 	loaded_date:    int,

@@ -189,7 +189,7 @@ The GUI is split across two files:
   small GDI helpers (`fill_rect`, `line_v`/`line_h`, `draw_string` with ClearType
   text and ellipsis truncation).
 - `src/ui.odin` — the ManicTime-style Day view renderer: tab strip, toolbar
-  (prev/next/Today, tracking toggle, Day start / Day end / Duration boxes), a
+  (prev/next/Today, Start/Stop task, Day start / Day end / Duration boxes), a
   full 24 h ruler, four lanes (Tags, Computer Usage, Applications, Documents),
   the details list, the totals panel, tooltips, filter row and status bar.
 
@@ -259,6 +259,21 @@ group for reuse, and reloads the list/totals. The menu retains an activity ID,
 not a pointer into the day cache, since timer reloads can occur in its nested
 message loop. Cancelling the menu makes no changes.
 
+### Running tasks
+
+The toolbar's **Start task** opens the same searchable tag picker (including
+tag creation). Accepting starts a new Tags block at the current time and
+selects today's Tags lane. Cancelling does not start anything. The button
+becomes **Stop task** with an elapsed `h:mm:ss` timer; application tracking
+continues independently.
+
+`src/task.odin` persists the block every second and updates its cached endpoint
+for the timeline, details, tooltips and totals. Stop and graceful exit flush the
+final endpoint; hiding in the tray keeps the task running. A forced kill leaves
+the last saved endpoint, and tasks do not automatically resume on restart.
+Active task blocks cannot be resized or deleted until stopped. Existing future
+tags stop the task at their boundary rather than allowing overlapping blocks.
+
 ### Details list and totals
 
 `build_rows()` (temp-allocated) builds the row list for the selected lane,
@@ -277,7 +292,7 @@ window resize. Escape or capture loss restores the sizes from before the drag.
 ### Header and footer
 
 - Date navigation (`<`, Today, `>`).
-- Tracking pause/resume.
+- Start/Stop task with elapsed timer.
 - Current window label.
 - Activity count / idle time.
 - DB path.

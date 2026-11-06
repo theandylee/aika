@@ -70,7 +70,7 @@ HIT_NONE        :: 0
 HIT_BTN_PREV    :: 1
 HIT_BTN_TODAY   :: 2
 HIT_BTN_NEXT    :: 3
-HIT_BTN_TRACK   :: 4
+HIT_BTN_TASK    :: 4
 HIT_ZOOM_OUT    :: 5
 HIT_ZOOM_IN     :: 6
 HIT_ZOOM_RESET  :: 7
@@ -227,6 +227,10 @@ app_tick :: proc(app: ^App) {
 	now := now_ms()
 	if app.tracker.enabled {
 		tracker_tick(app, now)
+	}
+	if !task_tick(app, now) {
+		app.task = RunningTask{}
+		message_box("Task tracking stopped because its tag block could not be updated. The last saved time is preserved.", "aika", 0x10)
 	}
 	if app.date != app.loaded_date || now - app.last_load_ms >= 10_000 {
 		load_day(app)
@@ -717,11 +721,14 @@ handle_click :: proc(app: ^App, x, y: i32) {
 		app.date = today_date_int()
 		sync_date_picker(app)
 		load_day(app)
-	case id == HIT_BTN_TRACK:
-		if app.tracker.enabled {
-			tracker_pause(app)
+	case id == HIT_BTN_TASK:
+		if app.task.id != 0 {
+			if !task_stop(app, now_ms()) {
+				message_box("Could not stop task. Please try again.", "aika", 0x10)
+			}
 		} else {
-			tracker_resume(app)
+			tag_ui.task_picker = true
+			tag_picker_open()
 		}
 		load_day(app)
 	case id == HIT_TAB_BASE:

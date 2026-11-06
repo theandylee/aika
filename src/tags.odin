@@ -15,6 +15,7 @@ TagUi :: struct {
 	tags: []Tag,
 	visible: [dynamic]int,
 	menu_open: bool,
+	task_picker: bool,
 }
 
 tag_ui: TagUi
@@ -46,6 +47,10 @@ tag_context_menu :: proc(app: ^App, screen: windows.POINT) {
 	w, h := client_size(ui.hwnd)
 	id := tag_block_hit(app, p.x, p.y, compute_layout(w, h))
 	if id == 0 { return }
+	if id == app.task.id {
+		message_box("Stop the running task before deleting its tag block.", "aika")
+		return
+	}
 	menu := windows.CreatePopupMenu()
 	if menu == nil { return }
 	defer windows.DestroyMenu(menu)
@@ -120,6 +125,7 @@ tag_edge_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> (id: i64, edge: i32) 
 	best_inside := false
 	for a in app.activities {
 		if a.timeline_id != TIMELINE_TAGS || a.end_ms <= vs || a.start_ms >= ve { continue }
+		if a.id == app.task.id { continue }
 		left := x_for_ms(max(a.start_ms, vs), vs, ve, lay.chart_x, lay.chart_w)
 		right := x_for_ms(min(a.end_ms, ve), vs, ve, lay.chart_x, lay.chart_w)
 		inside := x >= left && x < left + max(1, right - left)
@@ -274,6 +280,7 @@ tag_picker_filter :: proc() {
 tag_picker_close :: proc() {
 	hwnd := tag_ui.popup
 	tag_ui.popup = nil
+	tag_ui.task_picker = false
 	windows.EnableWindow(ui.hwnd, windows.TRUE)
 	if hwnd != nil { windows.DestroyWindow(hwnd) }
 	free_tags(tag_ui.tags)
@@ -294,6 +301,19 @@ tag_picker_accept :: proc(create: bool) {
 		tag := tag_ui.tags[tag_ui.visible[index]]
 		id, name = tag.id, tag.name
 	} else if name == "" { return }
+	if tag_ui.task_picker {
+		if !task_start(app, id, name, now_ms()) {
+			message_box("Could not start task. The current time may already be tagged. Please select free time or try again.", "aika", 0x10)
+			return
+		}
+		tag_picker_close()
+		app.date = today_date_int()
+		ui.lane = 0
+		ui.list_scroll.pos, ui.totals_scroll.pos = 0, 0
+		sync_date_picker(app)
+		load_day(app)
+		return
+	}
 	if !db_exec(&app.db, "BEGIN IMMEDIATE") {
 		message_box("Could not save tag. Please try again.", "aika", 0x10)
 		return
@@ -352,12 +372,14 @@ tag_picker_open :: proc() {
 	windows.RegisterClassExW(&wc)
 	r: windows.RECT
 	windows.GetWindowRect(ui.hwnd, &r)
-	tag_ui.popup = windows.CreateWindowExW(0, wtext(TAG_POPUP_CLASS), wtext("Tag selected time"),
+	title := "Start task" if tag_ui.task_picker else "Tag selected time"
+	tag_ui.popup = windows.CreateWindowExW(0, wtext(TAG_POPUP_CLASS), wtext(title),
 		windows.WS_CAPTION | windows.WS_SYSMENU | windows.WS_CLIPCHILDREN,
 		r.left + 80, r.top + 100, 420, 350, ui.hwnd, nil, hi, nil)
-	if tag_ui.popup == nil { return }
+	if tag_ui.popup == nil { tag_ui.task_picker = false; return }
 	tag_ui.list = nil
-	tag_picker_control("STATIC", fmt.tprintf("%s - %s", fmt_clock_hm(tag_ui.start_ms), fmt_clock_hm(tag_ui.end_ms)), 0, 12, 12, 380, 20, 0)
+	description := "Choose a tag to track from now." if tag_ui.task_picker else fmt.tprintf("%s - %s", fmt_clock_hm(tag_ui.start_ms), fmt_clock_hm(tag_ui.end_ms))
+	tag_picker_control("STATIC", description, 0, 12, 12, 380, 20, 0)
 	tag_picker_control("STATIC", "Search tags or enter a new tag name:", 0, 12, 36, 380, 20, 0)
 	tag_ui.search = tag_picker_control("EDIT", "", windows.WS_BORDER | windows.WS_TABSTOP | 0x80, 12, 58, 380, 24, 101) // ES_AUTOHSCROLL
 	tag_ui.list = tag_picker_control("LISTBOX", "", windows.WS_BORDER | windows.WS_TABSTOP | windows.WS_VSCROLL | 1, 12, 90, 380, 162, 102) // LBS_NOTIFY
