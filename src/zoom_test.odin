@@ -18,6 +18,7 @@ zoom_behavior :: proc(t: ^testing.T) {
 	hover_repaint_behavior(t)
 	palette_apply_behavior(t)
 	geometry_behavior(t)
+	dpi_scaling_behavior(t)
 	ui_visibility_and_cancellation(t)
 	ui_startup_unwinds_every_stage(t)
 }

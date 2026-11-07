@@ -11,7 +11,7 @@ theme_path :: proc() -> string {
 }
 
 theme_switch_rect :: proc(w: i32) -> windows.RECT {
-	return windows.RECT{w - 36, 2, w - 8, TAB_H - 2}
+	return windows.RECT{w - dpi_px(36), dpi_px(2), w - dpi_px(8), dpi_px(TAB_H) - dpi_px(2)}
 }
 
 draw_theme_switch :: proc(dc: windows.HDC, w: i32) {
@@ -31,7 +31,7 @@ draw_theme_tooltip :: proc(dc: windows.HDC, w: i32) {
 	   !rect_hit(theme_switch_rect(w), ui.mouse.x, ui.mouse.y) { return }
 	label := "Switch to light theme" if ui.dark else "Switch to dark theme"
 	width := text_pixel_width(label, ui.font_normal) + 16
-	draw_single_line_tooltip(dc, tab_tooltip_rect(w - 8, width), label)
+	draw_single_line_tooltip(dc, tab_tooltip_rect(w - dpi_px(8), width), label)
 }
 
 theme_set_palette :: proc(dark: bool) {

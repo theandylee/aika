@@ -66,6 +66,10 @@ These have caused bugs before. Do not break them casually.
 - Only the **foreground top-level window** is tracked. Do not add per-window or
   per-monitor tracking without a design discussion.
 - The sampler runs at **1 Hz**. The UI refresh is independent.
+- DPI is Per-Monitor V2: design constants are 96-DPI pixels, scale them
+  centrally with `dpi_px`, never with per-feature factors. Keyboard scope is
+  native-only (Tab through filter/date/scrollbars/dialogs); the canvas stays
+  mouse-only and `Escape` cancels the interaction.
 - Interaction state lives in one `ui.interaction` union (`Press`/`Pane`/`Zoom`/`Tag`
   with cancel snapshots); read it via `pane_drag()`/`zoom_drag()`/`tag_drag()`/`press_hit()`
   or `interaction_active()`, never parallel fields. Set it to nil BEFORE `ReleaseCapture`;

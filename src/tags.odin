@@ -118,7 +118,7 @@ tag_edge_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> (id: i64, edge: Tag_D
 	   y < lay.lane_y || y >= lay.lane_y + lay.lane_h { return }
 	ds, de := day_bounds_ms(app.date)
 	vs, ve := zoom_bounds(ds, de)
-	best := EDGE_HIT_PX + 1
+	best := dpi_px(EDGE_HIT_PX) + 1
 	best_inside := false
 	for a in app.activities {
 		if a.timeline_id != TIMELINE_TAGS || a.end_ms <= vs || a.start_ms >= ve { continue }
@@ -129,7 +129,7 @@ tag_edge_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> (id: i64, edge: Tag_D
 		for t, i in ([2]i64{a.start_ms, a.end_ms}) {
 			if t < vs || t > ve { continue }
 			distance := abs(x - x_for_ms(t, vs, ve, lay.chart_x, lay.chart_w))
-			if distance <= EDGE_HIT_PX && (distance < best || (distance == best && (inside || !best_inside))) {
+			if distance <= dpi_px(EDGE_HIT_PX) && (distance < best || (distance == best && (inside || !best_inside))) {
 				id, edge, best = a.id, .Left_Edge if i == 0 else .Right_Edge, distance
 				best_inside = inside
 			}
@@ -232,7 +232,7 @@ tag_pointer_up :: proc(app: ^App, x: i32, lay: Layout) {
 	interaction_end() // ReleaseCapture sends WM_CAPTURECHANGED synchronously.
 	windows.ReleaseCapture()
 	if drag == .New_Range {
-		if abs(x - tag_ui.down_x) >= CLICK_DRAG_PX && tag_ui.end_ms > tag_ui.start_ms { tag_picker_open() }
+		if abs(x - tag_ui.down_x) >= dpi_px(CLICK_DRAG_PX) && tag_ui.end_ms > tag_ui.start_ms { tag_picker_open() }
 	} else if drag != .None {
 		if x != tag_ui.down_x && !db_resize_tag(&app.db, id, tag_ui.start_ms, tag_ui.end_ms) {
 			message_box("Could not resize tag. No changes were saved.", "aika", windows.MB_ICONERROR)

@@ -171,6 +171,11 @@ dispatch_app_message :: proc(msg: ^windows.MSG) {
 	context.temp_allocator = scratch_begin(&scratch)
 	defer scratch_end(&scratch)
 	if !settings_key(msg) && !date_picker_key(msg) && !tag_picker_key(msg) {
+		// Native Tab order for the main window (filter EDIT <-> date picker
+		// button <-> scrollbars). Custom canvas controls stay mouse-only.
+		if ui.hwnd != nil && bool(windows.IsDialogMessageW(ui.hwnd, msg)) {
+			return
+		}
 		windows.TranslateMessage(msg)
 		windows.DispatchMessageW(msg)
 	}

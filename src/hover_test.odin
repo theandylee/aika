@@ -31,8 +31,8 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 	snapshot := build_day_snapshot(&app, ds + 12 * HOUR, 0)
 
 	x_at :: proc(lay: Layout, hours: f64) -> i32 { return lay.chart_x + i32(hours / 24 * f64(lay.chart_w)) }
-	apps_y := lay.lane_y + 2 * (lay.lane_h + LANE_GAP) + lay.lane_h / 2
-	usage_y := lay.lane_y + (lay.lane_h + LANE_GAP) + lay.lane_h / 2
+	apps_y := lay.lane_y + 2 * (lay.lane_h + dpi_px(LANE_GAP)) + lay.lane_h / 2
+	usage_y := lay.lane_y + (lay.lane_h + dpi_px(LANE_GAP)) + lay.lane_h / 2
 	sig :: proc(s: Day_Snapshot, x, y: i32) -> Hover_Signature { return hover_signature(s, x, y, true, 1320, 860) }
 
 	// Empty areas (inside the details list, empty lane time): no repaint.

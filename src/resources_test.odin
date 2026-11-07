@@ -131,7 +131,7 @@ ui_visibility_and_cancellation :: proc(t: ^testing.T) {
 	lay := compute_layout(1320, 860)
 	for tab in ([2]Tab{.Timesheet, .Statistics}) {
 		ui.tab = tab
-		for y := i32(TAB_H); y < 860; y += 4 {
+		for y := i32(dpi_px(TAB_H)); y < 860; y += 4 {
 			for x := i32(0); x < 1320; x += 4 {
 				testing.expect(t, hit_test(x, y, 1320, 860) == .None)
 			}

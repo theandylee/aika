@@ -51,11 +51,12 @@ UiState :: struct {
 	mem_valid:    bool,
 	main_class, tray_class: bool,
 
-	font_normal: windows.HFONT, // 12px Segoe UI
+	font_normal: windows.HFONT, // 12px Segoe UI at 96 DPI (scaled by ui.dpi)
 	font_bold:   windows.HFONT, // 12px bold
 	font_small:  windows.HFONT, // 11px
 	font_title:  windows.HFONT, // 20px bold (day header)
 	font_icons:  windows.HFONT, // standard monochrome sun/moon symbols
+	dpi:         u32, // effective DPI for the main window; 0 = not initialized (96)
 	theme_button: Theme_Handle,
 	theme_tab:    Theme_Handle,
 	interaction:  Interaction, // the one active press/drag, nil when idle (interaction.odin)
@@ -747,7 +748,7 @@ on_set_cursor :: proc(app: ^App) -> bool {
 		left := bar.left + i32(ui.zoom_start * width)
 		right := bar.left + i32(ui.zoom_end * width)
 		cursor := IDC_HAND // pan
-		if abs(ui.mouse.x - left) <= EDGE_HIT_PX || abs(ui.mouse.x - right) <= EDGE_HIT_PX {
+		if abs(ui.mouse.x - left) <= dpi_px(EDGE_HIT_PX) || abs(ui.mouse.x - right) <= dpi_px(EDGE_HIT_PX) {
 			cursor = IDC_SIZEWE // resize
 		}
 		windows.SetCursor(system_cursor(cursor))
@@ -1000,7 +1001,21 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		return 0
 	case windows.WM_GETMINMAXINFO:
 		mmi := transmute(^windows.MINMAXINFO)(lparam)
-		mmi.ptMinTrackSize = windows.POINT{x = MIN_WINDOW_W, y = MIN_WINDOW_H}
+		mmi.ptMinTrackSize = windows.POINT{x = dpi_px(MIN_WINDOW_W), y = dpi_px(MIN_WINDOW_H)}
+		return 0
+	case windows.WM_DPICHANGED:
+		// wparam LOWORD = new DPI; lparam = suggested window rect in the
+		// new DPI's pixels. Adopt both, then rebuild scaled fonts and layout.
+		new_dpi := u32(u32(wparam) & 0xFFFF)
+		if new_dpi != 0 {
+			if suggested := transmute(^windows.RECT)(lparam); suggested != nil {
+				windows.SetWindowPos(hwnd, nil,
+					suggested.left, suggested.top,
+					suggested.right - suggested.left, suggested.bottom - suggested.top,
+					windows.SWP_NOZORDER | windows.SWP_NOACTIVATE)
+			}
+			ui_apply_dpi(new_dpi)
+		}
 		return 0
 	case windows.WM_DESTROY:
 		ui_remove_tray()
@@ -1124,9 +1139,11 @@ ui_sync_day_controls :: proc() {
 
 // Height is the em height in pixels (negative height in CreateFontW means
 // "cell height", here expressed directly). Same face for everything.
+// Base heights are 96-DPI design pixels, scaled centrally via dpi_px so text
+// stays proportional when the window moves across monitors.
 ui_make_font :: proc(h_px, weight: i32, face: string = "Segoe UI") -> windows.HFONT {
 	return windows.CreateFontW(
-		-h_px, 0, 0, 0, windows.INT(weight),
+		-dpi_px(h_px), 0, 0, 0, windows.INT(weight),
 		0, 0, 0, // not italic / underlined / struck out
 		windows.DEFAULT_CHARSET,
 		0, 0, // OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS
@@ -1144,6 +1161,43 @@ ui_create_fonts :: proc() {
 	ui.font_icons  = ui_make_font(16, 400, "Segoe UI Symbol")
 }
 
+// Drop and rebuild all fonts at the current ui.dpi; resends them to the
+// native controls. Called on WM_DPICHANGED.
+ui_recreate_fonts :: proc() {
+	if ui.font_normal != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_normal)) }
+	if ui.font_bold != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_bold)) }
+	if ui.font_small != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_small)) }
+	if ui.font_title != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_title)) }
+	if ui.font_icons != nil { windows.DeleteObject(windows.HGDIOBJ(ui.font_icons)) }
+	ui.font_normal, ui.font_bold, ui.font_small, ui.font_title, ui.font_icons = nil, nil, nil, nil, nil
+	ui_create_fonts()
+	if ui.edit != nil && ui.font_normal != nil {
+		windows.SendMessageW(ui.edit, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 1)
+	}
+	if ui.date_picker != nil && ui.font_normal != nil {
+		windows.SendMessageW(ui.date_picker, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 1)
+	}
+}
+
+// Apply a new DPI: rescale stored pane sizes, rebuild fonts, and reposition
+// native controls via the backbuffer path. Layout itself is derived from
+// dpi_px on every compute_layout call, so no stored rects need migration.
+ui_apply_dpi :: proc(new_dpi: u32) {
+	if new_dpi == 0 || new_dpi == ui.dpi {
+		return
+	}
+	old := dpi_current()
+	ui.dpi = new_dpi
+	ui.pane_lane_h = dpi_rescale(ui.pane_lane_h, old, new_dpi)
+	ui.pane_totals_w = dpi_rescale(ui.pane_totals_w, old, new_dpi)
+	ui_recreate_fonts()
+	if ui.hwnd != nil {
+		w, h := client_size(ui.hwnd)
+		recreate_backbuffer(w, h)
+		windows.InvalidateRect(ui.hwnd, nil, windows.TRUE)
+	}
+}
+
 // --- Window bootstrap ---
 
 Ui_Startup_Stage :: enum { Class, Fonts, Window, Tray, Scrollbars, Filter, Date, Buffer, Timer }
@@ -1154,6 +1208,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	ready := false
 	defer if !ready { ui_shutdown() }
 	theme_load()
+	dpi_set(dpi_system())
 	ui.zoom_end = 1
 	hinstance := windows.GetModuleHandleW(nil)
 	class_name := windows.utf8_to_wstring(WNDC_CLASS, context.temp_allocator)
@@ -1186,7 +1241,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	// WS_CLIPCHILDREN keeps our BitBlt from painting over the filter EDIT.
 	style := windows.WS_OVERLAPPEDWINDOW | windows.WS_CLIPCHILDREN
 	ex_style := windows.DWORD(0)
-	client := windows.RECT{left = 0, top = 0, right = INITIAL_CLIENT_W, bottom = INITIAL_CLIENT_H}
+	client := windows.RECT{left = 0, top = 0, right = dpi_px(INITIAL_CLIENT_W), bottom = dpi_px(INITIAL_CLIENT_H)}
 	windows.AdjustWindowRectEx(&client, windows.WS_OVERLAPPEDWINDOW, windows.FALSE, ex_style)
 	outer_w := client.right - client.left
 	outer_h := client.bottom - client.top
@@ -1202,6 +1257,10 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	if ui.hwnd == nil {
 		return false
 	}
+	// The window may land on a monitor with a different DPI than the system
+	// default used for the initial fonts; sync before creating children.
+	dpi_set(dpi_for_window(ui.hwnd))
+	ui_recreate_fonts()
 	if checkpoint != nil && !checkpoint(.Window) { return false }
 	ui_open_themes()
 	tray_class := windows.WNDCLASSEXW{cbSize = size_of(windows.WNDCLASSEXW),
@@ -1229,11 +1288,12 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	ui.lane = .Apps
 
 	// Filter edit control. Its WM_COMMAND EN_CHANGE keeps ui.filter current.
+	// WS_TABSTOP keeps it in the native Tab order (filter -> date picker).
 	ui.edit = windows.CreateWindowExW(
 		windows.DWORD(0),
 		windows.LPCWSTR(windows.utf8_to_wstring("EDIT", context.temp_allocator)),
 		nil,
-		windows.WS_CHILD | windows.WS_VISIBLE | windows.WS_BORDER,
+		windows.WS_CHILD | windows.WS_VISIBLE | windows.WS_TABSTOP | windows.WS_BORDER,
 		0, 0, 100, 24,
 		ui.hwnd, nil, windows.HINSTANCE(hinstance), nil,
 	)

@@ -34,7 +34,7 @@ SettingsUi :: struct { hwnd, minutes: windows.HWND, control_failed: bool }
 settings_ui: SettingsUi
 
 settings_switch_rect :: proc(w: i32) -> windows.RECT {
-	return windows.RECT{w - 70, 2, w - 42, TAB_H - 2}
+	return windows.RECT{w - dpi_px(70), dpi_px(2), w - dpi_px(42), dpi_px(TAB_H) - dpi_px(2)}
 }
 
 draw_settings_switch :: proc(dc: windows.HDC, w: i32) {
@@ -52,7 +52,7 @@ draw_settings_tooltip :: proc(dc: windows.HDC, w: i32) {
 	if !ui.mouse_valid || press_hit() != .None ||
 	   !rect_hit(settings_switch_rect(w), ui.mouse.x, ui.mouse.y) { return }
 	width := text_pixel_width("Settings", ui.font_normal) + 16
-	draw_single_line_tooltip(dc, tab_tooltip_rect(w - 42, width), "Settings")
+	draw_single_line_tooltip(dc, tab_tooltip_rect(w - dpi_px(42), width), "Settings")
 }
 
 settings_close :: proc() {

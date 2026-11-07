@@ -26,13 +26,13 @@ pane_pointer_move :: proc(x, y: i32, lay: Layout) {
 	switch s.kind {
 	case .None:
 	case .Timeline_Height:
-		max_h := max(MIN_LANE_H, (lay.list_bottom - lay.lane_y -
-			2 * LANE_GAP - ZOOM_LANES_GAP - ZOOM_H - SPLITTER_W - MIN_LOWER_H) / 3)
+		max_h := max(dpi_px(MIN_LANE_H), (lay.list_bottom - lay.lane_y -
+			2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_LANES_GAP) - dpi_px(ZOOM_H) - dpi_px(SPLITTER_W) - dpi_px(MIN_LOWER_H)) / 3)
 		ui.pane_lane_h = clamp((y - s.offset - lay.lane_y -
-			2 * LANE_GAP - ZOOM_LANES_GAP - ZOOM_H - SPLITTER_W) / 3, MIN_LANE_H, max_h)
+			2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_LANES_GAP) - dpi_px(ZOOM_H) - dpi_px(SPLITTER_W)) / 3, dpi_px(MIN_LANE_H), max_h)
 	case .List_Width:
 		ui.pane_totals_w = clamp(lay.chart_x + lay.chart_w - x + s.offset,
-			MIN_TOTALS_W, max(MIN_TOTALS_W, lay.chart_w - SPLITTER_W - MIN_LIST_W))
+			dpi_px(MIN_TOTALS_W), max(dpi_px(MIN_TOTALS_W), lay.chart_w - dpi_px(SPLITTER_W) - dpi_px(MIN_LIST_W)))
 	}
 }
 
@@ -44,9 +44,9 @@ pane_pointer_move :: proc(x, y: i32, lay: Layout) {
 		_fill(dc, r, C_SPLITTER_HOT if hot else C_BG)
 		color := windows.COLORREF(C_BTN_BORDER if hot else C_BORDER_SOFT)
 		if drag == .Timeline_Height {
-			line_h(dc, (r.left + r.right) / 2 - SPLITTER_GRIP_LEN / 2, r.top + SPLITTER_W / 2, SPLITTER_GRIP_LEN, color)
+			line_h(dc, (r.left + r.right) / 2 - dpi_px(SPLITTER_GRIP_LEN) / 2, r.top + dpi_px(SPLITTER_W) / 2, dpi_px(SPLITTER_GRIP_LEN), color)
 		} else {
-			line_v(dc, r.left + SPLITTER_W / 2, (r.top + r.bottom) / 2 - SPLITTER_GRIP_LEN / 2, SPLITTER_GRIP_LEN, color)
+			line_v(dc, r.left + dpi_px(SPLITTER_W) / 2, (r.top + r.bottom) / 2 - dpi_px(SPLITTER_GRIP_LEN) / 2, dpi_px(SPLITTER_GRIP_LEN), color)
 		}
 	}
 }

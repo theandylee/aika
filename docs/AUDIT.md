@@ -439,7 +439,7 @@ verified. References describe the source at audit time; line numbers may drift.
   remaining raw `& 0xFFFF`/`>> 16` message plumbing is standard Win32 word
   extraction.
 
-- [ ] **24. DPI and keyboard behavior need a coherent UI policy.**
+- [x] **24. DPI and keyboard behavior need a coherent UI policy.**
   References: `assets/aika.manifest`, `src/winui.odin:853–870`,
   `src/ui.odin:41–56`.
   The manifest has no DPI-awareness declaration; layout/font sizes are fixed
@@ -447,6 +447,15 @@ verified. References describe the source at audit time; line numbers may drift.
   Define scaling and focus/navigation centrally rather than adding per-feature
   scale factors and keyboard exceptions.
 
+  Fixed: manifest declares Per-Monitor V2; `src/dpi.odin` scales every
+  design constant centrally via `dpi_px` (identity at 96 DPI). Fonts
+  rebuild from scaled heights, stored pane sizes rescale, `WM_DPICHANGED`
+  adopts the suggested rect, and the minimum tracking size scales. Tab
+  cycles native controls only (filter EDIT gains `WS_TABSTOP`, main
+  window routes `IsDialogMessageW`); the custom canvas stays mouse-only
+  by design. Verified by `dpi_scaling_behavior` (rounding, layout
+  doubling at 200%, pane rescale), 104 tests, all UI scripts, and 92/92
+  pixel-identical snapshots vs HEAD at 96 DPI.
 - [ ] **25. Tests under-cover tracker lifecycle and duplicate native UI harnesses.**
   References: `src/tracker_test.odin`, `src/totals_tree_test.odin:5`,
   `tools/test-*.py`.

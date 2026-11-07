@@ -66,67 +66,67 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay: Layout
 	lay.w = w
 	lay.h = h
-	bottom_limit := h - FILTER_H - STATUS_H
+	bottom_limit := h - dpi_px(FILTER_H) - dpi_px(STATUS_H)
 
-	lay.toolbar_y = TAB_H
-	lay.ruler_y = TAB_H + TOOLBAR_H
-	lay.chart_x = MARGIN
-	lay.chart_w = w - MARGIN * 2 - 1
+	lay.toolbar_y = dpi_px(TAB_H)
+	lay.ruler_y = dpi_px(TAB_H) + dpi_px(TOOLBAR_H)
+	lay.chart_x = dpi_px(MARGIN)
+	lay.chart_w = w - dpi_px(MARGIN) * 2 - 1
 
 	// Start with the original layout; user sizes are clamped, not overwritten,
 	// when the window shrinks so they return when it grows again.
-	lane_area := bottom_limit - (lay.ruler_y + RULER_H) - 120 - LIST_HDR - 2 * LANE_GAP - ZOOM_H
+	lane_area := bottom_limit - (lay.ruler_y + dpi_px(RULER_H)) - dpi_px(120) - dpi_px(LIST_HDR) - 2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_H)
 	wanted_lane_h := ui.pane_lane_h
-	if wanted_lane_h == 0 { wanted_lane_h = min(96, max(MIN_LANE_H, lane_area / 3)) }
-	max_lane_h := max(MIN_LANE_H, (bottom_limit - (lay.ruler_y + RULER_H) -
-		2 * LANE_GAP - ZOOM_LANES_GAP - ZOOM_H - SPLITTER_W - MIN_LOWER_H) / 3)
-	lay.lane_h = clamp(wanted_lane_h, MIN_LANE_H, max_lane_h)
-	lay.lane_y = lay.ruler_y + RULER_H
-	lay.lanes_bottom = lay.lane_y + 3 * lay.lane_h + 2 * LANE_GAP
-	lay.zoom_y = lay.lanes_bottom + ZOOM_LANES_GAP
-	lay.list_top = lay.zoom_y + ZOOM_H + SPLITTER_W
+	if wanted_lane_h == 0 { wanted_lane_h = min(dpi_px(96), max(dpi_px(MIN_LANE_H), lane_area / 3)) }
+	max_lane_h := max(dpi_px(MIN_LANE_H), (bottom_limit - (lay.ruler_y + dpi_px(RULER_H)) -
+		2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_LANES_GAP) - dpi_px(ZOOM_H) - dpi_px(SPLITTER_W) - dpi_px(MIN_LOWER_H)) / 3)
+	lay.lane_h = clamp(wanted_lane_h, dpi_px(MIN_LANE_H), max_lane_h)
+	lay.lane_y = lay.ruler_y + dpi_px(RULER_H)
+	lay.lanes_bottom = lay.lane_y + 3 * lay.lane_h + 2 * dpi_px(LANE_GAP)
+	lay.zoom_y = lay.lanes_bottom + dpi_px(ZOOM_LANES_GAP)
+	lay.list_top = lay.zoom_y + dpi_px(ZOOM_H) + dpi_px(SPLITTER_W)
 	lay.list_bottom = bottom_limit
 	wanted_totals_w := ui.pane_totals_w
-	if wanted_totals_w == 0 { wanted_totals_w = SIDEBAR_W }
-	lay.sidebar_w = clamp(wanted_totals_w, MIN_TOTALS_W,
-		max(MIN_TOTALS_W, lay.chart_w - SPLITTER_W - MIN_LIST_W))
+	if wanted_totals_w == 0 { wanted_totals_w = dpi_px(SIDEBAR_W) }
+	lay.sidebar_w = clamp(wanted_totals_w, dpi_px(MIN_TOTALS_W),
+		max(dpi_px(MIN_TOTALS_W), lay.chart_w - dpi_px(SPLITTER_W) - dpi_px(MIN_LIST_W)))
 	lay.sidebar_x = lay.chart_x + lay.chart_w - lay.sidebar_w
-	lay.timeline_split = windows.RECT{lay.chart_x, lay.list_top - SPLITTER_W,
+	lay.timeline_split = windows.RECT{lay.chart_x, lay.list_top - dpi_px(SPLITTER_W),
 		lay.chart_x + lay.chart_w, lay.list_top}
-	lay.totals_split = windows.RECT{lay.sidebar_x - SPLITTER_W, lay.list_top,
+	lay.totals_split = windows.RECT{lay.sidebar_x - dpi_px(SPLITTER_W), lay.list_top,
 		lay.sidebar_x, lay.list_bottom}
 
 	lay.filter_y = bottom_limit
-	lay.filter_edit_x = 56
-	lay.filter_edit_y = bottom_limit + 4
-	lay.filter_edit_w = w - 56 - 16
-	lay.filter_edit_h = FILTER_H - 8
-	lay.status_y = h - STATUS_H
+	lay.filter_edit_x = dpi_px(56)
+	lay.filter_edit_y = bottom_limit + dpi_px(4)
+	lay.filter_edit_w = w - dpi_px(56) - dpi_px(16)
+	lay.filter_edit_h = dpi_px(FILTER_H) - dpi_px(8)
+	lay.status_y = h - dpi_px(STATUS_H)
 
-	btn_h := TOOLBAR_BTN_H
-	btn_y := lay.toolbar_y + 12
-	lay.btn_prev = windows.RECT{left = MARGIN, top = btn_y, right = MARGIN + 26, bottom = btn_y + btn_h}
-	lay.btn_today = windows.RECT{left = MARGIN + 30, top = btn_y, right = MARGIN + 98, bottom = btn_y + btn_h}
-	lay.btn_next = windows.RECT{left = MARGIN + 102, top = btn_y, right = MARGIN + 128, bottom = btn_y + btn_h}
-	lay.date_pick = windows.RECT{left = MARGIN + 140, top = btn_y, right = MARGIN + 140 + DATE_PICK_W, bottom = btn_y + btn_h}
-	lay.btn_track = windows.RECT{left = MARGIN + 148 + DATE_PICK_W, top = btn_y, right = MARGIN + 280 + DATE_PICK_W, bottom = btn_y + btn_h}
+	btn_h := dpi_px(TOOLBAR_BTN_H)
+	btn_y := lay.toolbar_y + dpi_px(12)
+	lay.btn_prev = windows.RECT{left = dpi_px(MARGIN), top = btn_y, right = dpi_px(MARGIN) + dpi_px(26), bottom = btn_y + btn_h}
+	lay.btn_today = windows.RECT{left = dpi_px(MARGIN) + dpi_px(30), top = btn_y, right = dpi_px(MARGIN) + dpi_px(98), bottom = btn_y + btn_h}
+	lay.btn_next = windows.RECT{left = dpi_px(MARGIN) + dpi_px(102), top = btn_y, right = dpi_px(MARGIN) + dpi_px(128), bottom = btn_y + btn_h}
+	lay.date_pick = windows.RECT{left = dpi_px(MARGIN) + dpi_px(140), top = btn_y, right = dpi_px(MARGIN) + dpi_px(140) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
+	lay.btn_track = windows.RECT{left = dpi_px(MARGIN) + dpi_px(148) + dpi_px(DATE_PICK_W), top = btn_y, right = dpi_px(MARGIN) + dpi_px(280) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
 
 	// Day start / day end / duration boxes anchored to the right.
-	day_box_w := min(i32(108), (w - lay.btn_track.right - 24) / 3 - 4)
-	day_box_h := i32(36)
-	day_box_y := lay.toolbar_y + 8
-	day_box_x := w - MARGIN - day_box_w
+	day_box_w := min(dpi_px(108), (w - lay.btn_track.right - dpi_px(24)) / 3 - dpi_px(4))
+	day_box_h := dpi_px(36)
+	day_box_y := lay.toolbar_y + dpi_px(8)
+	day_box_x := w - dpi_px(MARGIN) - day_box_w
 	for i := 2; i >= 0; i -= 1 {
 		lay.day_boxes[i] = windows.RECT{left = day_box_x, top = day_box_y, right = day_box_x + day_box_w, bottom = day_box_y + day_box_h}
-		day_box_x -= day_box_w + 4
+		day_box_x -= day_box_w + dpi_px(4)
 	}
 	return lay
 }
 
 compute_tabs :: proc(tab: Tab) -> windows.RECT {
-	txs := [Tab]i32{.Day = 2, .Timesheet = 58, .Statistics = 148}
-	tws := [Tab]i32{.Day = 54, .Timesheet = 88, .Statistics = 92}
-	return windows.RECT{left = txs[tab], top = 0, right = txs[tab] + tws[tab], bottom = TAB_H}
+	txs := [Tab]i32{.Day = dpi_px(2), .Timesheet = dpi_px(58), .Statistics = dpi_px(148)}
+	tws := [Tab]i32{.Day = dpi_px(54), .Timesheet = dpi_px(88), .Statistics = dpi_px(92)}
+	return windows.RECT{left = txs[tab], top = 0, right = txs[tab] + tws[tab], bottom = dpi_px(TAB_H)}
 }
 
 tab_name :: proc(tab: Tab) -> string {
@@ -158,7 +158,7 @@ lane_timeline :: proc(lane: Lane) -> i64 {
 
 // Top edge of a lane's rectangle; lanes are stacked with LANE_GAP between them.
 lane_top :: proc(lay: Layout, lane: Lane) -> i32 {
-	return lay.lane_y + i32(lane) * (lay.lane_h + LANE_GAP)
+	return lay.lane_y + i32(lane) * (lay.lane_h + dpi_px(LANE_GAP))
 }
 
 // --- Formatting ---
@@ -220,7 +220,7 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 
 draw_placeholder :: proc(dc: windows.HDC, w, h: i32, title, note: string) {
 	draw_tabs(dc)
-	draw_toolbar_background_rect(dc, 0, TAB_H, w, h - TAB_H - FILTER_H - STATUS_H)
+	draw_toolbar_background_rect(dc, 0, dpi_px(TAB_H), w, h - dpi_px(TAB_H) - dpi_px(FILTER_H) - dpi_px(STATUS_H))
 	draw_string(dc, title, w / 2 - 120, h / 2 - 60, ui.font_title, C_TXT)
 	draw_string(dc, note, w / 2 - 190, h / 2, ui.font_normal, C_DIM)
 }
@@ -232,8 +232,8 @@ draw_toolbar_background_rect :: proc(dc: windows.HDC, x, y, w, h: i32) {
 
 draw_tabs :: proc(dc: windows.HDC) {
 	w := ui.mem_w
-	fill_rect(dc, 0, 0, w, TAB_H, C_TAB_BG)
-	line_h(dc, 0, TAB_H - 1, w, C_BORDER_SOFT)
+	fill_rect(dc, 0, 0, w, dpi_px(TAB_H), C_TAB_BG)
+	line_h(dc, 0, dpi_px(TAB_H) - 1, w, C_BORDER_SOFT)
 	draw_theme_switch(dc, w)
 	draw_settings_switch(dc, w)
 	for tab in Tab {
@@ -249,11 +249,11 @@ draw_tabs :: proc(dc: windows.HDC) {
 		bg: windows.COLORREF = C_TAB_ACTIVE if active else C_TAB_BG
 		if !active && ui.mouse_valid && rect_hit(t, ui.mouse.x, ui.mouse.y) {
 			bg = C_BTN_HOVER
-		}		fill_rect(dc, t.left + 1, t.top, t.right - t.left - 1, TAB_H, bg)
+		}		fill_rect(dc, t.left + 1, t.top, t.right - t.left - 1, dpi_px(TAB_H), bg)
 		if active {
 			line_h(dc, t.left + 1, t.top, t.right - t.left - 2, C_ACCENT)
 		}
-		fill_frame(dc, t.left, t.top + 1, t.right - t.left, TAB_H - 1, C_BORDER_SOFT)
+		fill_frame(dc, t.left, t.top + 1, t.right - t.left, dpi_px(TAB_H) - 1, C_BORDER_SOFT)
 		tw := text_pixel_width(tab_name(tab), ui.font_normal)
 		draw_string(dc, tab_name(tab),
 			t.left + (t.right - t.left - tw) / 2, t.top + 6,
@@ -264,7 +264,7 @@ draw_tabs :: proc(dc: windows.HDC) {
 // --- Toolbar (date navigation + day start/end/duration) ---
 
 draw_toolbar :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
-	draw_toolbar_background_rect(dc, 0, lay.toolbar_y, lay.w, TOOLBAR_H)
+	draw_toolbar_background_rect(dc, 0, lay.toolbar_y, lay.w, dpi_px(TOOLBAR_H))
 	draw_button(dc, lay.btn_prev, "<", .Btn_Prev)
 	draw_button(dc, lay.btn_next, ">", .Btn_Next)
 	draw_button(dc, lay.btn_today, "Today", .Btn_Today)
@@ -338,7 +338,7 @@ draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) 
 	view_start, view_end := zoom_bounds(day_start, day_end)
 
 	// Ruler
-	draw_toolbar_background_rect(dc, lay.chart_x, lay.ruler_y, lay.chart_w, RULER_H)
+	draw_toolbar_background_rect(dc, lay.chart_x, lay.ruler_y, lay.chart_w, dpi_px(RULER_H))
 	step := zoom_tick_step(view_start, view_end, lay.chart_w)
 	first_tick := day_start + ((view_start - day_start + step - 1) / step) * step
 	for tick := first_tick; tick <= view_end; tick += step {
@@ -579,8 +579,8 @@ draw_list :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	skip := ui.list_scroll.pos
 
 	// Header
-	fill_rect(dc, x, lay.list_top, w, LIST_HDR, C_HEAD_BG)
-	fill_frame(dc, x, lay.list_top, w, LIST_HDR, C_BORDER_SOFT)
+	fill_rect(dc, x, lay.list_top, w, dpi_px(LIST_HDR), C_HEAD_BG)
+	fill_frame(dc, x, lay.list_top, w, dpi_px(LIST_HDR), C_BORDER_SOFT)
 	cols := list_columns(x, w)
 	draw_string(dc, "Title", x + 8, lay.list_top + 4, ui.font_normal, C_TXT, cols.start - x - 16)
 	draw_string(dc, "Start", cols.start + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
@@ -602,10 +602,10 @@ draw_list :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	n_rows := i32(len(rows))
 	for i := skip; i < n_rows && i < skip + visible; i += 1 {
 		row := rows[i]
-		ry := list_rows_top(lay) + i32(i - skip) * LIST_ROW
-		fill_rect(dc, x, ry, w, LIST_ROW, C_ROW_ALT if (i - skip) % 2 == 1 else C_PANEL)
+		ry := list_rows_top(lay) + i32(i - skip) * dpi_px(LIST_ROW)
+		fill_rect(dc, x, ry, w, dpi_px(LIST_ROW), C_ROW_ALT if (i - skip) % 2 == 1 else C_PANEL)
 		color := activity_colorref(Activity{group_id = row.group_id, color = row.color})
-		fill_rect(dc, x + 2, ry + 4, 4, LIST_ROW - 8, color)
+		fill_rect(dc, x + 2, ry + 4, 4, dpi_px(LIST_ROW) - 8, color)
 		draw_string(dc, row.name, x + 10, ry + 3, ui.font_normal, C_TXT, cols.start - x - 18)
 		draw_string(dc, fmt_snapshot_clock(snapshot, row.start_ms), cols.start + 4, ry + 3, ui.font_normal, C_DIM, 60)
 		draw_string(dc, fmt_snapshot_clock(snapshot, row.end_ms), cols.end + 4, ry + 3, ui.font_normal, C_DIM, 60)
@@ -682,7 +682,7 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	for i := skip; i < n_totals && i < skip + visible; i += 1 {
 		if ui.totals_tree {
 			draw_totals_tree_row(dc, tree_rows[i], x, y, row_w)
-			y += LIST_ROW
+			y += dpi_px(LIST_ROW)
 			continue
 		}
 		t := totals[i]
@@ -695,7 +695,7 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 		dur := fmt_span_hm(t.ms)
 		dw := text_pixel_width(dur, ui.font_normal)
 		draw_string(dc, dur, x + row_w - 8 - dw, y + 2, ui.font_normal, C_DIM)
-		y += LIST_ROW
+		y += dpi_px(LIST_ROW)
 	}
 
 	// Total line pinned to the bottom.
@@ -716,14 +716,14 @@ free_totals_slice :: proc(list: []TotRow) {
 
 draw_filter_row :: proc(dc: windows.HDC, w, h: i32) {
 	lay := compute_layout(w, h)
-	fill_rect(dc, 0, lay.filter_y, w, FILTER_H, C_BG)
+	fill_rect(dc, 0, lay.filter_y, w, dpi_px(FILTER_H), C_BG)
 	draw_string(dc, "Filter", 12, lay.filter_edit_y + 4, ui.font_normal, C_DIM)
 	// The EDIT child control draws itself between x=56 and the right edge.
 }
 
 draw_status_bar :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	lay := compute_layout(w, h)
-	fill_rect(dc, 0, lay.status_y, w, STATUS_H, C_PANEL)
+	fill_rect(dc, 0, lay.status_y, w, dpi_px(STATUS_H), C_PANEL)
 	line_h(dc, 0, lay.status_y, w, C_BORDER)
 
 	st: windows.SYSTEMTIME
@@ -820,8 +820,8 @@ draw_tooltip :: proc(snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) {
 draw_tooltip_box :: proc(dc: windows.HDC, w, h: i32, line1, line2, line3: string) {
 	tw := max(
 		max(text_pixel_width(line1, ui.font_normal), text_pixel_width(line2, ui.font_normal) + 40),
-		text_pixel_width(line3, ui.font_small)) + TOOLTIP_FOLLOW_W_PAD
-	th := TOOLTIP_FOLLOW_H
+		text_pixel_width(line3, ui.font_small)) + dpi_px(TOOLTIP_FOLLOW_W_PAD)
+	th := dpi_px(TOOLTIP_FOLLOW_H)
 	tx, ty := tooltip_follow_origin(ui.mouse.x, ui.mouse.y, tw, th, w, h)
 	fill_rect(dc, tx, ty, tw, th, C_TIP_BG)
 	fill_frame(dc, tx, ty, tw, th, C_TIP_BORDER)

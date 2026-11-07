@@ -455,6 +455,22 @@ Backbuffer replacement acquires DC/bitmap/selection before releasing the previou
 buffer; failed resize paints a direct error fallback and retries on later paints.
 Final tracker teardown releases owned metadata without acknowledging lost writes.
 
+### DPI and keyboard policy (audit #24)
+
+The manifest declares Per-Monitor V2 (`assets/aika.manifest`). All design
+metrics (`TAB_H`, `LIST_ROW`, ...) are 96-DPI pixels; `dpi_px` in
+`src/dpi.odin` converts them centrally (`(base*dpi + 48)/96`, identity at 96
+DPI, so existing layout tests are unchanged). Fonts are rebuilt from scaled
+heights, stored pane sizes rescale across moves, `WM_DPICHANGED` adopts the
+suggested rect and invalidates, and the minimum tracking size scales.
+
+Keyboard scope is minimal native-only by design: Tab cycles the filter EDIT
+(now `WS_TABSTOP`), the date-picker button and the scrollbars via
+`IsDialogMessageW` on the main window; settings/tag dialogs keep their own
+`IsDialogMessageW` routing. The custom canvas (tabs, toolbar buttons, zoom
+bar, lanes, lists) stays mouse-only; `Escape` still cancels the active
+interaction.
+
 ### Interaction state machine
 
 One pointer interaction at a time lives in `ui.interaction` (`src/interaction.odin`),

@@ -139,6 +139,16 @@ DPI/keyboard policy and new tracker features were not part of this step.
   named Win32/EM/ODS constants and typed fixed accents. Verified by 104 tests,
   all UI scripts, and 92/92 pixel-identical snapshots against HEAD.
 
+- [x] **A14. DPI and keyboard policy (audit #24)** (`src/dpi.odin`,
+  `assets/aika.manifest`).
+  Per-Monitor V2 declaration; every design constant scales centrally via
+  `dpi_px` (identity at 96 DPI). Scaled fonts, rescaled stored pane sizes,
+  `WM_DPICHANGED` suggested-rect adoption, scaled minimum tracking size.
+  Native-only keyboard scope: Tab through filter/date/scrollbars/dialogs via
+  `IsDialogMessageW`; canvas stays mouse-only. Verified by
+  `dpi_scaling_behavior`, 104 tests, all UI scripts, 92/92 pixel-identical
+  vs HEAD at 96 DPI.
+
 ---
 
 ## P0 — finish the tracker core

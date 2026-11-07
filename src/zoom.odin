@@ -8,12 +8,12 @@ import "core:sys/windows"
 ZOOM_MIN_SPAN :: 1.0 / 1440.0
 
 zoom_rects :: proc(lay: Layout) -> (bar, minus, plus, reset: windows.RECT) {
-	y := lay.zoom_y + ZOOM_PAD
+	y := lay.zoom_y + dpi_px(ZOOM_PAD)
 	right := lay.chart_x + lay.chart_w
-	reset = windows.RECT{right - 80, y, right, y + ZOOM_BAR_H}
-	plus = windows.RECT{reset.left - 30, y, reset.left - 4, y + ZOOM_BAR_H}
-	minus = windows.RECT{plus.left - 30, y, plus.left - 4, y + ZOOM_BAR_H}
-	bar = windows.RECT{lay.chart_x + 42, y, minus.left - 8, y + ZOOM_BAR_H}
+	reset = windows.RECT{right - 80, y, right, y + dpi_px(ZOOM_BAR_H)}
+	plus = windows.RECT{reset.left - 30, y, reset.left - 4, y + dpi_px(ZOOM_BAR_H)}
+	minus = windows.RECT{plus.left - 30, y, plus.left - 4, y + dpi_px(ZOOM_BAR_H)}
+	bar = windows.RECT{lay.chart_x + 42, y, minus.left - 8, y + dpi_px(ZOOM_BAR_H)}
 	return
 }
 
@@ -44,9 +44,9 @@ zoom_pointer_down :: proc(x, y: i32, lay: Layout) -> bool {
 	right := bar.left + i32(end * w)
 	f := clamp(f64(x - bar.left) / w, 0.0, 1.0)
 	kind := Zoom_Drag.Overview
-	if abs(x - left) <= EDGE_HIT_PX && abs(x - left) <= abs(x - right) {
+	if abs(x - left) <= dpi_px(EDGE_HIT_PX) && abs(x - left) <= abs(x - right) {
 		kind = .Left
-	} else if abs(x - right) <= EDGE_HIT_PX {
+	} else if abs(x - right) <= dpi_px(EDGE_HIT_PX) {
 		kind = .Right
 	} else if x < left || x > right {
 		span := end - start
@@ -114,7 +114,7 @@ draw_zoom_bar :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, day_
 	left := bar.left + i32(ui.zoom_start * f64(width))
 	right := bar.left + i32(ui.zoom_end * f64(width))
 	// Keep the selection compatible with the theme's timestamp text color.
-	fill_rect(dc, left, bar.top + 1, max(1, right - left), ZOOM_BAR_H - 2, C_ZOOM_SELECTION)
+	fill_rect(dc, left, bar.top + 1, max(1, right - left), dpi_px(ZOOM_BAR_H) - 2, C_ZOOM_SELECTION)
 	// A thin activity strip makes the overview useful when zoomed far in.
 	run := Bar_Run{dc = dc, y = bar.bottom - 5, h = 4}
 	for row in snapshot.rows {
@@ -136,9 +136,9 @@ draw_zoom_bar :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, day_
 		draw_string(dc, text, clamp(x - tw / 2, bar.left + 3, bar.right - tw - 3),
 			bar.top + 7, ui.font_small, C_TXT)
 	}
-	fill_frame(dc, bar.left, bar.top, width, ZOOM_BAR_H, C_BORDER_SOFT)
+	fill_frame(dc, bar.left, bar.top, width, dpi_px(ZOOM_BAR_H), C_BORDER_SOFT)
 	for edge in ([2]i32{left, right - 4}) {
-		fill_rect(dc, edge, bar.top, 4, ZOOM_BAR_H, C_ACCENT)
+		fill_rect(dc, edge, bar.top, 4, dpi_px(ZOOM_BAR_H), C_ACCENT)
 		line_v(dc, edge + 2, bar.top + 9, 8, C_PANEL)
 	}
 	draw_button(dc, minus, "-", .Zoom_Out)

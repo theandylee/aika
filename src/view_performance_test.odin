@@ -104,7 +104,7 @@ view_paint_measurement :: proc(t: ^testing.T) {
 	defer release_backbuffer(&ui)
 	// Hover a mid-day application bar so the tooltip path is exercised.
 	lay := compute_layout(W, H)
-	ui.mouse.y = lay.lane_y + 2 * (lay.lane_h + LANE_GAP) + lay.lane_h / 2
+	ui.mouse.y = lay.lane_y + 2 * (lay.lane_h + dpi_px(LANE_GAP)) + lay.lane_h / 2
 
 	// Primitive costs: 1,000 calls each, median of 21 batches, microseconds per call.
 	{
