@@ -11,9 +11,10 @@ Import_Action :: enum { Added, Updated, Unchanged, Deleted, Conflict }
 // Existing group metadata wins; source numeric IDs are only lookup keys in
 // the import's in-memory group map, never SQLite primary keys.
 db_import_group :: proc(db: ^DB, group: ImportGroup) -> (i64, DB_Result) {
-	lookup, ok := db_prepare(db, `SELECT GroupId FROM "Group" WHERE TimelineId=?1 AND Key=?2`)
+	lookup_lease, ok := db_lease(db, .Import_Group_Lookup, `SELECT GroupId FROM "Group" WHERE TimelineId=?1 AND Key=?2`)
 	if !ok { return 0, db_failure(db) }
-	defer sqlite3_finalize(lookup)
+	defer db_release(&lookup_lease)
+	lookup := lookup_lease.stmt
 	bound := db_bind_result(bind_i64(lookup, 1, group.timelineId), bind_text(lookup, 2, group.key))
 	if bound != .Ok { return 0, bound }
 	rc := sqlite3_step(lookup)
@@ -29,10 +30,11 @@ db_import_group :: proc(db: ^DB, group: ImportGroup) -> (i64, DB_Result) {
 		case: name = extract_xml_tag(group.textData, "Name")
 		}
 	}
-	stmt, prepared := db_prepare(db, `INSERT INTO "Group"
+	lease, prepared := db_lease(db, .Import_Group_Insert, `INSERT INTO "Group"
 		(TimelineId, DisplayName, Color, TextData, Key, UpdatedTimestamp) VALUES (?1,?2,?3,?4,?5,?6)`)
 	if !prepared { return 0, db_failure(db) }
-	defer sqlite3_finalize(stmt)
+	defer db_release(&lease)
+	stmt := lease.stmt
 	bound = db_bind_result(bind_i64(stmt, 1, group.timelineId), bind_text(stmt, 2, name),
 		bind_i64(stmt, 3, i64(u32(group.color))), bind_text(stmt, 4, group.textData),
 		bind_text(stmt, 5, group.key), bind_i64(stmt, 6, now_ms() / 1000))
@@ -64,11 +66,12 @@ import_source_fingerprint :: proc(activity: ImportActivity, group: i64) -> strin
 db_import_local_fingerprint :: proc(db: ^DB, id: i64) -> (string, DB_Result) {
 	// Row strings/fingerprints live in per-row scratch, not the parsed-data arena.
 	context.allocator = context.temp_allocator
-	stmt, ok := db_prepare(db, `SELECT TimelineId, DisplayName, GroupId, GroupListId,
+	lease, ok := db_lease(db, .Import_Local_Fingerprint, `SELECT TimelineId, DisplayName, GroupId, GroupListId,
 		StartLocalDate, StartLocalTime, StartUtcTime, EndLocalDate, EndLocalTime, EndUtcTime,
 		StartUtcMs, EndUtcMs, TextData FROM Activity WHERE ActivityId=?1`)
 	if !ok { return "", db_failure(db) }
-	defer sqlite3_finalize(stmt)
+	defer db_release(&lease)
+	stmt := lease.stmt
 	bound := db_result(bind_i64(stmt, 1, id))
 	if bound != .Ok { return "", bound }
 	rc := sqlite3_step(stmt)
@@ -92,15 +95,18 @@ db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, gro
 		StartLocalDate, StartLocalTime, StartUtcTime, EndLocalDate, EndLocalTime, EndUtcTime,
 		StartUtcMs, EndUtcMs, TextData, UpdatedTimestamp)
 		VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)`
+	slot := Stmt_Slot.Import_Activity_Insert
 	if id > 0 {
+		slot = .Import_Activity_Update
 		sql = `UPDATE Activity SET TimelineId=?1, DisplayName=?2, GroupId=?3,
 			StartLocalDate=?4, StartLocalTime=?5, StartUtcTime=?6,
 			EndLocalDate=?7, EndLocalTime=?8, EndUtcTime=?9,
 			StartUtcMs=?10, EndUtcMs=?11, TextData=?12, UpdatedTimestamp=?13 WHERE ActivityId=?14`
 	}
-	stmt, ok := db_prepare(db, sql)
+	lease, ok := db_lease(db, slot, sql)
 	if !ok { return 0, db_failure(db) }
-	defer sqlite3_finalize(stmt)
+	defer db_release(&lease)
+	stmt := lease.stmt
 	group_bound := bind_null(stmt, 3)
 	if group > 0 { group_bound = bind_i64(stmt, 3, group) }
 	bound := db_bind_result(bind_i64(stmt, 1, activity.timelineId), bind_text(stmt, 2, activity.displayName), group_bound,
@@ -122,10 +128,11 @@ db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, gro
 
 db_import_activity :: proc(db: ^DB, source: string, activity: ImportActivity, group: i64) -> (Import_Action, DB_Result) {
 	context.allocator = context.temp_allocator
-	lookup, ok := db_prepare(db, `SELECT LocalActivityId, SourceTimelineId, SourceStartUtcMs,
+	lookup_lease, ok := db_lease(db, .Import_Map_Lookup, `SELECT LocalActivityId, SourceTimelineId, SourceStartUtcMs,
 		SourceFingerprint, LocalFingerprint FROM ImportActivityMap WHERE SourceId=?1 AND SourceActivityId=?2`)
 	if !ok { return .Conflict, db_failure(db) }
-	defer sqlite3_finalize(lookup)
+	defer db_release(&lookup_lease)
+	lookup := lookup_lease.stmt
 	bound := db_bind_result(bind_text(lookup, 1, source), bind_i64(lookup, 2, activity.activityId))
 	if bound != .Ok { return .Conflict, bound }
 	rc := sqlite3_step(lookup)
@@ -158,13 +165,16 @@ db_import_activity :: proc(db: ^DB, source: string, activity: ImportActivity, gr
 	if read != .Ok { return .Conflict, read }
 	sql := `INSERT INTO ImportActivityMap (SourceId, SourceActivityId, SourceTimelineId, SourceStartUtcMs,
 		LocalActivityId, SourceFingerprint, LocalFingerprint) VALUES (?1,?2,?3,?4,?5,?6,?7)`
+	slot := Stmt_Slot.Import_Map_Insert
 	if existing {
+		slot = .Import_Map_Update
 		sql = `UPDATE ImportActivityMap SET SourceFingerprint=?6, LocalFingerprint=?7
 			WHERE SourceId=?1 AND SourceActivityId=?2 AND SourceTimelineId=?3 AND SourceStartUtcMs=?4 AND LocalActivityId=?5`
 	}
-	stmt, prepared := db_prepare(db, sql)
+	map_lease, prepared := db_lease(db, slot, sql)
 	if !prepared { return .Conflict, db_failure(db) }
-	defer sqlite3_finalize(stmt)
+	defer db_release(&map_lease)
+	stmt := map_lease.stmt
 	bound = db_bind_result(bind_text(stmt, 1, source), bind_i64(stmt, 2, activity.activityId),
 		bind_i64(stmt, 3, activity.timelineId), bind_i64(stmt, 4, activity.startUtcMs), bind_i64(stmt, 5, local_id),
 		bind_text(stmt, 6, source_fingerprint), bind_text(stmt, 7, local_fingerprint))

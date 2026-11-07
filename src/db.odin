@@ -1,14 +1,52 @@
 package main
 
+import "base:runtime"
 import "core:c"
 import "core:fmt"
 import "core:strings"
 import "core:crypto/sha2"
 import "core:encoding/base64"
 
+// DB is a plain value that the app copies as a *move* (App{db = db}); only one
+// copy is ever db_close'd. The statement cache therefore lives behind `cache`, a
+// heap object created by db_open: every copy shares it (so in-use flags agree),
+// and it is only trusted while cache.handle == db.handle. A DB built without
+// db_open (tests that open a raw handle) has a nil cache and simply prepares
+// one-off statements, exactly as before.
 DB :: struct {
 	handle: ^sqlite3,
 	path:   string,
+	cache:  ^Stmt_Cache,
+}
+
+// Fixed slots, only for measured hot paths (audit #17). Never keyed by SQL text.
+Stmt_Slot :: enum {
+	Update_End,
+	Insert_Activity,
+	Import_Group_Lookup,
+	Import_Group_Insert,
+	Import_Map_Lookup,
+	Import_Local_Fingerprint,
+	Import_Activity_Insert,
+	Import_Activity_Update,
+	Import_Map_Insert,
+	Import_Map_Update,
+}
+
+Stmt_Cache :: struct {
+	handle:   ^sqlite3, // connection the statements were prepared on
+	disabled: bool,     // tests: force the one-off prepare/finalize path
+	stmts:    [Stmt_Slot]^sqlite3_stmt,
+	busy:     [Stmt_Slot]bool,
+	prepares: int, // statistics for tests/benchmarks
+	reuses:   int,
+}
+
+// A borrowed statement. Always db_release it on every exit path (defer).
+Stmt_Lease :: struct {
+	stmt:  ^sqlite3_stmt,
+	cache: ^Stmt_Cache, // nil: one-off statement, finalized on release
+	slot:  Stmt_Slot,
 }
 
 // Empty successful reads are Ok; a missing individual record is Not_Found.
@@ -158,6 +196,7 @@ db_exec :: proc(db: ^DB, sql: string) -> bool {
 
 db_open :: proc(path: string, init_schema := db_init_schema) -> (DB, bool) {
 	db := DB{path = strings.clone(path)}
+	db.cache = new(Stmt_Cache, runtime.heap_allocator())
 	opened := false
 	defer if !opened { db_close(&db) }
 	path_c := strings.clone_to_cstring(path, context.temp_allocator)
@@ -167,6 +206,7 @@ db_open :: proc(path: string, init_schema := db_init_schema) -> (DB, bool) {
 		fmt.eprintln("cannot open database:", path, db_error(&db))
 		return DB{}, false
 	}
+	if db.cache != nil { db.cache.handle = db.handle }
 	sqlite3_busy_timeout(db.handle, 5000)
 	if !db_exec(&db, "PRAGMA journal_mode=WAL;") ||
 	   !db_exec(&db, "PRAGMA synchronous=NORMAL;") ||
@@ -179,6 +219,8 @@ db_open :: proc(path: string, init_schema := db_init_schema) -> (DB, bool) {
 }
 
 db_init_schema :: proc(db: ^DB) -> bool {
+	// Schema may change below: never carry statements across it.
+	db_stmt_cache_flush(db)
 	stmt, ok := db_prepare(db, "PRAGMA user_version")
 	if !ok { return false }
 	rc := sqlite3_step(stmt)
@@ -191,13 +233,44 @@ db_init_schema :: proc(db: ^DB) -> bool {
 	if !db_exec(db, "BEGIN IMMEDIATE") { return false }
 	committed := false
 	defer if !committed { db_exec(db, "ROLLBACK") }
-	if !db_exec(db, SCHEMA_SQL) || !db_exec(db, SEED_SQL) ||
+	if !db_exec(db, SCHEMA_SQL) || !db_exec(db, LONG_ACTIVITY_INDEX_SQL) || !db_exec(db, SEED_SQL) ||
 	   !db_exec(db, "PRAGMA user_version = 1") || !db_exec(db, "COMMIT") { return false }
 	committed = true
 	return true
 }
 
+// Finalizes every idle cached statement. A leased (busy) slot is left for its
+// holder's release; SQLite re-prepares v2 statements across schema changes anyway.
+db_stmt_cache_flush :: proc(db: ^DB) {
+	cache := db.cache
+	if cache == nil || cache.handle != db.handle { return }
+	for slot in Stmt_Slot {
+		if cache.stmts[slot] != nil && !cache.busy[slot] {
+			sqlite3_finalize(cache.stmts[slot])
+			cache.stmts[slot] = nil
+		}
+	}
+}
+
+// Test hook: false forces the historical prepare/finalize-per-call behavior.
+db_set_stmt_cache :: proc(db: ^DB, enabled: bool) {
+	if db.cache == nil { return }
+	db_stmt_cache_flush(db)
+	db.cache.disabled = !enabled
+}
+
+// Statements are finalized BEFORE the connection closes, so close_v2 never has
+// to defer. Idempotent: both pointers are cleared.
 db_close :: proc(db: ^DB) {
+	if db.cache != nil {
+		if db.cache.handle == db.handle {
+			for stmt in db.cache.stmts {
+				if stmt != nil { sqlite3_finalize(stmt) }
+			}
+		}
+		free(db.cache, runtime.heap_allocator())
+		db.cache = nil
+	}
 	if db.handle != nil {
 		sqlite3_close_v2(db.handle)
 		db.handle = nil
@@ -206,6 +279,44 @@ db_close :: proc(db: ^DB) {
 		delete(db.path)
 		db.path = ""
 	}
+}
+
+// Borrows a statement for `slot`. A cached statement is always returned reset
+// with cleared bindings, so every parameter must be bound by the caller. If the
+// slot is already leased (reentrancy), the cache is absent/disabled, or it
+// belongs to another connection, a one-off statement is prepared instead and
+// finalized by db_release. Failure semantics match db_prepare.
+db_lease :: proc(db: ^DB, slot: Stmt_Slot, sql: string) -> (Stmt_Lease, bool) {
+	cache := db.cache
+	if cache != nil && cache.handle == db.handle && db.handle != nil && !cache.disabled && !cache.busy[slot] {
+		if cache.stmts[slot] == nil {
+			stmt, prepared := db_prepare(db, sql)
+			if !prepared { return {}, false }
+			cache.stmts[slot] = stmt
+			cache.prepares += 1
+		} else {
+			cache.reuses += 1
+		}
+		cache.busy[slot] = true
+		return Stmt_Lease{stmt = cache.stmts[slot], cache = cache, slot = slot}, true
+	}
+	stmt, prepared := db_prepare(db, sql)
+	if !prepared { return {}, false }
+	return Stmt_Lease{stmt = stmt}, true
+}
+
+// Never leaves a cached statement mid-step (which would hold a read lock). The
+// reset return code reports the *previous* step's error, so it is ignored.
+db_release :: proc(lease: ^Stmt_Lease) {
+	if lease.stmt == nil { return }
+	if lease.cache != nil {
+		sqlite3_reset(lease.stmt)
+		sqlite3_clear_bindings(lease.stmt)
+		lease.cache.busy[lease.slot] = false
+	} else {
+		sqlite3_finalize(lease.stmt)
+	}
+	lease^ = {}
 }
 
 db_prepare :: proc(db: ^DB, sql: string) -> (^sqlite3_stmt, bool) {
@@ -331,7 +442,7 @@ db_ensure_group_id :: proc(db: ^DB, timeline_id: i64, key: string, display_name:
 
 db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, group_id: i64, start_ms, end_ms: i64) -> (i64, DB_Result) {
 	if end_ms < start_ms { return 0, .Failed }
-	stmt, ok := db_prepare(db, `
+	lease, ok := db_lease(db, .Insert_Activity, `
 		INSERT INTO Activity (
 			TimelineId, DisplayName, GroupId,
 			StartLocalDate, StartLocalTime, StartUtcTime,
@@ -342,7 +453,8 @@ db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, grou
 	if !ok {
 		return 0, db_failure(db)
 	}
-	defer sqlite3_finalize(stmt)
+	defer db_release(&lease)
+	stmt := lease.stmt
 	bound := db_bind_result(
 		bind_i64(stmt, 1, timeline_id), bind_text(stmt, 2, display_name), bind_i64(stmt, 3, group_id),
 		bind_i64(stmt, 12, now_ms() / 1000))
@@ -364,7 +476,7 @@ db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) -> DB_Res
 	if activity_id <= 0 {
 		return .Not_Found
 	}
-	stmt, ok := db_prepare(db, `
+	lease, ok := db_lease(db, .Update_End, `
 		UPDATE Activity SET
 			EndLocalDate = ?1, EndLocalTime = ?2, EndUtcTime = ?3, EndUtcMs = ?4, UpdatedTimestamp = ?5
 		WHERE ActivityId = ?6 AND StartUtcMs <= ?4
@@ -372,7 +484,8 @@ db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) -> DB_Res
 	if !ok {
 		return db_failure(db)
 	}
-	defer sqlite3_finalize(stmt)
+	defer db_release(&lease)
+	stmt := lease.stmt
 	bound := db_bind_result(
 		bind_i64(stmt, 5, now_ms() / 1000), bind_i64(stmt, 6, activity_id))
 	if bound != .Ok { return bound }
@@ -547,9 +660,48 @@ Activity :: struct {
 	color:        u32,
 }
 
-// The start-time index helps latest/neighbor reads but regresses this overlap
-// query on representative history. Keep the measured date-index access path.
+// Day overlap is split by interval length so cost follows the day, not history:
+//  * ordinary rows (duration <= LONG_ACTIVITY_MS) can only overlap the day if
+//    they start inside [day_start - LONG, day_end): a bounded seek on
+//    IX_Activity_Timeline_Start;
+//  * long rows (duration > LONG) are rare and live in the partial index
+//    IX_Activity_Long, scanned up to day_end and filtered by end.
+// The two branches are disjoint by the duration predicate. The local-date terms
+// are kept as plain filters so results equal the former date-index query.
+// The literal below MUST equal LONG_ACTIVITY_MS (asserted by a test) and the
+// long branch repeats the partial-index expression verbatim so the planner can
+// use it.
+LONG_ACTIVITY_MS :: i64(86_400_000)
+LONG_ACTIVITY_SQL :: "86400000"
+
+LONG_ACTIVITY_INDEX_SQL :: "CREATE INDEX IF NOT EXISTS IX_Activity_Long ON Activity (TimelineId, StartUtcMs) WHERE EndUtcMs - StartUtcMs > " + LONG_ACTIVITY_SQL
+
 LOAD_ACTIVITIES_SQL :: `
+		SELECT a.ActivityId, a.TimelineId, COALESCE(a.DisplayName, ''), COALESCE(a.GroupId, 0),
+		       a.StartUtcMs, a.EndUtcMs, a.StartLocalDate,
+		       COALESCE(g.DisplayName, ''), COALESCE(g.Color, 0)
+		FROM Activity a INDEXED BY IX_Activity_Timeline_Start
+		LEFT JOIN "Group" g ON g.GroupId = a.GroupId
+		WHERE a.TimelineId IN (1, 2, 3)
+		  AND a.StartUtcMs >= ?2 - ` + LONG_ACTIVITY_SQL + ` AND a.StartUtcMs < ?3
+		  AND a.EndUtcMs > ?2 AND a.EndUtcMs - a.StartUtcMs <= ` + LONG_ACTIVITY_SQL + `
+		  AND a.StartLocalDate <= ?1 AND a.EndLocalDate >= ?1
+		UNION ALL
+		SELECT a.ActivityId, a.TimelineId, COALESCE(a.DisplayName, ''), COALESCE(a.GroupId, 0),
+		       a.StartUtcMs, a.EndUtcMs, a.StartLocalDate,
+		       COALESCE(g.DisplayName, ''), COALESCE(g.Color, 0)
+		FROM Activity a INDEXED BY IX_Activity_Long
+		LEFT JOIN "Group" g ON g.GroupId = a.GroupId
+		WHERE a.TimelineId IN (1, 2, 3)
+		  AND a.EndUtcMs - a.StartUtcMs > ` + LONG_ACTIVITY_SQL + `
+		  AND a.StartUtcMs < ?3 AND a.EndUtcMs > ?2
+		  AND a.StartLocalDate <= ?1 AND a.EndLocalDate >= ?1
+		ORDER BY 5 ASC, 1 ASC
+	`
+
+// The former day query (date index, scans older history). Kept only so tests
+// and benchmarks can prove the new query returns identical rows.
+LEGACY_LOAD_ACTIVITIES_SQL :: `
 		SELECT a.ActivityId, a.TimelineId, COALESCE(a.DisplayName, ''), COALESCE(a.GroupId, 0),
 		       a.StartUtcMs, a.EndUtcMs, a.StartLocalDate,
 		       COALESCE(g.DisplayName, ''), COALESCE(g.Color, 0)

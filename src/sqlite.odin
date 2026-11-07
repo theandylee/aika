@@ -39,6 +39,9 @@ foreign aika_sqlite {
 	sqlite3_step :: proc(stmt: ^sqlite3_stmt) -> c.int ---
 	sqlite3_reset :: proc(stmt: ^sqlite3_stmt) -> c.int ---
 	sqlite3_finalize :: proc(stmt: ^sqlite3_stmt) -> c.int ---
+	sqlite3_stmt_busy :: proc(stmt: ^sqlite3_stmt) -> c.int ---
+	sqlite3_clear_bindings :: proc(stmt: ^sqlite3_stmt) -> c.int ---
+	sqlite3_next_stmt :: proc(db: ^sqlite3, stmt: ^sqlite3_stmt) -> ^sqlite3_stmt ---
 	sqlite3_bind_text :: proc(stmt: ^sqlite3_stmt, idx: c.int, text: cstring, n: c.int, destructor: rawptr) -> c.int ---
 	sqlite3_bind_int64 :: proc(stmt: ^sqlite3_stmt, idx: c.int, value: i64) -> c.int ---
 	sqlite3_bind_int :: proc(stmt: ^sqlite3_stmt, idx: c.int, value: c.int) -> c.int ---

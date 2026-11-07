@@ -292,9 +292,20 @@ every binding result is checked before stepping the statement.
 
 Failed opens close their handle and owned path before returning an empty DB.
 Cleanup is idempotent. The additive `(TimelineId, StartUtcMs, ActivityId)` index
-supports latest-row ordering and task-boundary seeks. Day overlap reads explicitly
-retain `IX_Activity_Timeline_Date`: the new index otherwise doubled their cost on
-synthetic history. It does not solve general large-history overlap scanning.
+supports latest-row ordering and task-boundary seeks, and day overlap reads
+(`LOAD_ACTIVITIES_SQL`): ordinary rows by a bounded start-time seek, rows longer
+than `LONG_ACTIVITY_MS` through the small partial index `IX_Activity_Long`, merged
+with `UNION ALL`. Day-load cost follows the day's size, not history age; the
+older date-index query survives only as a test oracle. See `DATABASE.md`.
+
+Measured hot statements (importer group/row paths, tracker insert and end-time
+update) borrow prepared statements from a fixed-slot cache (`Stmt_Slot`,
+`db_lease`/`db_release` in `src/db.odin`). The cache is a heap object reached
+through `DB.cache`, valid only while `cache.handle == db.handle`, so copied `DB`
+values share it and a foreign handle never uses it. Each lease is reset and
+cleared on release, a re-entered slot falls back to a one-off statement, and
+`db_close` finalizes every slot before closing the connection. All other
+statements still use `db_prepare` + `sqlite3_finalize`.
 
 Important functions:
 

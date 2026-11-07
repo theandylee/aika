@@ -49,10 +49,10 @@ Step 6 reliability follow-up is implemented: callback-scoped scratch, repeatable
 partial-startup cleanup, transactional backbuffers, typed zoom/shared interaction
 cancellation, hidden Day hit-target fixes, PID-scoped native test helpers and a
 resource soak. Measured synthetic-history results justified only the timeline/start
-index; day reads retain their existing date-index path to avoid a regression.
+index; day reads then kept their date-index path (superseded by audit #14: day
+reads now use a start-time seek plus the partial `IX_Activity_Long` index).
 See `AUDIT.md` for measurements, passing checks and verification boundaries.
-Prepared statement reuse, snapshot/derived-view caching, generalized overlap
-indexing and import peak-memory profiling remain deferred. The later audit #13
+Prepared statement reuse, snapshot/derived-view caching and import peak-memory profiling remain deferred. The later audit #13
 follow-up adds bounded foreground metadata caching, not a general executable map.
 DPI/keyboard policy and new tracker features were not part of this step.
 

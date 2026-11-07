@@ -20,7 +20,7 @@ db_hot_query_plans :: proc(t: ^testing.T) {
 		 ORDER BY StartUtcMs DESC, ActivityId DESC LIMIT 1`, "IX_Activity_Timeline_Start"},
 		{`SELECT MIN(StartUtcMs) FROM Activity WHERE TimelineId=1 AND ActivityId<>1
 		 AND StartUtcMs>=1 AND EndUtcMs>StartUtcMs`, "IX_Activity_Timeline_Start"},
-		{LOAD_ACTIVITIES_SQL, "IX_Activity_Timeline_Date"},
+		{LOAD_ACTIVITIES_SQL, "IX_Activity_Timeline_Start"},
 	}) {
 		stmt, prepared := db_prepare(&db, fmt.tprintf("EXPLAIN QUERY PLAN %s", query.sql))
 		testing.expect(t, prepared)
@@ -34,6 +34,33 @@ db_hot_query_plans :: proc(t: ^testing.T) {
 		sqlite3_finalize(stmt)
 		testing.expect(t, found)
 	}
+}
+
+// The day query must seek both branches (ordinary rows by start time, long rows
+// via the partial index) and never scan the Activity table or the date index.
+@(test)
+day_load_plan_seeks_both_branches :: proc(t: ^testing.T) {
+	scratch: Scratch
+	context.temp_allocator = scratch_begin(&scratch)
+	defer scratch_end(&scratch)
+	db, ok := db_open(":memory:")
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&db)
+	stmt, prepared := db_prepare(&db, fmt.tprintf("EXPLAIN QUERY PLAN %s", LOAD_ACTIVITIES_SQL))
+	testing.expect(t, prepared)
+	if !prepared { return }
+	defer sqlite3_finalize(stmt)
+	start_seek, long_seek, scan, date_index := false, false, false, false
+	for sqlite3_step(stmt) == SQLITE_ROW {
+		plan := col_text(stmt, 3)
+		start_seek = start_seek || strings.contains(plan, "USING INDEX IX_Activity_Timeline_Start (TimelineId=? AND StartUtcMs>? AND StartUtcMs<?)")
+		long_seek = long_seek || strings.contains(plan, "USING INDEX IX_Activity_Long (TimelineId=? AND StartUtcMs<?)")
+		scan = scan || strings.has_prefix(plan, "SCAN a")
+		date_index = date_index || strings.contains(plan, "IX_Activity_Timeline_Date")
+		delete(plan)
+	}
+	testing.expect(t, start_seek && long_seek && !scan && !date_index)
 }
 
 // Opt-in, no performance thresholds in correctness tests. Uses the statically
@@ -59,16 +86,17 @@ db_representative_history_measurement :: proc(t: ^testing.T) {
 	SELECT t,'item',d,'','',d,'','',1700000000000+d*86400000+i*(86400000/n),
 	1700000000000+d*86400000+(i+1)*(86400000/n)
 	FROM days CROSS JOIN items CROSS JOIN lanes WHERE i<n;`))
-	day_unpinned, _ := strings.replace_all(LOAD_ACTIVITIES_SQL, " INDEXED BY IX_Activity_Timeline_Date", "", context.temp_allocator)
 	for phase in 0 ..< 2 {
 		if phase == 1 { testing.expect(t, db_exec(&db, `CREATE INDEX IX_Activity_Timeline_Start ON Activity(TimelineId,StartUtcMs,ActivityId)`)) }
+		// The new day query needs IX_Activity_Timeline_Start, absent in phase 0.
 		for query in ([4]struct{name, sql: string}{
 			{"latest app", `SELECT ActivityId,COALESCE(GroupId,0),COALESCE(DisplayName,''),StartUtcMs,EndUtcMs
 			 FROM Activity WHERE TimelineId=3 AND EndUtcMs>0 ORDER BY StartUtcMs DESC,ActivityId DESC LIMIT 1`},
 			{"task neighbor", `SELECT MIN(StartUtcMs) FROM Activity WHERE TimelineId=1 AND ActivityId<>0
 			 AND StartUtcMs>=1731449600000 AND EndUtcMs>StartUtcMs`},
-			{"day unpinned", day_unpinned}, {"day pinned", LOAD_ACTIVITIES_SQL},
+			{"day legacy", LEGACY_LOAD_ACTIVITIES_SQL}, {"day split", LOAD_ACTIVITIES_SQL},
 		}) {
+			if phase == 0 && query.name == "day split" { continue }
 			samples: [21]f64
 			for &sample in samples {
 				start := time.tick_now()

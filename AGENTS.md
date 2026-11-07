@@ -122,6 +122,10 @@ These have caused bugs before. Do not break them casually.
   filter bar. No OpenGL driver is loaded; a full window costs ~6 MB private
   (the raylib/OpenGL version cost ~146 MB).
 - SQLite is statically linked from `vendor/sqlite/sqlite3.lib`.
+- Cached statements (`Stmt_Slot`, `db_lease`/`db_release` in `db.odin`) are only for
+  measured hot paths: always `defer db_release`, rebind every parameter, and keep
+  one SQL text per slot. Never `sqlite3_finalize` a leased statement; `db_close`
+  finalizes the cache before closing the connection.
 - The GUI build uses `-subsystem:windows`; the CLI build does not.
 - Do not allocate the font codepoint array with `context.temp_allocator`; freeing
   it at function return hangs. Use the default allocator. (Legacy raylib note;

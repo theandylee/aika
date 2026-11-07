@@ -214,7 +214,7 @@ verified. References describe the source at audit time; line numbers may drift.
   expiry refresh the entry. Failed metadata/identity lookups are not cached, and
   failed DB lookups retry without discarding valid metadata. No handles are retained.
 
-- [ ] **14. Indexes do not match important access patterns.**
+- [x] **14. Indexes do not match important access patterns.**
   References: `src/db.odin:60–61`, `src/db.odin:437–444`,
   `src/task.odin:35–36`.
   Query-plan inspection found a temporary sort for latest activity and no
@@ -226,8 +226,37 @@ verified. References describe the source at audit time; line numbers may drift.
   Step 6: added `(TimelineId, StartUtcMs, ActivityId)` after synthetic-history
   measurements on bundled SQLite. Latest-row and task-neighbor reads now seek
   without the old scan/sort. Day reads explicitly retain the local-date index:
-  allowing the new index doubled their cost. General day-overlap scalability
-  remains open; see measurements below.
+  allowing the new index doubled their cost.
+  Resolved (day-overlap follow-up): the day query is now a `UNION ALL` of
+  ordinary rows (duration <= `LONG_ACTIVITY_MS`, 24 h; bounded seek on
+  `IX_Activity_Timeline_Start` over `[dayStart - LONG, dayEnd)`) and long rows
+  (partial index `IX_Activity_Long (TimelineId, StartUtcMs) WHERE EndUtcMs -
+  StartUtcMs > 86400000`), ordered by `StartUtcMs, ActivityId`. Local-date terms
+  stay as row filters, so results are identical (id hashes compared with the
+  legacy query for six target days at each size, plus equivalence tests). Median
+  load, synthetic 8-year history, bundled SQLite 3.54.1, disk file, cold open,
+  21 runs/target:
+
+  | Rows | Target | Legacy median | Split median | Rows loaded |
+  |---:|---|---:|---:|---:|
+  | 100k | today / 3y ago / oldest | 6,745 / 2,918 / 59 us | 176 / 111 / 91 us | ~34 |
+  | 500k | today / 3y ago / oldest | 33,727 / 18,745 / 197 us | 431 / 316 / 243 us | ~171 |
+  | 2M | today / 3y ago / oldest | 127,513 / 73,550 / 981 us | 1,426 / 1,166 / 1,820 us | ~685 |
+
+  The legacy cost depended on history age; the new cost is flat across ages and
+  proportional to the day's row count (the old query was only fast for the oldest
+  day, which the new one gives up by ~0.1-0.8 ms of fixed/row cost).
+  Write cost (tracker autocommit insert / update-end medians): 48/34 us before,
+  49-51/35-36 us after at every size, i.e. within noise (partial index holds only
+  rows > 24 h). Index build on an existing database happens once at open
+  (`CREATE INDEX IF NOT EXISTS`; `user_version` unchanged at 1): 64 ms for 0.5M
+  rows, 305 ms for 2M rows. Limitations: the long-row branch scans every long row
+  older than the day (~0.1 % of synthetic rows; at 2M the "inside a multi-day
+  row" day took 2.7 ms); a database with very many > 24 h rows would degrade
+  toward the old behavior for that branch. The oldest day got slower (59 -> 91 us
+  at 100k, 981 -> 1,820 us at 2M) because the legacy query could stop at once.
+  Index size was not measured. Not done: a `max duration` bound for long rows, and `IX_Activity_Timeline_Date`
+  is now unused by the app (kept for schema compatibility and as test oracle).
 
 - [x] **15. Derived view data is rebuilt on every repaint.**
   References: `src/ui.odin:537–710`, `src/totals_tree.odin:21–74`.
@@ -254,11 +283,50 @@ verified. References describe the source at audit time; line numbers may drift.
   queue fills and automatically resumes with new intervals after it drains.
   Task/tag actions still report failure directly rather than entering this queue.
 
-- [ ] **17. Hot-path statements are repeatedly prepared/finalized.**
+- [x] **17. Hot-path statements are repeatedly prepared/finalized.**
   References: `src/db.odin`, `src/importer.odin:51–71`.
   This is particularly wasteful in imports and repeated endpoint updates.
   Reuse prepared statements for measured hot paths, with explicit ownership and
   complete rebinding. The bindings already expose `sqlite3_reset`.
+  Resolved for the measured paths (importer rows/groups, tracker insert and
+  end-time update); deliberately not applied elsewhere. Prepare+finalize costs
+  2.6-4.3 us per statement (bundled SQLite 3.54.1, temp file DB, WAL). Median
+  times, opt-in `statement_reuse_measurement` (synthetic 3,000 groups / 20,000
+  activities; 5 runs; 1,001 calls for the writes), one-off prepare -> cache:
+
+  | Path | Before | After |
+  |---|---:|---:|
+  | Fresh import (~86k prepares) | 1,160 ms | 812 ms (-30 %) |
+  | Unchanged re-import (20k lookups) | 261 ms | 198 ms (-24 %) |
+  | `db_insert_activity` (autocommit) | 45.9 us | 38.3 us |
+  | `db_update_activity_end` (autocommit) | 32.6 us | 25.0 us |
+  | `db_extend_task_until_boundary` (not converted) | 66.2 us | 65.6 us (noise) |
+
+  Not converted, by number: the 1 Hz task tick spends ~15 us of 66 us in four
+  prepares, i.e. ~0.0015 % of one core; the tracker's 10 s end update saves
+  ~7 us per 10 s (converted only because the slot is shared with idle
+  reconciliation and the change is mechanical); `db_reconcile_idle_apps` DELETE,
+  tag range/resize/color/bounds lookups, day load, `db_ensure_group`, schema and
+  one-shot statements are rare or user-driven and keep `db_prepare` + finalize.
+  Design: `DB.cache` points to a heap `Stmt_Cache` (explicit `heap_allocator`,
+  so allocator-tracking tests and arena contexts cannot misattribute it) with
+  fixed `Stmt_Slot`-indexed statements, one SQL text per slot, never keyed by
+  string. `db_lease` returns the statement reset with cleared bindings (callers
+  rebind every parameter) and `defer db_release` resets/clears on every exit path,
+  so no cached statement is left mid-step holding a read lock; the reset return
+  code (previous step's error) is ignored, and result codes still come from
+  `sqlite3_step`, so Busy/Locked/Failed map exactly as before. A slot already
+  leased (reentrancy), a nil/disabled cache, or a cache whose `handle` differs from
+  `db.handle` falls back to a one-off prepare/finalize. Copies of a `DB` value
+  (`App{db = db}`) are moves: they share the cache pointer, so in-use flags agree;
+  only one copy is closed, as before. `db_close` finalizes all slots before
+  `sqlite3_close_v2` and clears both pointers (idempotent); `db_init_schema` flushes
+  idle slots first, and statements are prepared lazily afterwards.
+  Tests: `src/statement_cache_test.odin` (rebinding incl. NULL vs value, early
+  returns, constraint error, BUSY from a second connection, reentrancy, rollback
+  and failed-import recovery, close/reopen/double close, no leaked statements,
+  copy and mismatched-connection safety, byte-identical import dumps cached vs
+  uncached across fresh/unchanged/updated imports).
 
 ## Structure, readability, and maintainability
 
@@ -466,8 +534,9 @@ verified. References describe the source at audit time; line numbers may drift.
   | Recent day, unrestricted planner | 21.091 ms | 30.008 ms |
   | Recent day, retained date index | 18.773 ms | 18.248 ms |
 
-  The date query deliberately uses `INDEXED BY IX_Activity_Timeline_Date` to avoid
-  the measured regression; no general day-query speedup is claimed. A separate
+  (Superseded by item 14's day-overlap follow-up: the date query no longer uses
+  `IX_Activity_Timeline_Date`.) At this step the date query deliberately used
+  `INDEXED BY IX_Activity_Timeline_Date` to avoid the measured regression. A separate
   Python SQLite 3.50.4 disk-backed proxy reproduced the same plan tradeoff. Added
   query-plan regression tests and repeatable opt-in Odin/Python benchmarks.
 - Deferred: executable metadata/resolved identity caching, prepared-statement

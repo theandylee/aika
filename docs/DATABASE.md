@@ -144,9 +144,24 @@ Indexes:
 CREATE INDEX IX_Activity_Timeline_Date
     ON Activity (TimelineId, StartLocalDate, EndLocalDate);
 
+CREATE INDEX IX_Activity_Timeline_Start
+    ON Activity (TimelineId, StartUtcMs, ActivityId);
+
+-- aika extension: only rows longer than LONG_ACTIVITY_MS (24 h), so it stays tiny.
+CREATE INDEX IX_Activity_Long
+    ON Activity (TimelineId, StartUtcMs)
+    WHERE EndUtcMs - StartUtcMs > 86400000;
+
 CREATE INDEX IX_Activity_Updated
     ON Activity (UpdatedTimestamp);
 ```
+
+All `CREATE INDEX IF NOT EXISTS` statements run on every open, so a database
+created before an index existed gains it on the next open (`user_version` stays 1;
+building `IX_Activity_Long` took ~64 ms on 0.5 M rows and ~305 ms on 2 M rows).
+`LONG_ACTIVITY_MS` in `src/db.odin` and its SQL literal must agree (tested); the
+literal is needed because a partial index is only used when the query repeats its
+exact expression.
 
 ### Document
 
@@ -245,6 +260,23 @@ exclusive next midnight (23/24/25 hours as appropriate), not midnight minus 1 ms
 The UTC predicates exclude an activity ending exactly at the selected day's
 start, while retaining activities that span midnight. Repository insert/endpoint
 updates reject reversed intervals; no migration repairs old malformed history.
+
+`LOAD_ACTIVITIES_SQL` returns exactly the rows the four predicates above select
+(timelines 1-3, ordered by `StartUtcMs, ActivityId`) but reaches them without
+scanning older history. It is a `UNION ALL` of two disjoint branches split by
+duration `D = EndUtcMs - StartUtcMs`:
+
+- `D <= LONG_ACTIVITY_MS`: seek `IX_Activity_Timeline_Start` for
+  `StartUtcMs` in `[dayStart - LONG_ACTIVITY_MS, dayEnd)`, then filter
+  `EndUtcMs > dayStart` (an overlapping short row cannot start earlier);
+- `D > LONG_ACTIVITY_MS`: scan `IX_Activity_Long` for `StartUtcMs < dayEnd`, then
+  filter `EndUtcMs > dayStart`.
+
+Both branches keep the `StartLocalDate`/`EndLocalDate` terms as row filters, so
+rows with inconsistent stored local dates are included/excluded exactly as before.
+The old query remains as `LEGACY_LOAD_ACTIVITIES_SQL` for equivalence tests only.
+Cost follows the day's size plus the number of long rows older than the day
+(about 0.1 % of rows in the benchmark); see `AUDIT.md` item 14.
 
 Idle reconciliation is one transaction over pending writes, current-spell-owned
 application rows, and Active/Away endpoints. It trims rows crossing the cutoff and

@@ -375,13 +375,28 @@ Remove-Item Env:AIKA_BENCHMARK
 ```
 
 The opt-in test seeds 337,990 rows in memory and prints 21-execution medians for
-prepare/step/finalize, before/after the timeline/start index and with/without the
-day-query date-index hint. No speed thresholds are enforced in correctness tests.
+prepare/step/finalize, before/after the timeline/start index and for the legacy vs split day query
+(`AIKA_DAYLOAD_BENCHMARK=1 AIKA_DAYLOAD_ROWS=100000|500000|2000000` with
+`-define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_NAMES=main.day_load_measurement`
+in `src/day_load_benchmark_test.odin` also compares result hashes with the
+legacy query and times the upgrade index build). No speed thresholds are enforced in correctness tests.
 `python tools/benchmark-history.py` provides a disk-backed Python-SQLite query-plan
 proxy; its SQLite version differs, so do not label it an Odin runtime benchmark.
-Neither benchmark reads a user's database. Statement reuse and broader
-day-overlap indexing remain deferred; derived-view caching was measured and
+Neither benchmark reads a user's database. Statement reuse was measured and applied
+to importer/tracker hot paths (below); derived-view caching was measured and
 rejected (see the Day-view paint benchmark below).
+
+Opt-in statement-reuse benchmark (temp file DBs only; compares one-off prepare
+with the statement cache in one run):
+
+```powershell
+$env:AIKA_STMT_BENCHMARK = '1'
+odin test src -vet -define:ODIN_TEST_NAMES=main.statement_reuse_measurement
+Remove-Item Env:AIKA_STMT_BENCHMARK
+```
+
+Lines starting `STMT` report a 3,000-group / 20,000-activity import, autocommit
+insert/update-end, the (unconverted) task tick and raw prepare+finalize costs.
 `python tools/test-import.py build/aika-cli.exe` tests the sample and renamed
 reimports, source isolation, guarded updates, failure exit codes, and version-0
 schema upgrades, using only temporary databases. `src/importer_test.odin` adds
