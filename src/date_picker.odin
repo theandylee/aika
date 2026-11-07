@@ -117,8 +117,14 @@ date_calendar_open :: proc() {
 	windows.SetFocus(ui.date_calendar)
 }
 
+date_popup_open :: proc() -> bool {
+	// The calendar popup persists hidden between uses; only a visible one
+	// owns the cursor and suppresses the timeline hover underneath.
+	return ui.date_popup != nil && bool(windows.IsWindowVisible(ui.date_popup))
+}
+
 date_picker_key :: proc(msg: ^windows.MSG) -> bool {
-	if ui.date_popup == nil || !windows.IsWindowVisible(ui.date_popup) { return false }
+	if !date_popup_open() { return false }
 	if msg.message == windows.WM_KEYDOWN {
 		switch msg.wParam {
 		case windows.VK_ESCAPE: date_calendar_close(true); return true

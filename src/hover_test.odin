@@ -107,6 +107,34 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 	testing.expect(t, !sig(snapshot, x_at(lay, 9.5), apps_y).cursor)
 	interaction_end()
 
+	// A settings window owns the cursor: the lanes underneath are not hovered.
+	settings_ui.hwnd = transmute(windows.HWND)(uintptr(4))
+	testing.expect(t, settings_popup_open())
+	suppressed := sig(snapshot, x_at(lay, 9.5), apps_y)
+	testing.expect(t, suppressed.bar == 0 && !suppressed.cursor)
+	testing.expect(t, !hover_needs_repaint(Hover_Signature{}, suppressed))
+	settings_ui.hwnd = nil
+
+	// A visible date-picker popup owns the cursor; hidden, it does not.
+	hi := windows.HINSTANCE(windows.GetModuleHandleW(nil))
+	cal := windows.CreateWindowExW(0, wtext("STATIC"), nil, windows.WS_POPUP,
+		0, 0, 1, 1, nil, nil, hi, nil)
+	testing.expect(t, cal != nil)
+	if cal != nil {
+		defer windows.DestroyWindow(cal)
+		ui.date_popup = cal
+		defer { ui.date_popup = nil }
+		testing.expect(t, !date_popup_open()) // created hidden
+		testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).cursor)
+		windows.ShowWindow(cal, windows.SW_SHOWNA)
+		testing.expect(t, date_popup_open())
+		cal_sig := sig(snapshot, x_at(lay, 9.5), apps_y)
+		testing.expect(t, cal_sig.bar == 0 && !cal_sig.cursor)
+		windows.ShowWindow(cal, windows.SW_HIDE)
+		testing.expect(t, !date_popup_open())
+		testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).cursor)
+	}
+
 	// The filter hides a bar's block rows but not the time hint or cursor line:
 	// moves over the hidden bar still repaint to follow the cursor.
 	ui.filter = "browser"

@@ -33,6 +33,12 @@ settings_save_minutes :: proc(db_path: string, minutes: int) -> bool {
 SettingsUi :: struct { hwnd, minutes: windows.HWND, control_failed: bool }
 settings_ui: SettingsUi
 
+// The settings window exists only while open (settings_close destroys it),
+// so a non-nil handle means it owns the cursor.
+settings_popup_open :: proc() -> bool {
+	return settings_ui.hwnd != nil
+}
+
 settings_switch_rect :: proc(w: i32) -> windows.RECT {
 	return windows.RECT{w - dpi_px(70), dpi_px(2), w - dpi_px(42), dpi_px(TAB_H) - dpi_px(2)}
 }

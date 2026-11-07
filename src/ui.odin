@@ -777,10 +777,14 @@ hit_test :: proc(x, y, w, h: i32) -> Hit {
 
 // --- Tooltip ---
 
-// Lane whose bar rectangle contains the point while a bar tooltip may show
-// (ok = false otherwise). Shared by draw_tooltip and hover tracking (hover.odin).
+// Lane whose bar rectangle contains the point while the timeline hint may
+// show (ok = false otherwise). Suppressed while a drag is active or any popup
+// owns the cursor (tag picker/menu, date calendar, settings), so the hint and
+// cursor line never paint underneath them. Shared by draw_tooltip,
+// draw_cursor_line and hover tracking (hover.odin).
 tooltip_lane :: proc(x, y: i32, valid: bool, w, h: i32) -> (lane: Lane, ok: bool) {
-	if !valid || ui.tab != .Day || interaction_active() || tag_ui.popup != nil || tag_ui.menu_open { return }
+	if !valid || ui.tab != .Day || interaction_active() || tag_ui.popup != nil || tag_ui.menu_open ||
+	   date_popup_open() || settings_popup_open() { return }
 	lay := compute_layout(w, h)
 	candidate, in_lane := lane_at(lay, x, y)
 	if !in_lane { return }
