@@ -101,26 +101,60 @@ main message loop, without a separate modal loop. The window follows the palette
 
 1. `GetForegroundWindow()`
 2. `GetWindowThreadProcessId()`
-3. `QueryFullProcessImageNameW()` to get the executable path
-4. `GetFileVersionInfoW` + `VerQueryValueW` to get:
+3. `GetWindowTextW()` to get a fresh title; the title is never cached
+4. Open a limited-query process handle, read creation time with
+   `GetProcessTimes`, and close it; PID alone cannot identify a cached process
+5. On cache miss/expiry, `QueryFullProcessImageNameW()` gets the executable path,
+   followed by `GetFileVersionInfoW` + `VerQueryValueW` to get:
    - `ProductName` (used as the group display name)
    - `CompanyName`
    - `FileDescription`
-5. `GetWindowTextW()` to get the title
 6. Fall back to `Process.MainWindowTitle`-style behavior if the title is empty
-7. Build the group identity:
+7. On cache miss/expiry, build the group identity:
    ```
    key      = lowercase(file_name + ";" + product_name)
    key_hash = Base64(SHA256(key))
    textData = <ApplicationGroupTextData>...</ApplicationGroupTextData>
    ```
-8. `db_ensure_group()` returns `(group_id, color)`.
+8. Resolve `(group_id, color)` once per cache entry with `db_ensure_group()`;
+   a failed lookup retries on the next sample without rereading valid metadata.
 9. Compare with `tracker.current`:
    - same `group_id` and same `title` → extend current activity, no new row
    - otherwise → finish current, start a new one
 
 The tracker does **not** persist process IDs, window handles, class names, or
 monitor IDs. The window title is the only per-window discriminator.
+
+### Foreground metadata cache
+
+`src/focus_cache.odin` retains one process instance, not an unbounded PID map or
+multi-process executable cache. Every 1 Hz sample reads the foreground window,
+PID and title, and independently opens/closes a process handle to validate its
+creation FILETIME. A changed PID or creation stamp invalidates the entry. Changing
+windows/titles in the same process does not require metadata I/O. Conversely,
+different processes with the same application identity/title remain the same
+activity: the final comparison is still `(group_id, title)`, not PID or HWND.
+
+Metadata and group ID/color refresh after 60 monotonic seconds (including changes
+to version resources or group colors). Switching to another process replaces the
+one entry; returning to the earlier process reads it again. The metadata reader
+validates the creation stamp again on its own handle before reading the path,
+preventing a PID-reuse race between the initial probe and a miss. No handles are
+retained. Group IDs are scoped to the associated SQLite connection.
+
+The entry owns path/filename/product/company/description, the group hash and XML;
+window handles and titles are borrowed only for a sample. Successful shutdown or
+final tracker release frees the entry. Pause can retain it, but resume still probes
+the process and checks expiry. Test callbacks can inject each stage independently;
+the older full-WindowInfo callback deliberately bypasses the cache for lifecycle
+tests.
+
+Missing optional version resources/strings are a legitimate cacheable filename
+fallback. Process/path/version I/O failures and unverified identities are not
+cacheable: existing fallback tracking continues uncached and retries at the next
+sample. DB failures retain valid metadata/hash/XML but never cache failed group
+IDs. There is no new hook, per-window tracking scope, sampling rate, group-key
+algorithm or persistent schema change.
 
 ### Inactive state
 
@@ -241,8 +275,9 @@ title/group-name behavior.
 This is a correctness projection, not a derived-view cache: snapshot arrays/maps
 are rebuilt per paint, and new write-through cache rows currently copy the day
 array. Their lifetime is bounded by the paint callback's independent scratch scope.
-Metadata/derived-view caching and array-capacity changes remain deferred pending
-measurements; step 6 optimized only measured latest-row/task-neighbor queries.
+Derived-view caching and array-capacity changes remain deferred pending
+measurements. Step 6 optimized latest-row/task-neighbor queries; the later audit
+#13 follow-up adds only the bounded foreground metadata/group cache above.
 
 ## Persistence layer
 

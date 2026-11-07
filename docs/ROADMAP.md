@@ -51,9 +51,10 @@ cancellation, hidden Day hit-target fixes, PID-scoped native test helpers and a
 resource soak. Measured synthetic-history results justified only the timeline/start
 index; day reads retain their existing date-index path to avoid a regression.
 See `AUDIT.md` for measurements, passing checks and verification boundaries.
-Metadata/resolved-identity caching, prepared statement reuse, snapshot/derived-view
-caching, generalized overlap indexing and import peak-memory profiling remain
-deferred. DPI/keyboard policy and new tracker features were not part of this step.
+Prepared statement reuse, snapshot/derived-view caching, generalized overlap
+indexing and import peak-memory profiling remain deferred. The later audit #13
+follow-up adds bounded foreground metadata caching, not a general executable map.
+DPI/keyboard policy and new tracker features were not part of this step.
 
 - [x] **A4. Merge short activities backward** (`src/tracker.odin`). Attribute a
   discarded activity shorter than five seconds to the preceding activity rather
@@ -95,6 +96,14 @@ deferred. DPI/keyboard policy and new tracker features were not part of this ste
   Timestamp bindings are shared across tracker, tags and imports. Checked results
   distinguish storage failure from overlap, and failed writes/commits cannot
   advance task/cache state. No schema migration or interval-policy change.
+
+- [x] **A9. Foreground metadata caching (audit #13)** (`src/focus_cache.odin`).
+  Cache one validated process instance's metadata/hash/XML and resolved group.
+  Continue 1 Hz HWND/PID/title sampling and creation-time validation; invalidate
+  on process change, failed validation or 60-second monotonic expiry. Errors retry
+  rather than poisoning the cache. Warm own-process microbenchmarks improve from
+  roughly 53 to 3 microseconds, a small absolute saving; no multi-process cache,
+  long-lived handles, title caching or lifecycle/key changes were introduced.
 
 ---
 

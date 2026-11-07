@@ -66,6 +66,10 @@ These have caused bugs before. Do not break them casually.
 - Only the **foreground top-level window** is tracked. Do not add per-window or
   per-monitor tracking without a design discussion.
 - The sampler runs at **1 Hz**. The UI refresh is independent.
+- Every sample still reads foreground HWND/PID/title and validates process creation
+  time. The one-entry metadata/group cache is keyed by `(PID, creation FILETIME)`,
+  never PID alone; it expires after 60 monotonic seconds. Failed lookups are
+  retried, not cached as permanent fallback identities. No process handle is held.
 - A focus sample is considered unchanged only when
   `(group_id, window title)` match. Keep the comparison in `poll_focus`.
 - No `SetWinEventHook` is used. It is polling by design.
@@ -134,6 +138,7 @@ src/
   main.odin       Entry point, args, message loop, date load
   tracker.odin    Focus polling, idle/away state, activity lifecycle
   tracker_intervals.odin  Atomic idle reconciliation, short merges, clock endpoints
+  focus_cache.odin  Bounded process-instance metadata/group cache; no title caching
   activity_snapshot.odin  Effective day projection, daily clipping, write-through cache
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
   db.odin         SQLite schema, repository, activity/group queries, import helpers

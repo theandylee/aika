@@ -200,13 +200,19 @@ verified. References describe the source at audit time; line numbers may drift.
 
 ## Performance and scalability
 
-- [ ] **13. Foreground polling repeatedly reads executable metadata.**
+- [x] **13. Foreground polling repeatedly reads executable metadata.**
   References: `src/tracker.odin:167–189`, `src/win32.odin:330–424`.
   Each 1 Hz sample opens the process, queries its path, reads version resources,
   builds XML, hashes identity, and prepares/executes a group lookup, even for an
   unchanged application.
   Cache executable metadata and resolved group identity. Continue title sampling
   and preserve the required `(group_id, title)` comparison.
+  Fixed: a bounded, one-process cache keyed by PID plus process creation FILETIME
+  owns metadata/hash/XML and successful DB group resolution. HWND/PID/title and
+  process-instance validation still run on each 1 Hz sample. Cache misses verify
+  creation time again before path lookup; process changes and 60-second monotonic
+  expiry refresh the entry. Failed metadata/identity lookups are not cached, and
+  failed DB lookups retry without discarding valid metadata. No handles are retained.
 
 - [ ] **14. Indexes do not match important access patterns.**
   References: `src/db.odin:60–61`, `src/db.odin:437–444`,
@@ -485,6 +491,32 @@ verified. References describe the source at audit time; line numbers may drift.
   optimization was part of this follow-up. Some older boolean convenience
   repository wrappers remain for existing callers/tests; new transactions use
   checked result APIs.
+
+## Follow-up verification — audit item 13
+
+- The opt-in own-process benchmark isolates metadata/group resolution: foreground
+  HWND/PID/title are a fixed injected sample, and the DB is in-memory. The process
+  is the versionless test executable, not representative of every application.
+  With the testing allocator enabled, a same-build 101-sample comparison measured
+  medians of 53.2 microseconds uncached versus 2.9 microseconds with identity
+  validation/cache reuse (p95 107.7 versus 3.4 microseconds). An earlier uncached
+  baseline was 74.5 microseconds. These are small absolute costs, not end-to-end
+  CPU savings or a justification for an unbounded/multi-process cache.
+- Deterministic tests cover fresh titles/windows, same-app process switches,
+  reused PIDs, unavailable foreground/identity/path/metadata, legitimate versionless
+  fallback, failed DB lookup/recovery, TTL refresh, database scoping, scratch
+  lifetime and repeatable cleanup. Native tests validate the current process and
+  reject a mismatched creation stamp and missing-resource-file I/O failure.
+- `odin check src -vet` and all 81 tests passed on the updated compiler.
+  Alternate GUI/CLI builds (`build/aika-audit13.exe`,
+  `build/aika-audit13-cli.exe`) passed, leaving the running normal GUI untouched.
+  Isolated CLI import, native task and persistence tests passed. A 2,000-modal-paint
+  resource soak also passed: sampled handles stayed at 177; private bytes ranged
+  from 7,671,808 warm to a maximum of 7,942,144 over 22.6 seconds. This is bounded
+  short-soak evidence, not an overnight leak proof or forced OS PID-reuse test.
+- Metadata refresh may lag external resource/group edits by up to 60 seconds.
+  Statement/derived-view caching and broader polling/performance work remain
+  separate audit items; this change preserves group keys and lifecycle policy.
 
 ## Guardrails for follow-up work
 

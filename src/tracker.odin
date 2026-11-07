@@ -59,6 +59,7 @@ Tracker :: struct {
 	spell:                 u64,
 	spell_rows:            [dynamic]i64,
 	cache_suspended:       bool,
+	focus_cache:           Focus_Cache,
 	idle_threshold_ms:     i64,
 	pending:               [TRACKER_PENDING_LIMIT]Pending_Activity,
 	pending_count:         int,
@@ -235,23 +236,14 @@ poll_focus :: proc(app: ^App, now: i64) {
 		return
 	}
 
-	name := info.product
-	if name == "" {
-		name = strip_extension(info.file_name)
-	}
-	if name == "" {
-		name = "Unknown"
-	}
+	name := focus_name(info)
 
 	title := info.title
 	if title == "" {
 		title = name
 	}
 
-	key := make_group_key(info.file_name, info.product)
-	hash := key_hash(key)
-	text_data := make_group_text_data(info.file_name, name, info.company, info.path, info.description)
-	group_id, color, result := db_ensure_group(&app.db, TIMELINE_APPS, hash, name, text_data)
+	group_id, color, result := tracker_focus_group(app, info)
 	app.tracker.focus_result = result
 	if result != .Ok {
 		return
@@ -388,6 +380,7 @@ tracker_shutdown :: proc(app: ^App) -> bool {
 	if app.tracker.pending_count == 0 {
 		delete(app.tracker.spell_rows)
 		app.tracker.spell_rows = nil
+		focus_cache_clear(&app.tracker.focus_cache)
 	}
 	return app.tracker.pending_count == 0
 }
@@ -396,6 +389,7 @@ tracker_shutdown :: proc(app: ^App) -> bool {
 // after shutdown/startup failure when this process is leaving the GUI loop.
 tracker_release :: proc(t: ^Tracker) {
 	clear_current(&t.current)
+	focus_cache_clear(&t.focus_cache)
 	for i in 0 ..< t.pending_count {
 		delete(t.pending[i].title)
 		delete(t.pending[i].group_name)

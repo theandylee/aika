@@ -11,6 +11,12 @@ Tracker_IO :: struct {
 	monotonic: proc(data: rawptr) -> i64,
 	idle: proc(data: rawptr) -> i64,
 	foreground: proc(data: rawptr) -> (WindowInfo, bool),
+	// Split production sampler overrides; foreground above is the uncached
+	// full-info override retained for existing lifecycle tests.
+	sample: proc(data: rawptr) -> (WindowInfo, bool),
+	identify: proc(data: rawptr, pid: u32) -> (Process_Identity, bool),
+	metadata: proc(data: rawptr, key: Process_Identity) -> (WindowInfo, bool),
+	ensure_focus_group: proc(data: rawptr, db: ^DB, hash, name, text: string) -> (i64, u32, DB_Result),
 	insert: proc(data: rawptr, db: ^DB, timeline: i64, title: string, group: i64, start, end: i64) -> (i64, DB_Result),
 	update_end: proc(data: rawptr, db: ^DB, id, end: i64) -> DB_Result,
 }
@@ -38,7 +44,7 @@ tracker_idle :: proc(app: ^App) -> i64 {
 tracker_foreground :: proc(app: ^App) -> (WindowInfo, bool) {
 	io := &app.tracker.io
 	if io.foreground != nil { return io.foreground(io.data) }
-	return get_foreground_window_info()
+	return tracker_cached_foreground(app)
 }
 
 tracker_insert :: proc(app: ^App, timeline: i64, title: string, group: i64, start, end: i64, spell: u64 = 0) -> (i64, DB_Result) {

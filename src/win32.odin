@@ -306,6 +306,8 @@ idle_ms :: proc() -> i64 {
 WindowInfo :: struct {
 	hwnd:           windows.HWND,
 	pid:            u32,
+	created:        u64,
+	cacheable:      bool,
 	path:           string,
 	file_name:      string,
 	title:          string,
@@ -339,7 +341,10 @@ query_process_path :: proc(pid: u32) -> string {
 		return ""
 	}
 	defer windows.CloseHandle(h)
+	return query_process_path_handle(h)
+}
 
+query_process_path_handle :: proc(h: windows.HANDLE) -> string {
 	buf: [2048]u16
 	size := windows.DWORD(len(buf))
 	if !QueryFullProcessImageNameW(h, 0, &buf[0], &size) {
@@ -350,19 +355,31 @@ query_process_path :: proc(pid: u32) -> string {
 }
 
 query_version_strings :: proc(path: string) -> (product, company, description: string) {
+	product, company, description, _ = query_version_strings_result(path)
+	return
+}
+
+// Missing version resources are a valid stable fallback; I/O/access errors and
+// a failed read after a successful size query are transient and not cacheable.
+query_version_strings_result :: proc(path: string) -> (product, company, description: string, cacheable: bool) {
 	path_w := windows.utf8_to_utf16(path, context.temp_allocator)
 	if len(path_w) == 0 {
-		return "", "", ""
+		return "", "", "", false
 	}
 	wpath := windows.wstring(raw_data(path_w))
 
+	windows.SetLastError(0)
 	size := windows.GetFileVersionInfoSizeW(wpath, nil)
 	if size == 0 {
-		return "", "", ""
+		switch u32(windows.GetLastError()) {
+		case 1812, 1813, 1814, 1815: // resource data/type/name/language absent
+			return "", "", "", true
+		}
+		return "", "", "", false
 	}
 	data := make([]byte, int(size), context.temp_allocator)
 	if !windows.GetFileVersionInfoW(wpath, 0, size, raw_data(data)) {
-		return "", "", ""
+		return "", "", "", false
 	}
 
 	lang: u16 = 0x0409
@@ -400,10 +417,11 @@ query_version_strings :: proc(path: string) -> (product, company, description: s
 		company = query(data, 0x0409, 0x04B0, "CompanyName")
 		description = query(data, 0x0409, 0x04B0, "FileDescription")
 	}
+	cacheable = true
 	return
 }
 
-get_foreground_window_info :: proc() -> (WindowInfo, bool) {
+get_foreground_window_sample :: proc() -> (WindowInfo, bool) {
 	info := WindowInfo{}
 	info.hwnd = windows.GetForegroundWindow()
 	if info.hwnd == nil {
@@ -411,7 +429,7 @@ get_foreground_window_info :: proc() -> (WindowInfo, bool) {
 	}
 
 	pid: windows.DWORD
-	windows.GetWindowThreadProcessId(info.hwnd, &pid)
+	if windows.GetWindowThreadProcessId(info.hwnd, &pid) == 0 || pid == 0 { return {}, false }
 	info.pid = u32(pid)
 
 	buf: [1024]u16
@@ -420,14 +438,39 @@ get_foreground_window_info :: proc() -> (WindowInfo, bool) {
 		info.title, _ = windows.utf16_to_utf8(buf[:n], context.temp_allocator)
 	}
 
-	info.path = query_process_path(info.pid)
-	info.file_name = base_name(info.path)
-	if info.file_name == "" {
-		info.file_name = fmt.tprintf("pid_%d", info.pid)
-	}
-
-	info.product, info.company, info.description = query_version_strings(info.path)
 	return info, true
+}
+
+focus_pid_name :: proc(pid: u32) -> string { return fmt.tprintf("pid_%d", pid) }
+
+process_identity_handle :: proc(h: windows.HANDLE, pid: u32) -> (Process_Identity, bool) {
+	created, exited, kernel, user: windows.FILETIME
+	if !windows.GetProcessTimes(h, &created, &exited, &kernel, &user) { return {}, false }
+	stamp := (u64(created.dwHighDateTime) << 32) | u64(created.dwLowDateTime)
+	return Process_Identity{pid = pid, created = stamp}, stamp != 0
+}
+
+query_process_identity :: proc(pid: u32) -> (Process_Identity, bool) {
+	h := windows.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, windows.DWORD(pid))
+	if h == nil { return {}, false }
+	defer windows.CloseHandle(h)
+	return process_identity_handle(h, pid)
+}
+
+query_process_metadata :: proc(key: Process_Identity) -> (WindowInfo, bool) {
+	h := windows.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, windows.DWORD(key.pid))
+	if h == nil { return {}, false }
+	defer windows.CloseHandle(h)
+	if key.created != 0 {
+		actual, valid := process_identity_handle(h, key.pid)
+		if !valid || actual != key { return {}, false }
+	}
+	path := query_process_path_handle(h)
+	info := WindowInfo{path = path, file_name = base_name(path)}
+	if path == "" { return info, false }
+	product, company, description, valid := query_version_strings_result(path)
+	info.product, info.company, info.description = product, company, description
+	return info, valid
 }
 
 // --- Group identity ---

@@ -404,6 +404,24 @@ creating database files. Timestamp tests verify all persisted representations
 for normal insert/end updates, tag resizing and import insert/update statements.
 The tag UI smoke test also exercises retained-picker retry under a real writer
 lock; database failure must not be presented as an overlap conflict.
+`src/focus_cache_test.odin` injects foreground samples, process-instance probes,
+metadata reads and group lookups to verify title freshness, PID reuse, bounded
+refresh, failure recovery, database scoping and owned cache lifetimes. Native
+identity checks use only the test process, never manipulate user processes.
+
+Opt-in focus microbenchmark (no timing threshold in correctness tests):
+
+```powershell
+$env:AIKA_FOCUS_BENCHMARK = '1'
+odin test src -vet -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_NAMES=main.focus_polling_measurement
+Remove-Item Env:AIKA_FOCUS_BENCHMARK
+```
+
+It compares the explicit old metadata/hash/XML/group-lookup path with the current
+validated cache, using a fixed injected window sample and the running test EXE.
+This excludes common foreground/title Win32 calls and normal activity writes;
+the measured executable has no version resources. It is not a full GUI CPU
+benchmark, and results include the test runner's allocator tracking overhead.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.
