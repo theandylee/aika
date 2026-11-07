@@ -3,89 +3,53 @@
 Run after building: python tools/test-tags-ui.py build/aika-tags.exe
 """
 import ctypes as c
-from ctypes import wintypes as w
 from contextlib import closing
-import os
-from pathlib import Path
 import sqlite3
-import subprocess
-import sys
-import tempfile
-import time
-from native_ui import windows_for, find_window
+import native_ui as N
 
-u = c.WinDLL("user32", use_last_error=True)
-u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-u.SendMessageW.restype = c.c_ssize_t
-u.GetDlgItem.argtypes = [w.HWND, c.c_int]
-u.GetDlgItem.restype = w.HWND
-u.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
-u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
-u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
-u.IsWindowEnabled.argtypes = [w.HWND]
-u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-
-
-def send(hwnd, msg, wp=0, lp=0):
-    return u.SendMessageW(hwnd, msg, wp, lp)
-
-
-def text(hwnd, value):
-    buf = c.create_unicode_buffer(value)
-    send(hwnd, 0x000C, 0, c.addressof(buf))
+u = N.u
 
 
 def drag(hwnd, x1, x2):
-    send(hwnd, 0x0201, 1, (120 << 16) | x1)
-    send(hwnd, 0x0200, 1, (120 << 16) | x2)
-    send(hwnd, 0x0202, 0, (120 << 16) | x2)
+    N.send_msg(hwnd, 0x0201, 1, N.point(x1, 120))
+    N.send_msg(hwnd, 0x0200, 1, N.point(x2, 120))
+    N.send_msg(hwnd, 0x0202, 0, N.point(x2, 120))
 
 
 def double_click(hwnd, x):
     drag(hwnd, x, x)  # First click
-    send(hwnd, 0x0203, 1, (120 << 16) | x)  # WM_LBUTTONDBLCLK
-    send(hwnd, 0x0202, 0, (120 << 16) | x)
+    N.send_msg(hwnd, 0x0203, 1, N.point(x, 120))  # WM_LBUTTONDBLCLK
+    N.send_msg(hwnd, 0x0202, 0, N.point(x, 120))
 
 
-def main_window(pid):
-    found = windows_for(pid, "aika_window_class")
-    assert len(found) == 1, found
-    return found[0]
-
-
-exe = str(Path(sys.argv[1] if len(sys.argv) > 1 else "build/aika.exe").resolve())
-root = Path(os.environ["LOCALAPPDATA"]) / "Temp" / "opencode"
-with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
-    db = Path(folder) / "test.db"
-    process = subprocess.Popen([exe, "--db", str(db)])
-    hwnd = None
+exe = N.exe_from_argv("build/aika.exe")
+with N.isolated_temp_dir("aika-tags-") as folder:
+    db = folder / "test.db"
+    process, hwnd = N.launch_app(exe, db)
     try:
-        assert u.WaitForInputIdle(w.HANDLE(process._handle), 10000) == 0
-        hwnd = main_window(process.pid)
-
         def rows():
             with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
                 return conn.execute("SELECT ActivityId, GroupId, StartUtcMs, EndUtcMs "
                                     "FROM Activity WHERE TimelineId=1 ORDER BY ActivityId").fetchall()
 
         def picker():
-            popup = find_window(process.pid, "aika_tag_picker")
+            popup = N.find_window(process.pid, "aika_tag_picker")
             assert popup, "Tag picker did not open"
             return popup
 
         drag(hwnd, 200, 400)
         popup = picker()
-        text(u.GetDlgItem(popup, 101), "UI smoke tag")
-        send(popup, 0x0111, 104, u.GetDlgItem(popup, 104))
+        N.set_text(N.dlg_item(popup, 101), "UI smoke tag")
+        N.send_msg(popup, 0x0111, 104, N.dlg_item(popup, 104))
         first = rows()
         assert len(first) == 1 and first[0][3] > first[0][2], first
 
         # Reverse drag, search an existing tag, and select it.
         drag(hwnd, 800, 600)
         popup = picker()
-        text(u.GetDlgItem(popup, 101), "smoke")
-        assert send(u.GetDlgItem(popup, 102), 0x018B) == 1  # LB_GETCOUNT
-        send(popup, 0x0111, 103, u.GetDlgItem(popup, 103))
+        N.set_text(N.dlg_item(popup, 101), "smoke")
+        assert N.send_msg(N.dlg_item(popup, 102), 0x018B) == 1  # LB_GETCOUNT
+        N.send_msg(popup, 0x0111, 103, N.dlg_item(popup, 103))
         before = rows()
         assert len(before) == 2 and before[0][1] == before[1][1], before
 
@@ -100,22 +64,22 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
 
         # Cancelling and simple clicks must not insert a block.
         drag(hwnd, 950, 1050)
-        send(picker(), 0x0010)  # WM_CLOSE
+        N.send_msg(picker(), 0x0010)  # WM_CLOSE
         assert rows() == after_right
         drag(hwnd, 950, 950)
-        assert not find_window(process.pid, "aika_tag_picker")
+        assert not N.find_window(process.pid, "aika_tag_picker")
         assert u.IsWindowEnabled(hwnd)
 
         # An interior drag must not even open the picker, in either direction.
         drag(hwnd, 250, 350)
-        assert not find_window(process.pid, "aika_tag_picker")
+        assert not N.find_window(process.pid, "aika_tag_picker")
         drag(hwnd, 350, 250)
-        assert not find_window(process.pid, "aika_tag_picker")
+        assert not N.find_window(process.pid, "aika_tag_picker")
         assert rows() == after_right
 
         def use_existing():
             popup = picker()
-            send(popup, 0x0111, 103, u.GetDlgItem(popup, 103))
+            N.send_msg(popup, 0x0111, 103, N.dlg_item(popup, 103))
 
         # Starting inside the first block creates only its free extension.
         drag(hwnd, 300, 500)
@@ -148,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
 
         # Double-click fills the whole bounded gap, using the regular picker.
         double_click(hwnd, 400)
-        send(picker(), 0x0010)
+        N.send_msg(picker(), 0x0010)
         assert rows() == extended, "Cancelling gap fill changed persisted blocks"
         double_click(hwnd, 400)
         use_existing()
@@ -158,58 +122,44 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
         assert filled[:-1] == extended
         extended = filled
         double_click(hwnd, 400)  # Now occupied
-        assert not find_window(process.pid, "aika_tag_picker")
+        assert not N.find_window(process.pid, "aika_tag_picker")
         double_click(hwnd, 50)  # No block on the left
-        assert not find_window(process.pid, "aika_tag_picker")
+        assert not N.find_window(process.pid, "aika_tag_picker")
         assert rows() == extended
 
-        def wait_for(predicate):
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                if predicate():
-                    return
-                time.sleep(0.01)
-            raise AssertionError("Timed out waiting for native context menu")
-
         def menu_visible():
-            menu = find_window(process.pid, "#32768")
-            owner = w.DWORD()
-            if menu:
-                u.GetWindowThreadProcessId(menu, c.byref(owner))
-            return owner.value == process.pid
+            menu = N.find_window(process.pid, "#32768")
+            return menu is not None and N.window_pid(menu) == process.pid
 
         def open_menu():
             # DefWindowProc converts right-button release to WM_CONTEXTMENU.
-            u.PostMessageW(hwnd, 0x0205, 0, (120 << 16) | 250)
-            wait_for(menu_visible)
+            N.post_msg(hwnd, 0x0205, 0, N.point(250, 120))
+            N.wait_for(menu_visible, 5, "native context menu")
 
         open_menu()
-        u.PostMessageW(hwnd, 0x0100, 0x1B, 0)  # Escape cancels
-        wait_for(lambda: not menu_visible())
+        N.post_msg(hwnd, 0x0100, 0x1B, 0)  # Escape cancels
+        N.wait_for(lambda: not menu_visible(), 5, "menu dismissal")
         assert rows() == extended
         open_menu()
-        u.PostMessageW(hwnd, 0x0100, 0x28, 0)  # Down selects Delete
-        u.PostMessageW(hwnd, 0x0100, 0x0D, 0)  # Enter activates it
-        wait_for(lambda: len(rows()) == len(extended) - 1)
+        N.post_msg(hwnd, 0x0100, 0x28, 0)  # Down selects Delete
+        N.post_msg(hwnd, 0x0100, 0x0D, 0)  # Enter activates it
+        N.wait_for(lambda: len(rows()) == len(extended) - 1, 5, "tag deletion")
         remaining = rows()
         assert remaining == extended[1:], "Delete changed an unrelated block"
         # The tag itself remains searchable and reusable after deletion.
         drag(hwnd, 250, 350)
         popup = picker()
-        text(u.GetDlgItem(popup, 101), "smoke")
-        assert send(u.GetDlgItem(popup, 102), 0x018B) == 1
+        N.set_text(N.dlg_item(popup, 101), "smoke")
+        assert N.send_msg(N.dlg_item(popup, 102), 0x018B) == 1
         # Storage contention is not an overlap: keep the picker and selection
         # alive, then retry successfully after releasing the independent writer.
         with closing(sqlite3.connect(db, timeout=1)) as blocker:
             blocker.execute("BEGIN IMMEDIATE")
-            u.PostMessageW(popup, 0x0111, 103, u.GetDlgItem(popup, 103))
-            wait_for(lambda: find_window(process.pid, "#32770"))
-            dialog = find_window(process.pid, "#32770")
-            message = c.create_unicode_buffer(512)
-            u.GetWindowTextW(u.GetDlgItem(dialog, 65535), message, len(message))
-            assert "Could not save tag" in message.value, message.value
-            u.PostMessageW(dialog, 0x0010, 0, 0)
-            wait_for(lambda: not find_window(process.pid, "#32770"))
+            N.post_msg(popup, 0x0111, 103, N.dlg_item(popup, 103))
+            dialog = N.wait_for(lambda: N.find_window(process.pid, "#32770"), 5, "save-error dialog")
+            assert "Could not save tag" in N.window_title(N.dlg_item(dialog, 65535)), N.window_title(N.dlg_item(dialog, 65535))
+            N.post_msg(dialog, 0x0010, 0, 0)
+            N.wait_for(lambda: not N.find_window(process.pid, "#32770"), 5, "error dialog dismissal")
             assert picker() == popup, "A storage failure dismissed the tag picker"
             assert rows() == remaining, "Failed save changed tag history"
             blocker.rollback()
@@ -219,18 +169,12 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
         remaining = retried
 
         # Graceful exit flushes tracking and tags remain in the on-disk DB.
-        send(hwnd, 0x0111, 1002)  # Tray Exit (WM_CLOSE now hides).
-        process.wait(timeout=10)
+        N.stop_app(process, hwnd)  # Tray Exit (WM_CLOSE now hides).
         assert rows() == remaining
         print("PASS: tagging, non-overlap, resize, double-click gap fill, delete, tag reuse, storage retry, persistence")
     finally:
-        if process.poll() is None:
-            dialog = find_window(process.pid, "#32770")
-            if dialog:
-                u.PostMessageW(dialog, 0x0010, 0, 0)
-            popup = find_window(process.pid, "aika_tag_picker")
+        for cls in ("#32770", "aika_tag_picker"):
+            popup = N.find_window(process.pid, cls)
             if popup:
-                send(popup, 0x0010)
-            if hwnd:
-                send(hwnd, 0x0111, 1002)
-            process.wait(timeout=10)
+                N.post_msg(popup, 0x0010, 0, 0)
+        N.ensure_closed(process, hwnd)

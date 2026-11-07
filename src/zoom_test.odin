@@ -3,29 +3,9 @@ package main
 import "core:testing"
 
 @(test)
-zoom_behavior :: proc(t: ^testing.T) {
-	// Exercise the shared UI state serially, even with a parallel test runner.
-	zoom_scale_keeps_anchor(t)
-	zoom_limits(t)
-	zoom_bounds_uses_actual_day_length(t)
-	zoom_pan_and_edges_clamp(t)
-	zoom_middle_pan(t)
-	interaction_behavior(t)
-	zoom_layout_and_ticks(t)
-	pane_resize_behavior(t)
-	tag_drag_behavior(t)
-	totals_tree_behavior(t)
-	hover_repaint_behavior(t)
-	palette_apply_behavior(t)
-	geometry_behavior(t)
-	dpi_scaling_behavior(t)
-	ui_visibility_and_cancellation(t)
-	ui_startup_unwinds_every_stage(t)
-}
-
 zoom_scale_keeps_anchor :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	ui.zoom_start, ui.zoom_end = 0, 1
 	zoom_scale(0.5, 0.25)
 	testing.expect(t, abs(ui.zoom_start - 0.125) < 0.000001)
@@ -37,9 +17,10 @@ zoom_scale_keeps_anchor :: proc(t: ^testing.T) {
 	testing.expect(t, ui.zoom_start == 0 && ui.zoom_end == 1)
 }
 
+@(test)
 zoom_limits :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	ui.zoom_start, ui.zoom_end = 0, 1
 	for _ in 0..<100 { zoom_scale(0.5, 1) }
 	testing.expect(t, ui.zoom_start >= 0 && ui.zoom_end <= 1)
@@ -48,9 +29,10 @@ zoom_limits :: proc(t: ^testing.T) {
 	testing.expect(t, ui.zoom_start == 0 && ui.zoom_end == 1)
 }
 
+@(test)
 zoom_bounds_uses_actual_day_length :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	ui.zoom_start, ui.zoom_end = 0.25, 0.75
 	for hours in ([3]i64{23, 24, 25}) {
 		span := hours * 3600_000
@@ -60,9 +42,10 @@ zoom_bounds_uses_actual_day_length :: proc(t: ^testing.T) {
 	}
 }
 
+@(test)
 zoom_pan_and_edges_clamp :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	lay := compute_layout(1320, 860)
 	bar, _, _, _ := zoom_rects(lay)
 	ui.zoom_start, ui.zoom_end = 0.25, 0.75
@@ -81,9 +64,10 @@ zoom_pan_and_edges_clamp :: proc(t: ^testing.T) {
 	testing.expect(t, abs(ui.zoom_end - ui.zoom_start - ZOOM_MIN_SPAN) < 0.000001)
 }
 
+@(test)
 zoom_middle_pan :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	ui.tab = .Day
 	ui.interaction = nil
 	lay := compute_layout(1320, 860)
@@ -110,6 +94,7 @@ zoom_middle_pan :: proc(t: ^testing.T) {
 	testing.expect(t, ui.zoom_start == 0 && ui.zoom_end == 1)
 }
 
+@(test)
 zoom_layout_and_ticks :: proc(t: ^testing.T) {
 	for width in ([3]i32{704, 1320, 1920}) {
 		lay := compute_layout(width, 440)

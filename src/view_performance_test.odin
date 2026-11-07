@@ -33,8 +33,10 @@ view_paint_measurement :: proc(t: ^testing.T) {
 	flag := os.get_env("AIKA_VIEW_BENCHMARK", context.allocator)
 	defer delete(flag)
 	if flag != "1" { return }
-	old := ui
-	defer ui = old
+	// Disabled runs return before touching ui; enabled runs hold the audit
+	// #25 lock like the other tests that mutate the shared UI globals.
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 
 	data_arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&data_arena)

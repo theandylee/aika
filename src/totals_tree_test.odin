@@ -2,10 +2,12 @@ package main
 
 import "core:testing"
 
-// Invoked serially by zoom_behavior because the view state is shared.
+// Shared view state is reset by the audit #25 harness, so this is an
+// independent @(test).
+@(test)
 totals_tree_behavior :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	defer free_all(context.temp_allocator)
 	ui = {}
 	ui.totals_expanded = make(map[string]bool)

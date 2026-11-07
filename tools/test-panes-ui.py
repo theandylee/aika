@@ -6,60 +6,28 @@ import ctypes as c
 from ctypes import wintypes as w
 from contextlib import closing
 from datetime import datetime, timedelta
-import os
-from pathlib import Path
 import sqlite3
-import subprocess
-import sys
-import tempfile
 import time
-from native_ui import windows_for, window_pid
+import native_ui as N
 
-u = c.WinDLL("user32", use_last_error=True)
-u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
-u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
-u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-u.SendMessageW.restype = c.c_ssize_t
-u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
-u.IsWindowVisible.argtypes = [w.HWND]
+u = N.u
 u.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
 u.MapWindowPoints.argtypes = [w.HWND, w.HWND, c.c_void_p, w.UINT]
-u.UpdateWindow.argtypes = [w.HWND]
 u.SetWindowPos.argtypes = [w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT]
 
 
-def send(hwnd, msg, wp=0, lp=0):
-    return u.SendMessageW(hwnd, msg, wp, lp)
-
-
-def point(x, y):
-    return ((y & 0xffff) << 16) | (x & 0xffff)
-
-
 def drag(hwnd, x, y, dx, dy, cancel=False):
-    send(hwnd, 0x0201, 1, point(x, y))
-    send(hwnd, 0x0200, 1, point(x + dx, y + dy))
+    N.send_msg(hwnd, 0x0201, 1, N.point(x, y))
+    N.send_msg(hwnd, 0x0200, 1, N.point(x + dx, y + dy))
     if cancel:
-        send(hwnd, 0x0100, 0x1B)
-    send(hwnd, 0x0202, 0, point(x + dx, y + dy))
+        N.send_msg(hwnd, 0x0100, 0x1B)
+    N.send_msg(hwnd, 0x0202, 0, N.point(x + dx, y + dy))
     u.UpdateWindow(hwnd)
-
-
-def launch(exe, db):
-    process = subprocess.Popen([exe, "--db", str(db)])
-    assert u.WaitForInputIdle(w.HANDLE(process._handle), 10000) == 0
-    found = windows_for(process.pid, "aika_window_class")
-    assert len(found) == 1
-    # WaitForInputIdle can return before the first complete paint/timer tick.
-    time.sleep(0.6)
-    u.UpdateWindow(found[0])
-    return process, found[0]
 
 
 def scrollbars(hwnd):
     result = []
-
-    for child in windows_for(window_pid(hwnd), "SCROLLBAR", hwnd):
+    for child in N.windows_for(N.window_pid(hwnd), "SCROLLBAR", hwnd):
         if u.IsWindowVisible(child):
             rect = w.RECT()
             u.GetWindowRect(child, c.byref(rect))
@@ -69,13 +37,11 @@ def scrollbars(hwnd):
     return sorted(result)
 
 
-exe = str(Path(sys.argv[1] if len(sys.argv) > 1 else "build/aika.exe").resolve())
-root = Path(os.environ["LOCALAPPDATA"]) / "Temp" / "opencode"
-with tempfile.TemporaryDirectory(prefix="aika-panes-", dir=root) as folder:
-    db = Path(folder) / "test.db"
-    process, hwnd = launch(exe, db)
-    send(hwnd, 0x0111, 1002)  # Tray Exit (WM_CLOSE now hides).
-    process.wait(timeout=10)
+exe = N.exe_from_argv("build/aika.exe")
+with N.isolated_temp_dir("aika-panes-") as folder:
+    db = folder / "test.db"
+    process, hwnd = N.launch_app(exe, db)
+    N.stop_app(process, hwnd)  # Tray Exit (WM_CLOSE now hides).
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     day = (today - datetime(2000, 1, 1)).days
     with closing(sqlite3.connect(db)) as conn:
@@ -92,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="aika-panes-", dir=root) as folder:
                           start.isoformat(), end.isoformat(),
                           int(start.timestamp() * 1000), int(end.timestamp() * 1000)))
         conn.commit()
-    process, hwnd = launch(exe, db)
+    process, hwnd = N.launch_app(exe, db)
     try:
         before = scrollbars(hwnd)
         # Default divider: list header begins at y=444, totals at x=991.
@@ -109,15 +75,15 @@ with tempfile.TemporaryDirectory(prefix="aika-panes-", dir=root) as folder:
         drag(hwnd, 500, 530, 0, -60, cancel=True)
         assert scrollbars(hwnd) == wider, "Escape failed to restore heights"
         # Capture loss also rolls back a live drag.
-        send(hwnd, 0x0201, 1, point(887, 600))
-        send(hwnd, 0x0200, 1, point(800, 600))
-        send(hwnd, 0x001F)  # WM_CANCELMODE cancels a captured drag.
+        N.send_msg(hwnd, 0x0201, 1, N.point(887, 600))
+        N.send_msg(hwnd, 0x0200, 1, N.point(800, 600))
+        N.send_msg(hwnd, 0x001F)  # WM_CANCELMODE cancels a captured drag.
         time.sleep(0.1)
         u.UpdateWindow(hwnd)
         assert scrollbars(hwnd) == wider, ("Cancel mode failed to restore sizes", wider, scrollbars(hwnd))
-        send(hwnd, 0x0201, 1, point(887, 600))
-        send(hwnd, 0x0200, 1, point(800, 600))
-        send(hwnd, 0x0215)  # WM_CAPTURECHANGED notification
+        N.send_msg(hwnd, 0x0201, 1, N.point(887, 600))
+        N.send_msg(hwnd, 0x0200, 1, N.point(800, 600))
+        N.send_msg(hwnd, 0x0215)  # WM_CAPTURECHANGED notification
         time.sleep(0.1)
         u.UpdateWindow(hwnd)
         assert scrollbars(hwnd) == wider, "Capture loss failed to restore sizes"
@@ -127,5 +93,4 @@ with tempfile.TemporaryDirectory(prefix="aika-panes-", dir=root) as folder:
         assert all(r[3] > r[1] for r in small)
         print("PASS: timeline height, list/totals width, Escape, capture loss, window resize")
     finally:
-        send(hwnd, 0x0111, 1002)
-        process.wait(timeout=10)
+        N.ensure_closed(process, hwnd)

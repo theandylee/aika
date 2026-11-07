@@ -4,73 +4,40 @@ from ctypes import wintypes as w
 from contextlib import closing
 from pathlib import Path
 import sqlite3
-import subprocess
-import sys
-import tempfile
 import time
-from native_ui import find_window as find
+import native_ui as N
 
-u = c.WinDLL("user32")
-u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
-u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
-u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-u.SendMessageW.restype = c.c_ssize_t
-u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-u.GetDlgItem.argtypes = [w.HWND, c.c_int]
-u.GetDlgItem.restype = w.HWND
-u.IsWindowEnabled.argtypes = [w.HWND]
-u.IsWindow.argtypes = [w.HWND]
-u.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
+u = N.u
 u.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
-u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
-
-
-def send(hwnd, msg, wp=0, lp=0):
-    return u.SendMessageW(hwnd, msg, wp, lp)
+u.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
 
 
 def wait_for(pid, cls):
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        hwnd = find(pid, cls)
-        if hwnd:
-            return hwnd
-        time.sleep(0.05)
-    raise AssertionError(f"Missing window: {cls}")
+    return N.wait_for(lambda: N.find_window(pid, cls), 5, f"window: {cls}")
 
 
 def text(hwnd):
-    buf = c.create_unicode_buffer(64)
-    send(hwnd, 0xD, 64, c.addressof(buf))  # WM_GETTEXT across processes
-    return buf.value
+    return N.get_text(hwnd)
 
 
 def set_text(hwnd, value):
-    buf = c.create_unicode_buffer(value)
-    send(hwnd, 0xC, 0, c.addressof(buf))  # WM_SETTEXT across processes
+    N.set_text(hwnd, value)
 
 
 def wait_closed(hwnd):
-    deadline = time.monotonic() + 5
-    while u.IsWindow(hwnd) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert not u.IsWindow(hwnd), "Settings did not close"
+    N.wait_closed(hwnd)
 
 
-exe = str(Path(sys.argv[1] if len(sys.argv) > 1 else "build/aika.exe").resolve())
-with tempfile.TemporaryDirectory(prefix="aika-settings-", dir=Path(tempfile.gettempdir()) / "opencode") as directory:
-    db = Path(directory) / "test.db"
+exe = N.exe_from_argv("build/aika.exe")
+with N.isolated_temp_dir("aika-settings-") as directory:
+    db = directory / "test.db"
     preference = Path(str(db) + ".settings")
     for theme in ["light", "dark"]:
         Path(str(db) + ".theme").write_text(theme)
-        process = subprocess.Popen([exe, "--db", str(db)])
-        hwnd = None
+        process, hwnd = N.launch_app(exe, db, settle=0)
         try:
-            u.WaitForInputIdle(w.HANDLE(process._handle), 10000)
-            hwnd = wait_for(process.pid, "aika_window_class")
-
             def open_settings():
-                send(hwnd, 0x111, 1003)
+                N.send_msg(hwnd, 0x111, 1003)
                 popup = wait_for(process.pid, "aika_settings")
                 assert not u.IsWindowEnabled(hwnd)
 
@@ -79,31 +46,30 @@ with tempfile.TemporaryDirectory(prefix="aika-settings-", dir=Path(tempfile.gett
                 u.GetWindowRect(popup, c.byref(popup_rect))
                 assert abs(parent_rect.left + parent_rect.right - popup_rect.left - popup_rect.right) <= 1
                 assert abs(parent_rect.top + parent_rect.bottom - popup_rect.top - popup_rect.bottom) <= 1
-                return popup, u.GetDlgItem(popup, 101)
+                return popup, N.dlg_item(popup, 101)
 
             popup, edit = open_settings()
             assert text(edit) == ("1" if theme == "light" else "500")
             # Cancel and title-bar close must leave preferences unchanged.
             before = preference.read_bytes() if preference.exists() else None
             set_text(edit, "9")
-            send(popup, 0x111, 2)
+            N.send_msg(popup, 0x111, 2)
             assert u.IsWindowEnabled(hwnd) and not u.IsWindow(popup)
             assert (preference.read_bytes() if preference.exists() else None) == before
             popup, edit = open_settings()
             set_text(edit, "8")
-            send(popup, 0x10)
+            N.send_msg(popup, 0x10)
             assert (preference.read_bytes() if preference.exists() else None) == before
 
             # The visible Settings button opens the same window; Escape cancels.
             rect = w.RECT()
             u.GetClientRect(hwnd, c.byref(rect))
-            point = (12 << 16) | (rect.right - 56)
-            send(hwnd, 0x201, 1, point)
-            send(hwnd, 0x202, 0, point)
+            N.send_msg(hwnd, 0x201, 1, N.point(rect.right - 56, 12))
+            N.send_msg(hwnd, 0x202, 0, N.point(rect.right - 56, 12))
             popup = wait_for(process.pid, "aika_settings")
-            edit = u.GetDlgItem(popup, 101)
+            edit = N.dlg_item(popup, 101)
             set_text(edit, "7")
-            u.PostMessageW(edit, 0x100, 0x1B, 0)
+            N.post_msg(edit, 0x100, 0x1B, 0)
             wait_closed(popup)
             assert (preference.read_bytes() if preference.exists() else None) == before
 
@@ -111,22 +77,22 @@ with tempfile.TemporaryDirectory(prefix="aika-settings-", dir=Path(tempfile.gett
                 popup, edit = open_settings()
                 set_text(edit, invalid)
                 assert text(edit) == invalid, (invalid, text(edit))
-                u.PostMessageW(u.GetDlgItem(popup, 1), 0xF5, 0, 0)  # BM_CLICK
+                N.post_msg(N.dlg_item(popup, 1), 0xF5, 0, 0)  # BM_CLICK
                 warning = wait_for(process.pid, "#32770")
-                send(warning, 0x111, 1)
+                N.send_msg(warning, 0x111, 1)
                 assert u.IsWindow(popup)
                 assert (preference.read_bytes() if preference.exists() else None) == before
-                send(popup, 0x111, 2)
+                N.send_msg(popup, 0x111, 2)
 
             for value in ["1", "500"]:
                 popup, edit = open_settings()
                 set_text(edit, value)
-                u.PostMessageW(edit, 0x100, 0xD, 0)  # Enter commits.
+                N.post_msg(edit, 0x100, 0xD, 0)  # Enter commits.
                 wait_closed(popup)
                 assert preference.read_text().strip() == value
                 popup, edit = open_settings()
                 assert text(edit) == value
-                send(popup, 0x111, 2)
+                N.send_msg(popup, 0x111, 2)
 
             # The owner timer must keep extending activity while settings is open.
             popup, edit = open_settings()
@@ -140,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix="aika-settings-", dir=Path(tempfile.gett
                     break
                 assert time.monotonic() < deadline, "Tracking timer stopped while settings was open"
                 time.sleep(0.25)
-            send(popup, 0x111, 2)
+            N.send_msg(popup, 0x111, 2)
 
             # A failed write leaves the editor open and the existing value active.
             saved = preference.read_bytes()
@@ -149,39 +115,27 @@ with tempfile.TemporaryDirectory(prefix="aika-settings-", dir=Path(tempfile.gett
             try:
                 popup, edit = open_settings()
                 set_text(edit, "2")
-                u.PostMessageW(u.GetDlgItem(popup, 1), 0xF5, 0, 0)
+                N.post_msg(N.dlg_item(popup, 1), 0xF5, 0, 0)
                 warning = wait_for(process.pid, "#32770")
-                send(warning, 0x111, 1)
+                N.send_msg(warning, 0x111, 1)
                 assert u.IsWindow(popup)
-                send(popup, 0x111, 2)
+                N.send_msg(popup, 0x111, 2)
                 popup, edit = open_settings()
                 assert text(edit) == "500"
-                send(popup, 0x111, 2)
+                N.send_msg(popup, 0x111, 2)
             finally:
                 preference.rmdir()
                 preference.write_bytes(saved)
         finally:
-            if hwnd:
-                send(hwnd, 0x111, 1002)
-                assert process.wait(timeout=10) == 0
-            elif process.poll() is None:
-                process.terminate()
-                process.wait(timeout=10)
+            N.stop_app(process, hwnd)
 
     preference.write_text("invalid")
-    process = subprocess.Popen([exe, "--db", str(db)])
-    hwnd = None
+    process, hwnd = N.launch_app(exe, db, settle=0)
     try:
-        u.WaitForInputIdle(w.HANDLE(process._handle), 10000)
-        hwnd = wait_for(process.pid, "aika_window_class")
-        send(hwnd, 0x111, 1003)
+        N.send_msg(hwnd, 0x111, 1003)
         popup = wait_for(process.pid, "aika_settings")
-        assert text(u.GetDlgItem(popup, 101)) == "1"
-        send(popup, 0x111, 2)
+        assert N.get_text(N.dlg_item(popup, 101)) == "1"
+        N.send_msg(popup, 0x111, 2)
     finally:
-        if hwnd:
-            send(hwnd, 0x111, 1002)
-        else:
-            process.terminate()
-        assert process.wait(timeout=10) == 0
+        N.stop_app(process, hwnd)
 print("PASS: settings validation, save/cancel/close, restart persistence, light/dark, tracking while open")

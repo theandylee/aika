@@ -2,11 +2,12 @@ package main
 
 import "core:testing"
 
-// Called by zoom_behavior so shared UI state is tested serially.
+// Shared UI state is reset by the audit #25 harness, so this is an
+// independent @(test).
+@(test)
 pane_resize_behavior :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
-	ui = {}
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	lay := compute_layout(1320, 860)
 	testing.expect(t, lay.lane_h == 96 && lay.sidebar_w == dpi_px(SIDEBAR_W))
 	testing.expect(t, pane_split_hit(100, lay.list_top - 4, lay) == .Timeline_Height)

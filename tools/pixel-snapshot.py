@@ -28,18 +28,17 @@ from pathlib import Path
 import shutil
 import sqlite3
 import struct
-import subprocess
 import sys
 import tempfile
 import time
 import zlib
+import native_ui as N
 from native_ui import windows_for
 
-u = c.WinDLL("user32", use_last_error=True)
+u = N.u
 g = c.WinDLL("gdi32", use_last_error=True)
 u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
 u.SendMessageW.restype = c.c_ssize_t
-u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
 u.UpdateWindow.argtypes = [w.HWND]
 u.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
 u.GetWindowRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
@@ -77,21 +76,19 @@ NEUTRAL = (600, 45)  # empty toolbar space: nothing hot, no tooltip
 
 
 def send(hwnd, msg, wp=0, lp=0):
-    return u.SendMessageW(hwnd, msg, wp, lp)
+    return N.send_msg(hwnd, msg, wp, lp)
 
 
 def point(x, y):
-    return ((y & 0xFFFF) << 16) | (x & 0xFFFF)
+    return N.point(x, y)
 
 
 def click(hwnd, x, y):
-    send(hwnd, 0x0201, 1, point(x, y))
-    send(hwnd, 0x0202, 0, point(x, y))
+    N.click_at(hwnd, x, y)
 
 
 def set_text(hwnd, text):
-    buf = c.create_unicode_buffer(text)
-    send(hwnd, 0x000C, 0, c.addressof(buf))  # WM_SETTEXT; EN_CHANGE reaches the parent
+    N.set_text(hwnd, text)
 
 
 def move(hwnd, x, y):
@@ -186,20 +183,14 @@ def build_template(exe, db, work):
         conn.commit()
 
 
-# --- Process control ---
+# --- Process control (shared harness; names kept for test-zoom-ui.py) ---
 
 def launch(exe, db):
-    process = subprocess.Popen([exe, "--db", str(db)])
-    assert u.WaitForInputIdle(w.HANDLE(process._handle), 10000) == 0
-    found = windows_for(process.pid, "aika_window_class")
-    assert len(found) == 1
-    time.sleep(0.6)
-    return process, found[0]
+    return N.launch_app(exe, db)
 
 
 def stop(process, hwnd):
-    send(hwnd, 0x0111, 1002)  # tray menu Exit
-    assert process.wait(timeout=10) == 0, process.returncode
+    N.stop_app(process, hwnd)
 
 
 def set_client_size(hwnd, cw, ch):

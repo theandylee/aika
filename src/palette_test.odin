@@ -38,10 +38,12 @@ palette_matches_previous_values :: proc(t: ^testing.T) {
 	testing.expect(t, windows.COLORREF(TEXT_DARK) == PALETTE_LIGHT.text)
 }
 
-// Mutates the global C_* variables: invoked from zoom_behavior's serial chain.
+// The C_* mirror of the active palette is restored by the audit #25 harness,
+// so this is an independent @(test).
+@(test)
 palette_apply_behavior :: proc(t: ^testing.T) {
-	saved := palette_active
-	defer palette_apply(saved)
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	for p in ([2]Palette{PALETTE_DARK, PALETTE_LIGHT}) {
 		palette_apply(p)
 		testing.expect(t, palette_is_applied())

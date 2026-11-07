@@ -3,10 +3,12 @@ package main
 import "core:testing"
 import "core:strings"
 
-// Shared UI tests run within zoom_behavior to avoid concurrent global state edits.
+// Shared UI state is reset by the audit #25 harness, so this is an
+// independent @(test).
+@(test)
 tag_drag_behavior :: proc(t: ^testing.T) {
-	old_ui, old_tag := ui, tag_ui
-	defer { ui = old_ui; tag_ui = old_tag }
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	lay := compute_layout(1320, 860)
 	tag_ui = TagUi{anchor = 5000, view_start = 1000, view_end = 9000}
 	tag_begin(.New_Range, 0)

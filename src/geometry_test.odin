@@ -3,11 +3,12 @@ package main
 import "core:sys/windows"
 import "core:testing"
 
-// Invoked serially by zoom_behavior: compute_layout/hit_test read the shared ui state.
+// Shared ui state is reset by the audit #25 harness, so this is an
+// independent @(test).
+@(test)
 geometry_behavior :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
-	ui = {}
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	ui.zoom_start, ui.zoom_end = 0, 1
 
 	for size in ([3][2]i32{{1320, 860}, {900, 600}, {720, 480}}) {

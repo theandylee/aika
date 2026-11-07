@@ -98,10 +98,15 @@ tracker_teardown_releases_unacknowledged_metadata :: proc(t: ^testing.T) {
 	testing.expect(t, len(track.allocation_map) == 0)
 }
 
-// Serialized with the other tests of shared native UI state in zoom_behavior.
+// Shared native UI state is reset by the audit #25 harness, so this is an
+// independent @(test). The global_app save/restore stays inline so -vet can
+// see the stack reference being cleared.
+@(test)
 ui_startup_unwinds_every_stage :: proc(t: ^testing.T) {
-	old, old_app := ui, global_app
-	defer { ui = old; global_app = old_app }
+	g := ui_test_begin()
+	defer ui_test_end(&g)
+	old_app := global_app
+	defer global_app = old_app
 	app := App{date = today_date_int(), db_path = ":memory:"}
 	global_app = &app
 	for stage in Ui_Startup_Stage {
@@ -124,10 +129,10 @@ ui_startup_unwinds_every_stage :: proc(t: ^testing.T) {
 	}
 }
 
+@(test)
 ui_visibility_and_cancellation :: proc(t: ^testing.T) {
-	old, old_tag := ui, tag_ui
-	defer { ui = old; tag_ui = old_tag }
-	ui = {}
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	lay := compute_layout(1320, 860)
 	for tab in ([2]Tab{.Timesheet, .Statistics}) {
 		ui.tab = tab

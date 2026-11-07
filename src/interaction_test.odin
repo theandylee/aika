@@ -4,9 +4,13 @@ import "core:sys/windows"
 import "core:testing"
 
 // Interaction coverage: overview zoom drags, middle-button timeline pan, wheel
-// routing, cancellation and the placeholder-tab gate. Called from zoom_behavior
-// so the shared ui/tag_ui globals are exercised serially.
+// routing, cancellation and the placeholder-tab gate. Holds the audit #25
+// shared-state lock once for the whole test; the sub-cases below only
+// snapshot the globals (ui_test_guard_*) so they must stay nested here.
+@(test)
 interaction_behavior :: proc(t: ^testing.T) {
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	interaction_zoom_overview_drag(t)
 	interaction_zoom_edge_drags(t)
 	interaction_timeline_pan(t)
@@ -18,9 +22,8 @@ interaction_behavior :: proc(t: ^testing.T) {
 near :: proc(a, b: f64, tolerance := 0.000001) -> bool { return abs(a - b) < tolerance }
 
 interaction_zoom_overview_drag :: proc(t: ^testing.T) {
-	old, old_tag := ui, tag_ui
-	defer { ui = old; tag_ui = old_tag }
-	ui, tag_ui = {}, {}
+	g := ui_test_guard_begin()
+	defer ui_test_guard_end(&g)
 	lay := compute_layout(1320, 860)
 	bar, _, _, _ := zoom_rects(lay)
 	bw := f64(bar.right - bar.left)
@@ -60,9 +63,8 @@ interaction_zoom_overview_drag :: proc(t: ^testing.T) {
 }
 
 interaction_zoom_edge_drags :: proc(t: ^testing.T) {
-	old, old_tag := ui, tag_ui
-	defer { ui = old; tag_ui = old_tag }
-	ui, tag_ui = {}, {}
+	g := ui_test_guard_begin()
+	defer ui_test_guard_end(&g)
 	lay := compute_layout(1320, 860)
 	bar, _, _, _ := zoom_rects(lay)
 	bw := f64(bar.right - bar.left)
@@ -95,9 +97,8 @@ interaction_zoom_edge_drags :: proc(t: ^testing.T) {
 }
 
 interaction_timeline_pan :: proc(t: ^testing.T) {
-	old, old_tag := ui, tag_ui
-	defer { ui = old; tag_ui = old_tag }
-	ui, tag_ui = {}, {}
+	g := ui_test_guard_begin()
+	defer ui_test_guard_end(&g)
 	lay := compute_layout(1320, 860)
 	x := lay.chart_x + lay.chart_w / 2
 	ui.zoom_start, ui.zoom_end = 0.25, 0.75
@@ -134,9 +135,8 @@ interaction_timeline_pan :: proc(t: ^testing.T) {
 }
 
 interaction_wheel_routing :: proc(t: ^testing.T) {
-	old, old_tag := ui, tag_ui
-	defer { ui = old; tag_ui = old_tag }
-	ui, tag_ui = {}, {}
+	g := ui_test_guard_begin()
+	defer ui_test_guard_end(&g)
 	lay := compute_layout(1320, 860)
 	ui.list_scroll.rows, ui.list_scroll.page, ui.list_scroll.pos = 100, 10, 20
 	ui.totals_scroll.rows, ui.totals_scroll.page, ui.totals_scroll.pos = 100, 10, 20
@@ -213,9 +213,8 @@ interaction_wheel_routing :: proc(t: ^testing.T) {
 }
 
 interaction_cancel_is_idempotent :: proc(t: ^testing.T) {
-	old, old_tag := ui, tag_ui
-	defer { ui = old; tag_ui = old_tag }
-	ui, tag_ui = {}, {}
+	g := ui_test_guard_begin()
+	defer ui_test_guard_end(&g)
 	lay := compute_layout(1320, 860)
 
 	// Nothing active: cancelling changes nothing at all.
@@ -269,9 +268,8 @@ interaction_cancel_is_idempotent :: proc(t: ^testing.T) {
 }
 
 interaction_blocked_off_day_tab :: proc(t: ^testing.T) {
-	old, old_tag := ui, tag_ui
-	defer { ui = old; tag_ui = old_tag }
-	ui, tag_ui = {}, {}
+	g := ui_test_guard_begin()
+	defer ui_test_guard_end(&g)
 	lay := compute_layout(1320, 860)
 	bar, _, _, _ := zoom_rects(lay)
 	app := App{date = 20261106}

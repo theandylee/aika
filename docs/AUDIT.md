@@ -456,7 +456,7 @@ verified. References describe the source at audit time; line numbers may drift.
   by design. Verified by `dpi_scaling_behavior` (rounding, layout
   doubling at 200%, pane rescale), 104 tests, all UI scripts, and 92/92
   pixel-identical snapshots vs HEAD at 96 DPI.
-- [ ] **25. Tests under-cover tracker lifecycle and duplicate native UI harnesses.**
+- [x] **25. Tests under-cover tracker lifecycle and duplicate native UI harnesses.**
   References: `src/tracker_test.odin`, `src/totals_tree_test.odin:5`,
   `tools/test-*.py`.
   The tracker test checks only the default idle threshold and invokes real
@@ -480,6 +480,19 @@ verified. References describe the source at audit time; line numbers may drift.
   both builds, and isolated Settings/task UI smoke tests passed. The task script's
   stale toolbar click coordinate was corrected. This does not establish a GDI soak
   result or fix the remaining lifecycle defects.
+  Fixed: `src/ui_test_harness.odin` snapshots/restores `ui`, `tag_ui`,
+  `global_app` and the active palette (including its `C_*` mirror), and a
+  package-level `ui_test_mutex` serializes every test that touches that shared
+  state. The old `zoom_behavior` chain is gone: all 16 behavior checks are
+  independent @(test)s (splitting without the lock reproduced as
+  order-dependent geometry/DPI failures, which `-define:ODIN_TEST_THREADS=1`
+  confirms is runner parallelism, not state leakage). `tools/native_ui.py` now
+  also owns process control (`launch_app`/`stop_app`/`ensure_closed`), messaging
+  (`send_msg`/`point`/`click_at`/`set_text`/`get_text`), waiting (`wait_for`,
+  `wait_closed`, `responsive_tick`) and isolation (`isolated_temp_dir`,
+  `exe_from_argv`) behind the same PID-scoped discovery; all ten GUI scripts
+  and the pixel harness were migrated to it with identical coordinates and
+  assertions. The opt-in view benchmark takes the same lock when enabled.
 
 - [ ] **26. Documentation has drifted from implementation.**
   References: `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`.
@@ -772,6 +785,25 @@ verified. References describe the source at audit time; line numbers may drift.
   `build/aika-tags.exe` and `build/aika-tags-cli.exe` passed. Isolated tags,
   task, totals-tree, theme, panes and resource-soak UI scripts passed against
   the GUI build.
+
+## Follow-up verification — audit item 25
+
+- `odin check src -vet` is warning-clean and all 119 tests in `odin test src -vet`
+  pass in the default parallel runner (twice in a row); the same 2-test
+  combination that failed when the chain was split without a lock
+  (`dpi_scaling_behavior` + `geometry_behavior`) passes with
+  `-define:ODIN_TEST_THREADS=1` and passes in parallel with the lock, confirming
+  the failure was runner parallelism over shared `ui` globals, not leakage.
+  Alternate builds (`build/aika-audit25.exe`, `build/aika-audit25-cli.exe`)
+  succeeded; the user's running normal GUI was not stopped or replaced.
+- All native scripts pass against the alternate GUI build: import, totals-tree,
+  panes, task, theme, settings, persistence, tags, tray, and the 200-paint
+  resource soak (bounded private/GDI/USER/handles). `test-zoom-ui.py` failed one
+  pan-gating assert on its first run and passed clean on rerun; it uses
+  0.15 s real-cursor drains and must run with the mouse untouched.
+- Not done: overnight GDI/handle profiling, heap-OOM injection, and
+  `test-import.py` (CLI-only, no window helpers) stays outside the native
+  harness. `tools/__pycache__/` and the alternate binaries stay untracked.
 
 ## Guardrails for follow-up work
 

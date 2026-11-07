@@ -3,12 +3,12 @@ package main
 import "core:sys/windows"
 import "core:testing"
 
-// Audit #24: central DPI scaling. Design constants are 96-DPI pixels;
-// dpi_px is the identity at 96 DPI (so existing layout tests are unchanged)
-// and scales proportionally above it.
+// Central DPI scaling. Shared ui state (which holds the DPI) is reset by the
+// audit #25 harness, so this is an independent @(test).
+@(test)
 dpi_scaling_behavior :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 
 	dpi_set(96)
 	testing.expect(t, dpi_current() == 96)

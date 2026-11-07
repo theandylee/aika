@@ -374,7 +374,10 @@ tracks ownership over repeated filter conversions.
 `src/resources_test.odin` checks nested scratch/map alignment, failed DB opens,
 partial native startup at nine acquisition stages, transactional DC/bitmap/select
 failures, repeated cleanup and owned pending/current metadata teardown. Shared UI
-checks run serially inside `zoom_behavior`, including placeholder hit targets and
+checks are independent @(test)s serialized by the `ui_test_mutex` in
+`src/ui_test_harness.odin`, which snapshots and restores `ui`, `tag_ui`,
+`global_app` and the active palette (also covering the opt-in view benchmark
+when enabled). This includes placeholder hit targets and
 all typed zoom cancellation modes. These are not exhaustive heap-OOM tests.
 `src/db_test.odin` checks failed/ignored writes, missing versus empty results,
 interrupted reads after a first row, and cache preservation on load failure.
@@ -382,7 +385,8 @@ interrupted reads after a first row, and cache preservation on load failure.
 lock against an isolated DB, checks UI responsiveness and error visibility,
 verifies Exit cancellation while writes are pending, then releases the lock and
 checks recovery and successful Exit. Native UI tests should run sequentially.
-All native scripts use `tools/native_ui.py` for PID-scoped window/popup/menu
+All native scripts build on `tools/native_ui.py` for process control, messaging,
+waiting, and PID-scoped window/popup/menu
 discovery, so another running aika instance cannot be selected by a global popup
 lookup. `python tools/test-resources-ui.py build/aika.exe` seeds 900 synthetic
 daily rows, cycles resize/Settings/tag popups, then measures 2,000 forced paints

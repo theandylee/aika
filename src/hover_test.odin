@@ -3,15 +3,13 @@ package main
 import "core:sys/windows"
 import "core:testing"
 
-// Invoked serially by zoom_behavior: mutates the shared ui/tag_ui state.
+// Shared ui/tag_ui state is reset by the audit #25 harness, so this is an
+// independent @(test).
+@(test)
 hover_repaint_behavior :: proc(t: ^testing.T) {
-	old := ui
-	defer ui = old
-	old_tags := tag_ui
-	defer tag_ui = old_tags
+	g := ui_test_begin()
+	defer ui_test_end(&g)
 	defer free_all(context.temp_allocator)
-	ui = {}
-	tag_ui = {}
 	ui.zoom_start, ui.zoom_end = 0, 1
 	W, H :: i32(1320), i32(860)
 	lay := compute_layout(W, H)

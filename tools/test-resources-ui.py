@@ -9,34 +9,26 @@ from ctypes import wintypes as w
 from contextlib import closing
 from datetime import datetime
 import json
-import os
 from pathlib import Path
 import re
 import sqlite3
-import subprocess
 import sys
-import tempfile
 import time
-from native_ui import find_window, windows_for
+import native_ui as N
 
-u = c.WinDLL("user32", use_last_error=True)
+u = N.u
 k = c.WinDLL("kernel32", use_last_error=True)
 ps = c.WinDLL("psapi", use_last_error=True)
-u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
-u.SendMessageW.restype = c.c_ssize_t
-u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
 u.InvalidateRect.argtypes = [w.HWND, c.c_void_p, w.BOOL]
-u.UpdateWindow.argtypes = [w.HWND]
 u.GetGuiResources.argtypes = [w.HANDLE, w.DWORD]
 u.GetGuiResources.restype = w.DWORD
-u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
 u.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
 u.MoveWindow.argtypes = [w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.BOOL]
-u.GetDlgItem.argtypes = [w.HWND, c.c_int]
-u.GetDlgItem.restype = w.HWND
 u.SetForegroundWindow.argtypes = [w.HWND]
-u.IsWindowVisible.argtypes = [w.HWND]
 k.GetProcessHandleCount.argtypes = [w.HANDLE, c.POINTER(w.DWORD)]
+
+
+find_window, windows_for = N.find_window, N.windows_for
 
 
 class Memory(c.Structure):
@@ -59,20 +51,17 @@ def sample(process):
 
 
 def send(hwnd, msg, wp=0, lp=0):
-    return u.SendMessageW(hwnd, msg, wp, lp)
+    return N.send_msg(hwnd, msg, wp, lp)
 
 
 def click(hwnd, x, y):
-    point = (y << 16) | x
-    send(hwnd, 0x201, 1, point)
-    send(hwnd, 0x202, 0, point)
+    N.click_at(hwnd, x, y)
 
 
 exe = str(Path(sys.argv[1]).resolve())
 paints = int(sys.argv[2]) if len(sys.argv) > 2 else 2000
-root = Path(os.environ["LOCALAPPDATA"]) / "Temp/opencode"
-with tempfile.TemporaryDirectory(prefix="aika-soak-", dir=root) as folder:
-    db = Path(folder) / "synthetic.db"
+with N.isolated_temp_dir("aika-soak-") as folder:
+    db = folder / "synthetic.db"
     source = (Path(__file__).resolve().parents[1] / "src/db.odin").read_text()
     midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     date = (midnight - datetime(2000, 1, 1)).days
@@ -85,14 +74,10 @@ with tempfile.TemporaryDirectory(prefix="aika-soak-", dir=root) as folder:
                          "EndLocalDate,EndLocalTime,EndUtcTime,StartUtcMs,EndUtcMs) VALUES(3,?,100,?,'','',?,'','',?,?)",
                          [(f"Synthetic window {i}", date, date, start + i * 96000, start + (i + 1) * 96000) for i in range(900)])
         conn.commit()
-    process = subprocess.Popen([exe, "--db", str(db)])
-    hwnd = None
+    process, hwnd = N.launch_app(exe, db, settle=0.7)
     try:
-        assert u.WaitForInputIdle(w.HANDLE(process._handle), 10000) == 0
-        hwnd = find_window(process.pid, "aika_window_class")
         tray = find_window(process.pid, "aika_tray_window_class")
         assert hwnd and tray
-        time.sleep(0.7)
 
         def paint():
             u.InvalidateRect(hwnd, None, False)
@@ -159,13 +144,8 @@ with tempfile.TemporaryDirectory(prefix="aika-soak-", dir=root) as folder:
     finally:
         if process.poll() is None:
             if hwnd:
-                send(hwnd, 0x1F)
+                N.send_msg(hwnd, 0x1F)
                 # If a hidden-control regression opened a picker, close only ours.
                 for popup in windows_for(process.pid, "aika_tag_picker"):
-                    send(popup, 0x10)
-                send(hwnd, 0x111, 1002)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                    N.send_msg(popup, 0x10)
+            N.ensure_closed(process, hwnd)
