@@ -103,7 +103,7 @@ Monitor_Info :: struct {
 
 PROCESS_QUERY_LIMITED_INFORMATION :: 0x1000
 
-message_box :: proc(text, caption: string, flags: windows.UINT = 0x40) {
+message_box :: proc(text, caption: string, flags: windows.UINT = windows.MB_ICONINFORMATION) {
 	tw := windows.utf8_to_wstring(text, context.temp_allocator)
 	cw := windows.utf8_to_wstring(caption, context.temp_allocator)
 	windows.MessageBoxW(nil, tw, cw, flags)

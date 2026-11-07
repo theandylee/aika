@@ -17,7 +17,7 @@ Focus_Cache :: struct {
 	name, hash, text_data: string,
 	loaded_mono: i64,
 	group_id: i64,
-	color: u32,
+	color: Argb,
 	db_handle: ^sqlite3,
 }
 
@@ -92,7 +92,7 @@ tracker_cached_foreground :: proc(app: ^App) -> (WindowInfo, bool) {
 	return info, true
 }
 
-tracker_focus_group :: proc(app: ^App, info: WindowInfo) -> (i64, u32, DB_Result) {
+tracker_focus_group :: proc(app: ^App, info: WindowInfo) -> (i64, Argb, DB_Result) {
 	cache := &app.tracker.focus_cache
 	if info.cacheable && cache.key.created != 0 && cache.key == (Process_Identity{pid = info.pid, created = info.created}) {
 		if cache.group_id > 0 && cache.db_handle == app.db.handle { return cache.group_id, cache.color, .Ok }
@@ -108,7 +108,7 @@ tracker_focus_group :: proc(app: ^App, info: WindowInfo) -> (i64, u32, DB_Result
 	return tracker_ensure_focus_group(app, hash, name, text)
 }
 
-tracker_ensure_focus_group :: proc(app: ^App, hash, name, text: string) -> (i64, u32, DB_Result) {
+tracker_ensure_focus_group :: proc(app: ^App, hash, name, text: string) -> (i64, Argb, DB_Result) {
 	io := &app.tracker.io
 	if io.ensure_focus_group != nil { return io.ensure_focus_group(io.data, &app.db, hash, name, text) }
 	return db_ensure_group(&app.db, TIMELINE_APPS, hash, name, text)

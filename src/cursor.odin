@@ -39,5 +39,5 @@ ui_grab_cursor :: proc() -> windows.HCURSOR {
 		ui.grab_cursor = windows.CreateCursor(nil, 15, 15, 32, 32, &and_mask[0], &xor_mask[0])
 	}
 	if ui.grab_cursor != nil { return ui.grab_cursor }
-	return windows.LoadCursorW(nil, transmute(cstring16)(u64(32646))) // IDC_SIZEALL fallback
+	return system_cursor(IDC_SIZEALL) // fallback
 }

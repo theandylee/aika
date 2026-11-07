@@ -5,9 +5,14 @@ import "core:strings"
 import "core:sys/windows"
 import rt "base:runtime"
 
+Tag_Drag :: enum { None, New_Range, Left_Edge, Right_Edge }
+
+tag_drag_is_edge :: proc(drag: Tag_Drag) -> bool {
+	return drag == .Left_Edge || drag == .Right_Edge
+}
+
 TagUi :: struct {
-	drag: i32, // 1 = new range, 2 = left edge, 3 = right edge
-	id: i64,
+	id: i64, // resized block (edge drags) or 0; range below survives for picker
 	anchor, start_ms, end_ms: i64,
 	down_x: i32,
 	view_start, view_end: i64,
@@ -25,8 +30,7 @@ TAG_POPUP_CLASS :: "aika_tag_picker"
 // Match the rendered pixel rectangles, including very short and clipped blocks.
 // Later activities are painted on top and therefore win the hit test.
 tag_block_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> i64 {
-	if ui.tab != 0 || !rect_hit(windows.RECT{lay.chart_x, lay.lane_y,
-		lay.chart_x + lay.chart_w, lay.lane_y + lay.lane_h}, x, y) { return 0 }
+	if ui.tab != .Day || !rect_hit(lane_rect(lay, .Tags), x, y) { return 0 }
 	snapshot := build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
 	vs, ve := zoom_bounds(snapshot.day_start, snapshot.day_end)
 	index := snapshot_bar_hit(snapshot, TIMELINE_TAGS, x, lay.chart_x, lay.chart_w, vs, ve)
@@ -34,7 +38,7 @@ tag_block_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> i64 {
 }
 
 tag_context_menu :: proc(app: ^App, screen: windows.POINT) {
-	if tag_ui.drag != 0 || ui.zoom_drag != .None || tag_ui.popup != nil || tag_ui.menu_open { return }
+	if interaction_active() || tag_ui.popup != nil || tag_ui.menu_open { return }
 	p := screen
 	windows.ScreenToClient(ui.hwnd, &p)
 	w, h := client_size(ui.hwnd)
@@ -48,16 +52,16 @@ tag_context_menu :: proc(app: ^App, screen: windows.POINT) {
 	if menu == nil { return }
 	defer windows.DestroyMenu(menu)
 	if !windows.AppendMenuW(menu, 0, 1, wtext("Delete")) { return }
-	ui.lane = 0
+	ui.lane = .Tags
 	tag_ui.menu_open = true
 	defer tag_ui.menu_open = false
 	windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
 	// The menu runs a nested message loop; retain only the ID, never a pointer
 	// into app.activities, because the timer may reload the selected day.
-	command := windows.TrackPopupMenu(menu, 0x0102, screen.x, screen.y, 0, ui.hwnd, nil) // TPM_RETURNCMD | TPM_RIGHTBUTTON
+	command := windows.TrackPopupMenu(menu, windows.TPM_RETURNCMD | windows.TPM_RIGHTBUTTON, screen.x, screen.y, 0, ui.hwnd, nil)
 	if command == 1 {
 		if !db_delete_tag_block(&app.db, id) {
-			message_box("Could not delete tag block. Please try again.", "aika", 0x10)
+			message_box("Could not delete tag block. Please try again.", "aika", windows.MB_ICONERROR)
 		}
 		load_day(app)
 	}
@@ -87,8 +91,8 @@ tag_gap_at :: proc(activities: []Activity, point: i64) -> (start, end: i64, foun
 }
 
 tag_gap_double_click :: proc(app: ^App, x, y: i32, lay: Layout) -> bool {
-	if ui.tab != 0 || tag_ui.popup != nil || tag_ui.menu_open || tag_ui.drag != 0 || ui.zoom_drag != .None ||
-	   !rect_hit(windows.RECT{lay.chart_x, lay.lane_y, lay.chart_x + lay.chart_w, lay.lane_y + lay.lane_h}, x, y) {
+	if ui.tab != .Day || tag_ui.popup != nil || tag_ui.menu_open || interaction_active() ||
+	   !rect_hit(lane_rect(lay, .Tags), x, y) {
 		return false
 	}
 	if tag_block_hit(app, x, y, lay) != 0 { return false }
@@ -96,7 +100,7 @@ tag_gap_double_click :: proc(app: ^App, x, y: i32, lay: Layout) -> bool {
 	vs, ve := zoom_bounds(ds, de)
 	start, end, found := tag_gap_at(app.activities, tag_ms_for_x(x, lay, vs, ve))
 	if !found { return false }
-	ui.lane = 0
+	ui.lane = .Tags
 	ui.list_scroll.pos, ui.totals_scroll.pos = 0, 0
 	tag_ui.id = 0
 	tag_ui.view_start, tag_ui.view_end = vs, ve
@@ -109,12 +113,12 @@ tag_gap_double_click :: proc(app: ^App, x, y: i32, lay: Layout) -> bool {
 // Edges outside the visible range are not resize handles. Nearest edge wins;
 // at a shared boundary, prefer the block under the pointer so both handles are
 // reachable from their respective interiors. Topmost wins remaining ties.
-tag_edge_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> (id: i64, edge: i32) {
-	if ui.tab != 0 || x < lay.chart_x || x > lay.chart_x + lay.chart_w ||
+tag_edge_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> (id: i64, edge: Tag_Drag) {
+	if ui.tab != .Day || x < lay.chart_x || x > lay.chart_x + lay.chart_w ||
 	   y < lay.lane_y || y >= lay.lane_y + lay.lane_h { return }
 	ds, de := day_bounds_ms(app.date)
 	vs, ve := zoom_bounds(ds, de)
-	best := i32(7)
+	best := EDGE_HIT_PX + 1
 	best_inside := false
 	for a in app.activities {
 		if a.timeline_id != TIMELINE_TAGS || a.end_ms <= vs || a.start_ms >= ve { continue }
@@ -125,8 +129,8 @@ tag_edge_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> (id: i64, edge: i32) 
 		for t, i in ([2]i64{a.start_ms, a.end_ms}) {
 			if t < vs || t > ve { continue }
 			distance := abs(x - x_for_ms(t, vs, ve, lay.chart_x, lay.chart_w))
-			if distance <= 6 && (distance < best || (distance == best && (inside || !best_inside))) {
-				id, edge, best = a.id, i32(i) + 2, distance
+			if distance <= EDGE_HIT_PX && (distance < best || (distance == best && (inside || !best_inside))) {
+				id, edge, best = a.id, .Left_Edge if i == 0 else .Right_Edge, distance
 				best_inside = inside
 			}
 		}
@@ -135,24 +139,25 @@ tag_edge_hit :: proc(app: ^App, x, y: i32, lay: Layout) -> (id: i64, edge: i32) 
 }
 
 tag_pointer_down :: proc(app: ^App, x, y: i32, lay: Layout) -> bool {
-	if ui.tab != 0 || tag_ui.popup != nil ||
-	   !rect_hit(windows.RECT{lay.chart_x, lay.lane_y, lay.chart_x + lay.chart_w, lay.lane_y + lay.lane_h}, x, y) {
+	if ui.tab != .Day || tag_ui.popup != nil || interaction_active() || !rect_hit(lane_rect(lay, .Tags), x, y) {
 		return false
 	}
-	ui.lane = 0
+	ui.lane = .Tags
 	ui.list_scroll.pos, ui.totals_scroll.pos = 0, 0
 	ds, de := day_bounds_ms(app.date)
 	tag_ui.view_start, tag_ui.view_end = zoom_bounds(ds, de)
 	tag_ui.anchor = tag_ms_for_x(x, lay, tag_ui.view_start, tag_ui.view_end)
 	tag_ui.start_ms, tag_ui.end_ms = tag_ui.anchor, tag_ui.anchor
 	tag_ui.down_x = x
-	tag_ui.id, tag_ui.drag = tag_edge_hit(app, x, y, lay)
+	id, edge := tag_edge_hit(app, x, y, lay)
+	tag_ui.id = id
 	if tag_ui.id != 0 {
 		for a in app.activities {
 			if a.id == tag_ui.id { tag_ui.start_ms, tag_ui.end_ms = a.start_ms, a.end_ms; break }
 		}
+		tag_begin(edge, tag_ui.id)
 	} else {
-		tag_ui.drag = 1
+		tag_begin(.New_Range, 0)
 	}
 	windows.SetFocus(ui.hwnd)
 	windows.SetCapture(ui.hwnd)
@@ -198,10 +203,11 @@ tag_free_range :: proc(activities: []Activity, anchor, pointer: i64) -> (start, 
 
 tag_pointer_move :: proc(x: i32, lay: Layout, activities: []Activity = nil) {
 	t := tag_ms_for_x(x, lay, tag_ui.view_start, tag_ui.view_end)
-	switch tag_ui.drag {
-	case 1:
+	switch tag_drag() {
+	case .None:
+	case .New_Range:
 		tag_ui.start_ms, tag_ui.end_ms = tag_free_range(activities, tag_ui.anchor, t)
-	case 2:
+	case .Left_Edge:
 		limit := tag_ui.view_start
 		for a in activities {
 			if a.timeline_id == TIMELINE_TAGS && a.id != tag_ui.id && a.end_ms <= tag_ui.end_ms {
@@ -209,7 +215,7 @@ tag_pointer_move :: proc(x: i32, lay: Layout, activities: []Activity = nil) {
 			}
 		}
 		tag_ui.start_ms = clamp(t, min(limit, tag_ui.end_ms - 1), tag_ui.end_ms - 1)
-	case 3:
+	case .Right_Edge:
 		limit := tag_ui.view_end
 		for a in activities {
 			if a.timeline_id == TIMELINE_TAGS && a.id != tag_ui.id && a.start_ms >= tag_ui.start_ms {
@@ -222,14 +228,14 @@ tag_pointer_move :: proc(x: i32, lay: Layout, activities: []Activity = nil) {
 
 tag_pointer_up :: proc(app: ^App, x: i32, lay: Layout) {
 	tag_pointer_move(x, lay, app.activities)
-	drag := tag_ui.drag
-	tag_ui.drag = 0 // ReleaseCapture sends WM_CAPTURECHANGED synchronously.
+	drag, id := tag_drag(), tag_drag_id()
+	interaction_end() // ReleaseCapture sends WM_CAPTURECHANGED synchronously.
 	windows.ReleaseCapture()
-	if drag == 1 {
-		if abs(x - tag_ui.down_x) >= 3 && tag_ui.end_ms > tag_ui.start_ms { tag_picker_open() }
-	} else if drag != 0 {
-		if x != tag_ui.down_x && !db_resize_tag(&app.db, tag_ui.id, tag_ui.start_ms, tag_ui.end_ms) {
-			message_box("Could not resize tag. No changes were saved.", "aika", 0x10)
+	if drag == .New_Range {
+		if abs(x - tag_ui.down_x) >= CLICK_DRAG_PX && tag_ui.end_ms > tag_ui.start_ms { tag_picker_open() }
+	} else if drag != .None {
+		if x != tag_ui.down_x && !db_resize_tag(&app.db, id, tag_ui.start_ms, tag_ui.end_ms) {
+			message_box("Could not resize tag. No changes were saved.", "aika", windows.MB_ICONERROR)
 		}
 		load_day(app)
 	}
@@ -240,7 +246,7 @@ tag_draw_range :: proc(dc: windows.HDC, lay: Layout, start, end: i64) {
 	if end <= start || tag_ui.end_ms <= tag_ui.start_ms { return }
 	x1 := x_for_ms(tag_ui.start_ms, start, end, lay.chart_x, lay.chart_w)
 	x2 := x_for_ms(tag_ui.end_ms, start, end, lay.chart_x, lay.chart_w)
-	fill_rect(dc, x1, lay.lane_y + 2, max(1, x2 - x1), lay.lane_h - 4, C_BTN_HOVER)
+	fill_rect(dc, x1, lay.lane_y + 2, max(1, x2 - x1), lay.lane_h - 4, C_TAG_PREVIEW)
 	fill_frame(dc, x1, lay.lane_y + 2, max(1, x2 - x1), lay.lane_h - 4, C_ACCENT)
 	draw_string(dc, fmt.tprintf("%s - %s", fmt_clock_hm(tag_ui.start_ms), fmt_clock_hm(tag_ui.end_ms)),
 		x1 + 6, lay.lane_y + 8, ui.font_bold, C_TXT, x2 - x1 - 12)
@@ -256,17 +262,17 @@ tag_search_text :: proc() -> string {
 tag_picker_filter :: proc() {
 	query := strings.to_lower(tag_search_text(), context.temp_allocator)
 	clear(&tag_ui.visible)
-	windows.SendMessageW(tag_ui.list, 0x0184, 0, 0) // LB_RESETCONTENT
+	windows.SendMessageW(tag_ui.list, LB_RESETCONTENT, 0, 0)
 	exact := false
 	for tag, i in tag_ui.tags {
 		lower := strings.to_lower(tag.name, context.temp_allocator)
 		if lower == query { exact = true }
 		if strings.contains(lower, query) {
 			append(&tag_ui.visible, i)
-			windows.SendMessageW(tag_ui.list, 0x0180, 0, transmute(windows.LPARAM)(wtext(tag.name))) // LB_ADDSTRING
+			windows.SendMessageW(tag_ui.list, LB_ADDSTRING, 0, transmute(windows.LPARAM)(wtext(tag.name)))
 		}
 	}
-	if len(tag_ui.visible) > 0 { windows.SendMessageW(tag_ui.list, 0x0186, 0, 0) } // LB_SETCURSEL
+	if len(tag_ui.visible) > 0 { windows.SendMessageW(tag_ui.list, LB_SETCURSEL, 0, 0) }
 	windows.EnableWindow(tag_ui.create, windows.TRUE if query != "" && !exact else windows.FALSE)
 }
 
@@ -290,19 +296,19 @@ tag_picker_accept :: proc(create: bool) {
 	name := tag_search_text()
 	id: i64
 	if !create {
-		index := int(windows.SendMessageW(tag_ui.list, 0x0188, 0, 0)) // LB_GETCURSEL
+		index := int(windows.SendMessageW(tag_ui.list, LB_GETCURSEL, 0, 0))
 		if index < 0 || index >= len(tag_ui.visible) { return }
 		tag := tag_ui.tags[tag_ui.visible[index]]
 		id, name = tag.id, tag.name
 	} else if name == "" { return }
 	if tag_ui.task_picker {
 		if !task_start(app, id, name, now_ms()) {
-			message_box("Could not start task. The current time may already be tagged. Please select free time or try again.", "aika", 0x10)
+			message_box("Could not start task. The current time may already be tagged. Please select free time or try again.", "aika", windows.MB_ICONERROR)
 			return
 		}
 		tag_picker_close()
 		app.date = today_date_int()
-		ui.lane = 0
+		ui.lane = .Tags
 		ui.list_scroll.pos, ui.totals_scroll.pos = 0, 0
 		load_day(app)
 		sync_date_picker(app)
@@ -310,13 +316,13 @@ tag_picker_accept :: proc(create: bool) {
 	}
 	_, result := db_create_tag_block(&app.db, id, name, tag_ui.start_ms, tag_ui.end_ms)
 	if result == .Overlap {
-		message_box("This time range is already tagged. Please select free time.", "aika", 0x10)
+		message_box("This time range is already tagged. Please select free time.", "aika", windows.MB_ICONERROR)
 		tag_picker_close()
 		load_day(app)
 		return
 	}
 	if result != .Ok {
-		message_box("Could not save tag. Please try again.", "aika", 0x10)
+		message_box("Could not save tag. Please try again.", "aika", windows.MB_ICONERROR)
 		return
 	}
 	tag_picker_close()
@@ -340,11 +346,11 @@ tag_picker_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM,
 		return 0
 	case windows.WM_COMMAND:
 		id, code := u32(wp) & 0xFFFF, (u32(wp) >> 16) & 0xFFFF
-		if id == 101 && code == windows.EN_CHANGE && tag_ui.list != nil { tag_picker_filter() }
-		if id == 102 && code == 2 { tag_picker_accept(false) } // LBN_DBLCLK
-		if id == 103 { tag_picker_accept(false) }
-		if id == 104 { tag_picker_accept(true) }
-		if id == 105 { tag_picker_close() }
+		if id == TAG_ID_SEARCH && code == windows.EN_CHANGE && tag_ui.list != nil { tag_picker_filter() }
+		if id == TAG_ID_LIST && code == LBN_DBLCLK { tag_picker_accept(false) }
+		if id == TAG_ID_USE { tag_picker_accept(false) }
+		if id == TAG_ID_CREATE { tag_picker_accept(true) }
+		if id == TAG_ID_CANCEL { tag_picker_close() }
 		return 0
 	}
 	return windows.DefWindowProcW(hwnd, msg, wp, lp)
@@ -364,7 +370,7 @@ tag_picker_open :: proc() {
 	tag_ui.control_failed = false
 	hi := windows.HINSTANCE(windows.GetModuleHandleW(nil))
 	wc := windows.WNDCLASSEXW{cbSize = size_of(windows.WNDCLASSEXW), lpfnWndProc = tag_picker_proc,
-		hInstance = hi, hCursor = windows.LoadCursorW(nil, transmute(cstring16)(u64(32512))),
+		hInstance = hi, hCursor = system_cursor(IDC_ARROW),
 		hbrBackground = windows.HBRUSH(uintptr(16)), lpszClassName = wtext(TAG_POPUP_CLASS)}
 	windows.RegisterClassExW(&wc)
 	r: windows.RECT
@@ -378,16 +384,16 @@ tag_picker_open :: proc() {
 	description := "Choose a tag to track from now." if tag_ui.task_picker else fmt.tprintf("%s - %s", fmt_clock_hm(tag_ui.start_ms), fmt_clock_hm(tag_ui.end_ms))
 	tag_picker_control("STATIC", description, 0, 12, 12, 380, 20, 0)
 	tag_picker_control("STATIC", "Search tags or enter a new tag name:", 0, 12, 36, 380, 20, 0)
-	tag_ui.search = tag_picker_control("EDIT", "", windows.WS_BORDER | windows.WS_TABSTOP | 0x80, 12, 58, 380, 24, 101) // ES_AUTOHSCROLL
-	tag_ui.list = tag_picker_control("LISTBOX", "", windows.WS_BORDER | windows.WS_TABSTOP | windows.WS_VSCROLL | 1, 12, 90, 380, 162, 102) // LBS_NOTIFY
-	tag_picker_control("BUTTON", "Use tag", windows.WS_TABSTOP | 1, 12, 268, 100, 28, 103)
-	tag_ui.create = tag_picker_control("BUTTON", "Create tag", windows.WS_TABSTOP, 120, 268, 140, 28, 104)
-	tag_picker_control("BUTTON", "Cancel", windows.WS_TABSTOP, 272, 268, 120, 28, 105)
+	tag_ui.search = tag_picker_control("EDIT", "", windows.WS_BORDER | windows.WS_TABSTOP | windows.ES_AUTOHSCROLL, 12, 58, 380, 24, TAG_ID_SEARCH)
+	tag_ui.list = tag_picker_control("LISTBOX", "", windows.WS_BORDER | windows.WS_TABSTOP | windows.WS_VSCROLL | LBS_NOTIFY, 12, 90, 380, 162, TAG_ID_LIST)
+	tag_picker_control("BUTTON", "Use tag", windows.WS_TABSTOP | windows.BS_DEFPUSHBUTTON, 12, 268, 100, 28, TAG_ID_USE)
+	tag_ui.create = tag_picker_control("BUTTON", "Create tag", windows.WS_TABSTOP, 120, 268, 140, 28, TAG_ID_CREATE)
+	tag_picker_control("BUTTON", "Cancel", windows.WS_TABSTOP, 272, 268, 120, 28, TAG_ID_CANCEL)
 	if tag_ui.control_failed { tag_picker_close(); return }
 	tags, result := db_load_tags(&global_app.db)
 	if result != .Ok {
 		tag_picker_close()
-		message_box("Could not load tags. Please try again.", "aika", 0x10)
+		message_box("Could not load tags. Please try again.", "aika", windows.MB_ICONERROR)
 		return
 	}
 	tag_ui.tags = tags
@@ -402,15 +408,15 @@ tag_picker_key :: proc(msg: ^windows.MSG) -> bool {
 	if tag_ui.popup == nil { return false }
 	if msg.message == windows.WM_KEYDOWN {
 		switch msg.wParam {
-		case 0x1B: tag_picker_close(); return true
-		case 0x0D:
+		case windows.VK_ESCAPE: tag_picker_close(); return true
+		case windows.VK_RETURN:
 			focus := windows.GetFocus()
 			if focus == tag_ui.create { tag_picker_accept(true) } else {
 				if focus != tag_ui.search && focus != tag_ui.list { break }
 				tag_picker_accept(len(tag_ui.visible) == 0)
 			}
 			return true
-		case 0x28:
+		case windows.VK_DOWN:
 			if windows.GetFocus() == tag_ui.search { windows.SetFocus(tag_ui.list); return true }
 		}
 	}

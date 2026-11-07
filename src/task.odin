@@ -9,7 +9,7 @@ RunningTask :: struct {
 	last_wall, last_mono, save_mono: i64,
 	group_id: i64,
 	name: string,
-	color: u32,
+	color: Argb,
 }
 
 task_clear :: proc(task: ^RunningTask) {
@@ -41,7 +41,7 @@ task_tick :: proc(app: ^App, now: i64, force: bool = false) -> bool {
 		return true
 	}
 	task.last_wall, task.last_mono = now, mono
-	if now <= task.end_ms || (!force && mono - task.save_mono < 1000) { return true }
+	if now <= task.end_ms || (!force && mono - task.save_mono < TASK_SAVE_INTERVAL_MS) { return true }
 	end, stopped, result := db_extend_task_until_boundary(&app.db, task.id, task.start_ms, now)
 	if result != .Ok { return false }
 	task.end_ms = end

@@ -34,7 +34,7 @@ focus_test_metadata :: proc(data: rawptr, key: Process_Identity) -> (WindowInfo,
 	i.metadata_key = key
 	return i.info, i.metadata_ok
 }
-focus_test_group :: proc(data: rawptr, db: ^DB, hash, name, text: string) -> (i64, u32, DB_Result) {
+focus_test_group :: proc(data: rawptr, db: ^DB, hash, name, text: string) -> (i64, Argb, DB_Result) {
 	i := (^Focus_Test_Input)(data)
 	i.groups += 1
 	if i.fail_group { return 0, 0, .Busy }

@@ -29,6 +29,11 @@ PaneScroll :: struct {
 
 Zoom_Drag :: enum { None, Left, Right, Overview, Timeline }
 
+// Declaration order is the former numeric order (0, 1, 2).
+Tab :: enum { Day, Timesheet, Statistics }
+Lane :: enum { Tags, Computer, Apps } // timeline lanes, top to bottom
+Pane_Drag :: enum { None, Timeline_Height, List_Width }
+
 UiState :: struct {
 	dark:         bool,
 	hwnd:         windows.HWND,
@@ -53,7 +58,7 @@ UiState :: struct {
 	font_icons:  windows.HFONT, // standard monochrome sun/moon symbols
 	theme_button: Theme_Handle,
 	theme_tab:    Theme_Handle,
-	pressed_hit:  int,
+	interaction:  Interaction, // the one active press/drag, nil when idle (interaction.odin)
 
 	mouse:       windows.POINT, // client coords, refreshed each paint
 	mouse_valid: bool,
@@ -62,38 +67,78 @@ UiState :: struct {
 	grab_cursor: windows.HCURSOR,
 
 	filter:      string,
-	tab:         i32,  // 0 = Day, 1 = Timesheet, 2 = Statistics
-	lane:        i32,  // selected timeline lane (0..2)
+	tab:         Tab,
+	lane:        Lane, // selected timeline lane
 	list_scroll, totals_scroll: PaneScroll,
 	totals_tree: bool,
 	totals_expanded: map[string]bool,
 	scroll_date: int,
 	zoom_start, zoom_end: f64,
-	zoom_drag: Zoom_Drag,
-	zoom_drag_anchor, zoom_drag_start, zoom_drag_end: f64,
 	pane_lane_h, pane_totals_w: i32, // zero = default; retained for this session
-	pane_drag: i32, // 1 = timeline height, 2 = list/totals width
-	pane_drag_offset: i32,
-	pane_saved_lane_h, pane_saved_totals_w: i32,
 }
 
 ui: UiState
 
-// Hit target ids for the composite hit test.
-HIT_NONE        :: 0
-HIT_BTN_PREV    :: 1
-HIT_BTN_TODAY   :: 2
-HIT_BTN_NEXT    :: 3
-HIT_BTN_TASK    :: 4
-HIT_ZOOM_OUT    :: 5
-HIT_ZOOM_IN     :: 6
-HIT_ZOOM_RESET  :: 7
-HIT_THEME       :: 8
-HIT_TOTALS_TREE :: 9
-HIT_TOTALS_ROW  :: 30
-HIT_SETTINGS    :: 31
-HIT_TAB_BASE    :: 10 // +0..2
-HIT_LANE_BASE   :: 20 // +0..3
+// Targets of the composite hit test. Numeric values carry no meaning: use
+// hit_is_pressable, hit_tab/hit_as_tab and hit_lane/hit_as_lane, never ranges.
+Hit :: enum {
+	None,
+	Btn_Prev, Btn_Today, Btn_Next, Btn_Task,
+	Zoom_Out, Zoom_In, Zoom_Reset,
+	Theme, Settings, Totals_Tree, Totals_Row,
+	Tab_Day, Tab_Timesheet, Tab_Statistics,
+	Lane_Tags, Lane_Computer, Lane_Apps,
+}
+
+// Targets that show a pressed state and act on mouse-up inside the same target
+// (the button-like controls); everything else acts on mouse-down.
+hit_is_pressable :: proc(hit: Hit) -> bool {
+	switch hit {
+	case .Btn_Prev, .Btn_Today, .Btn_Next, .Btn_Task, .Zoom_Out, .Zoom_In, .Zoom_Reset,
+	     .Theme, .Settings, .Totals_Tree:
+		return true
+	case .None, .Totals_Row, .Tab_Day, .Tab_Timesheet, .Tab_Statistics,
+	     .Lane_Tags, .Lane_Computer, .Lane_Apps:
+		return false
+	}
+	return false
+}
+
+hit_tab :: proc(tab: Tab) -> Hit {
+	switch tab {
+	case .Day: return .Tab_Day
+	case .Timesheet: return .Tab_Timesheet
+	case .Statistics: return .Tab_Statistics
+	}
+	return .None
+}
+
+hit_as_tab :: proc(hit: Hit) -> (tab: Tab, ok: bool) {
+	#partial switch hit {
+	case .Tab_Day: return .Day, true
+	case .Tab_Timesheet: return .Timesheet, true
+	case .Tab_Statistics: return .Statistics, true
+	}
+	return
+}
+
+hit_lane :: proc(lane: Lane) -> Hit {
+	switch lane {
+	case .Tags: return .Lane_Tags
+	case .Computer: return .Lane_Computer
+	case .Apps: return .Lane_Apps
+	}
+	return .None
+}
+
+hit_as_lane :: proc(hit: Hit) -> (lane: Lane, ok: bool) {
+	#partial switch hit {
+	case .Lane_Tags: return .Tags, true
+	case .Lane_Computer: return .Computer, true
+	case .Lane_Apps: return .Apps, true
+	}
+	return
+}
 
 WNDC_CLASS :: "aika_window_class"
 APP_TIMER_ID :: 1
@@ -112,7 +157,7 @@ ui_add_tray :: proc() -> bool {
 		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.tray_hwnd,
 		uID = TRAY_ICON_ID, uFlags = windows.NIF_MESSAGE | windows.NIF_ICON | windows.NIF_TIP,
 		uCallbackMessage = TRAY_MESSAGE,
-		hIcon = windows.LoadIconW(nil, transmute(cstring16)(u64(32512))), // IDI_APPLICATION (shared)
+		hIcon = windows.LoadIconW(nil, transmute(cstring16)(IDI_APPLICATION)), // shared icon
 	}
 	copy(data.szTip[:], windows.utf8_to_utf16("aika", context.temp_allocator))
 	ui.tray_added = bool(windows.Shell_NotifyIconW(windows.NIM_ADD, &data))
@@ -167,7 +212,7 @@ ui_tray_menu :: proc() {
 		windows.ReleaseCapture()
 	}
 	windows.SetForegroundWindow(owner)
-	command := windows.TrackPopupMenu(menu, 0x0102, p.x, p.y, 0, owner, nil)
+	command := windows.TrackPopupMenu(menu, windows.TPM_RETURNCMD | windows.TPM_RIGHTBUTTON, p.x, p.y, 0, owner, nil)
 	windows.PostMessageW(owner, windows.WM_NULL, 0, 0)
 	if command != 0 { windows.SendMessageW(ui.hwnd, windows.WM_COMMAND, windows.WPARAM(command), 0) }
 }
@@ -418,11 +463,11 @@ app_tick :: proc(app: ^App) {
 	tracker_tick(app, now) // also retries pending writes while sampling is paused
 	if !task_tick(app, now) {
 		task_clear(&app.task)
-		message_box("Task tracking stopped because its tag block could not be updated. The last saved time is preserved.", "aika", 0x10)
+		message_box("Task tracking stopped because its tag block could not be updated. The last saved time is preserved.", "aika", windows.MB_ICONERROR)
 	}
 	mono := monotonic_ms()
-	if (app.date != app.loaded_date || app.load_result != .Ok || mono - app.last_load_ms >= 10_000) &&
-	   mono - app.last_load_attempt_ms >= 1000 {
+	if (app.date != app.loaded_date || app.load_result != .Ok || mono - app.last_load_ms >= DAY_RELOAD_INTERVAL_MS) &&
+	   mono - app.last_load_attempt_ms >= DAY_LOAD_RETRY_MS {
 		load_day(app)
 		sync_date_picker(app)
 	}
@@ -440,14 +485,14 @@ ui_request_exit :: proc(app: ^App) -> bool {
 	// Do not destroy the window/message loop while it owns unsaved intervals.
 	// A failed Exit stays visible and retries; a later Exit can then succeed.
 	if !task_stop(app, now_ms()) {
-		message_box("Could not save the final task time. Exit cancelled; please try again.", "aika", 0x10)
+		message_box("Could not save the final task time. Exit cancelled; please try again.", "aika", windows.MB_ICONERROR)
 		return false
 	}
 	if !tracker_shutdown(app) {
 		tracker_resume(app)
 		ui_restore()
 		ui_storage_title(app)
-		message_box("Tracking writes remain unsaved. Exit cancelled; aika will retry. Please try Exit again after the save error clears.", "aika", 0x10)
+		message_box("Tracking writes remain unsaved. Exit cancelled; aika will retry. Please try Exit again after the save error clears.", "aika", windows.MB_ICONERROR)
 		return false
 	}
 	return true
@@ -539,7 +584,7 @@ sync_date_picker :: proc(app: ^App) {
 	st := date_systemtime(app.date)
 	windows.SetWindowTextW(ui.date_picker, wtext(date_label(app.date)))
 	if ui.date_calendar != nil {
-		windows.SendMessageW(ui.date_calendar, 0x1002, 0, windows.LPARAM(uintptr(&st))) // MCM_SETCURSEL
+		windows.SendMessageW(ui.date_calendar, MCM_SETCURSEL, 0, windows.LPARAM(uintptr(&st)))
 	}
 	windows.InvalidateRect(ui.date_picker, nil, windows.TRUE)
 }
@@ -559,7 +604,7 @@ pane_scroll_update :: proc(s: ^PaneScroll, rows, page: i32, right, top, bottom: 
 	s.rows = rows
 	s.page = max(1, page)
 	s.pos = clamp(s.pos, 0, max(0, rows - s.page))
-	show := ui.tab == 0 && rows > s.page && bottom > top
+	show := ui.tab == .Day && rows > s.page && bottom > top
 	width := i32(windows.GetSystemMetrics(windows.SM_CXVSCROLL))
 	if show {
 		r := windows.RECT{right - width, top, right, bottom}
@@ -568,33 +613,53 @@ pane_scroll_update :: proc(s: ^PaneScroll, rows, page: i32, right, top, bottom: 
 			windows.MoveWindow(s.hwnd, r.left, r.top, width, bottom - top, windows.TRUE)
 		}
 	}
-	info := Scroll_Info{cbSize = size_of(Scroll_Info), fMask = 7, // SIF_RANGE | SIF_PAGE | SIF_POS
+	info := Scroll_Info{cbSize = size_of(Scroll_Info), fMask = windows.SIF_RANGE | windows.SIF_PAGE | windows.SIF_POS,
 		nMax = max(0, rows - 1), nPage = u32(s.page), nPos = s.pos}
-	SetScrollInfo(s.hwnd, 2, &info, windows.TRUE) // SB_CTL
+	SetScrollInfo(s.hwnd, windows.SB_CTL, &info, windows.TRUE)
 	pane_scroll_show(s, show)
 	return width if show else 0
 }
 
 pane_scroll_message :: proc(s: ^PaneScroll, command: i32) {
 	switch command {
-	case 0: s.pos -= 1 // SB_LINEUP
-	case 1: s.pos += 1 // SB_LINEDOWN
-	case 2: s.pos -= s.page
-	case 3: s.pos += s.page
-	case 4, 5: // SB_THUMBPOSITION / SB_THUMBTRACK; query the full 32-bit position.
-		info := Scroll_Info{cbSize = size_of(Scroll_Info), fMask = 0x10}
-		if GetScrollInfo(s.hwnd, 2, &info) { s.pos = info.nTrackPos }
-	case 6: s.pos = 0
-	case 7: s.pos = s.rows - s.page
+	case windows.SB_LINEUP: s.pos -= 1
+	case windows.SB_LINEDOWN: s.pos += 1
+	case windows.SB_PAGEUP: s.pos -= s.page
+	case windows.SB_PAGEDOWN: s.pos += s.page
+	case windows.SB_THUMBPOSITION, windows.SB_THUMBTRACK: // query the full 32-bit position.
+		info := Scroll_Info{cbSize = size_of(Scroll_Info), fMask = windows.SIF_TRACKPOS}
+		if GetScrollInfo(s.hwnd, windows.SB_CTL, &info) { s.pos = info.nTrackPos }
+	case windows.SB_TOP: s.pos = 0
+	case windows.SB_BOTTOM: s.pos = s.rows - s.page
 	}
 	s.pos = clamp(s.pos, 0, max(0, s.rows - s.page))
 }
 
 pane_scroll_wheel :: proc(s: ^PaneScroll, delta: i32) {
 	s.wheel_delta += delta
-	steps := s.wheel_delta / 120
-	s.wheel_delta %= 120
-	s.pos = clamp(s.pos - steps * 3, 0, max(0, s.rows - s.page))
+	steps := s.wheel_delta / windows.WHEEL_DELTA
+	s.wheel_delta %= windows.WHEEL_DELTA
+	s.pos = clamp(s.pos - steps * WHEEL_ROWS_PER_NOTCH, 0, max(0, s.rows - s.page))
+}
+
+// Route one wheel notch at a client point: the ruler/lanes zoom around the
+// pointer, the details list and the totals panel scroll; elsewhere nothing
+// happens. The areas come from geometry.odin and are disjoint. Returns false
+// (input ignored, no repaint) on placeholder tabs and during any drag.
+wheel_apply :: proc(lay: Layout, x, y, delta: i32) -> bool {
+	if ui.tab != .Day || interaction_active() { return false }
+	if rect_hit(chart_wheel_rect(lay), x, y) {
+		if delta != 0 {
+			zoom_scale(0.8 if delta > 0 else 1.25,
+				clamp(f64(x - lay.chart_x) / f64(lay.chart_w), 0.0, 1.0))
+		}
+	}
+	if rect_hit(list_pane_rect(lay), x, y) {
+		pane_scroll_wheel(&ui.list_scroll, delta)
+	} else if rect_hit(totals_pane_rect(lay), x, y) {
+		pane_scroll_wheel(&ui.totals_scroll, delta)
+	}
+	return true
 }
 
 ui_close_themes :: proc() {
@@ -624,6 +689,156 @@ draw_themed_control :: proc(dc: windows.HDC, theme: Theme_Handle, part, state: i
 	return true
 }
 
+// --- Mouse input: one proc per message, called from wnd_proc below. ---
+
+mouse_point :: proc(lp: windows.LPARAM) -> (x, y: i32) {
+	return i32(i16(u32(lp) & 0xFFFF)), i32(i16((u32(lp) >> 16) & 0xFFFF))
+}
+
+on_mouse_move :: proc(hwnd: windows.HWND, app: ^App, win_x, win_y: i32) {
+	if pane_drag() != .None {
+		w, h := client_size(hwnd)
+		pane_pointer_move(win_x, win_y, compute_layout(w, h))
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return
+	}
+	if tag_drag() != .None {
+		w, h := client_size(hwnd)
+		tag_pointer_move(win_x, compute_layout(w, h), app.activities)
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+	}
+	if zoom_drag() != .None {
+		w, h := client_size(hwnd)
+		zoom_pointer_move(win_x, compute_layout(w, h))
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+	}
+	hover_track_leave(hwnd)
+	if ui.mouse.x != win_x || ui.mouse.y != win_y || !ui.mouse_valid {
+		ui.mouse.x = win_x
+		ui.mouse.y = win_y
+		ui.mouse_valid = true
+		// Repaint only if the frame drawn for this position would differ.
+		w, h := client_size(hwnd)
+		if hover_needs_repaint(ui.hover_painted, hover_signature_for_app(app, win_x, win_y, w, h)) {
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		}
+	}
+}
+
+// True when the cursor is handled (caller returns 1). The ui.tab gate stays
+// with the caller; only HTCLIENT points reach here.
+on_set_cursor :: proc(app: ^App) -> bool {
+	_update_mouse_client()
+	w, h := client_size(ui.hwnd)
+	split := pane_drag()
+	if split == .None { split = pane_split_hit(ui.mouse.x, ui.mouse.y, compute_layout(w, h)) }
+	if split != .None {
+		windows.SetCursor(system_cursor(IDC_SIZENS if split == .Timeline_Height else IDC_SIZEWE))
+		return true
+	}
+	_, edge := tag_edge_hit(app, ui.mouse.x, ui.mouse.y, compute_layout(w, h))
+	if tag_drag_is_edge(edge) || tag_drag_is_edge(tag_drag()) {
+		windows.SetCursor(system_cursor(IDC_SIZEWE))
+		return true
+	}
+	bar, _, _, _ := zoom_rects(compute_layout(w, h))
+	if rect_hit(bar, ui.mouse.x, ui.mouse.y) {
+		width := f64(bar.right - bar.left)
+		left := bar.left + i32(ui.zoom_start * width)
+		right := bar.left + i32(ui.zoom_end * width)
+		cursor := IDC_HAND // pan
+		if abs(ui.mouse.x - left) <= EDGE_HIT_PX || abs(ui.mouse.x - right) <= EDGE_HIT_PX {
+			cursor = IDC_SIZEWE // resize
+		}
+		windows.SetCursor(system_cursor(cursor))
+		return true
+	}
+	return false
+}
+
+on_mouse_wheel :: proc(hwnd: windows.HWND, wp: windows.WPARAM, lp: windows.LPARAM) {
+	delta := i32(i16((u32(wp) >> 16) & 0xFFFF))
+	// WM_MOUSEWHEEL coordinates are screen-relative, including on other monitors.
+	p := windows.POINT{mouse_point(lp)}
+	windows.ScreenToClient(hwnd, &p)
+	w, h := client_size(hwnd)
+	if wheel_apply(compute_layout(w, h), p.x, p.y, delta) {
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+	}
+}
+
+on_mbutton_down :: proc(hwnd: windows.HWND, x, y: i32) {
+	w, h := client_size(hwnd)
+	if zoom_pan_down(x, y, compute_layout(w, h)) {
+		windows.SetCapture(hwnd)
+		windows.SetCursor(ui_grab_cursor())
+	}
+}
+
+on_mbutton_up :: proc(hwnd: windows.HWND, x: i32) {
+	if zoom_drag() == .Timeline {
+		w, h := client_size(hwnd)
+		zoom_pointer_move(x, compute_layout(w, h))
+		interaction_end() // before ReleaseCapture: it re-enters via WM_CAPTURECHANGED
+		windows.ReleaseCapture()
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+	}
+}
+
+on_lbutton_down :: proc(hwnd: windows.HWND, app: ^App, msg: u32, win_x, win_y: i32) {
+	if zoom_drag() == .Timeline { return }
+	if interaction_active() { return }
+	w, h := client_size(hwnd)
+	if pane_pointer_down(win_x, win_y, compute_layout(w, h)) { return }
+	if msg == windows.WM_LBUTTONDBLCLK && tag_gap_double_click(app, win_x, win_y, compute_layout(w, h)) {
+		return
+	}
+	if tag_pointer_down(app, win_x, win_y, compute_layout(w, h)) {
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return
+	}
+	if zoom_pointer_down(win_x, win_y, compute_layout(w, h)) {
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return
+	}
+	id := hit_test(win_x, win_y, w, h)
+	if hit_is_pressable(id) {
+		press_begin(id)
+		windows.SetCapture(hwnd)
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+	} else {
+		handle_click(app, win_x, win_y)
+	}
+}
+
+on_lbutton_up :: proc(hwnd: windows.HWND, app: ^App, x, y: i32, w, h: i32) {
+	if zoom_drag() == .Timeline { return }
+	if pane_drag() != .None {
+		pane_pointer_move(x, y, compute_layout(w, h))
+		interaction_end() // before ReleaseCapture: it re-enters via WM_CAPTURECHANGED
+		windows.ReleaseCapture()
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return
+	}
+	if tag_drag() != .None {
+		tag_pointer_up(app, x, compute_layout(w, h))
+		return
+	}
+	if zoom_drag() != .None {
+		interaction_end() // before ReleaseCapture: it re-enters via WM_CAPTURECHANGED
+		windows.ReleaseCapture()
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return
+	}
+	pressed := press_hit()
+	interaction_end() // before ReleaseCapture: it re-enters via WM_CAPTURECHANGED
+	if pressed != .None {
+		windows.ReleaseCapture()
+		if hit_test(x, y, w, h) == pressed { handle_click(app, x, y) }
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+	}
+}
+
 wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lparam: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
 	scratch: Scratch
@@ -636,13 +851,13 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		if ui.tray_added || ui_add_tray() {
 			windows.ShowWindow(hwnd, windows.SW_HIDE)
 		} else {
-			message_box("Could not create the system tray icon. aika will stay open.", "aika", 0x30)
+			message_box("Could not create the system tray icon. aika will stay open.", "aika", windows.MB_ICONWARNING)
 		}
 		return 0
 	case TRAY_MESSAGE:
 		windows.PostMessageW(ui.tray_hwnd, msg, wparam, lparam)
 		return 0
-	case 0x031A: // WM_THEMECHANGED: cached theme handles are no longer valid.
+	case windows.WM_THEMECHANGED: // cached theme handles are no longer valid.
 		ui_open_themes()
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
@@ -682,35 +897,8 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		recreate_backbuffer(w, h)
 		return 0
 	case windows.WM_MOUSEMOVE:
-		win_x := i32(i16(u32(lparam) & 0xFFFF))
-		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
-		if ui.pane_drag != 0 {
-			w, h := client_size(hwnd)
-			pane_pointer_move(win_x, win_y, compute_layout(w, h))
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		if tag_ui.drag != 0 {
-			w, h := client_size(hwnd)
-			tag_pointer_move(win_x, compute_layout(w, h), app.activities)
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-		}
-		if ui.zoom_drag != .None {
-			w, h := client_size(hwnd)
-			zoom_pointer_move(win_x, compute_layout(w, h))
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-		}
-		hover_track_leave(hwnd)
-		if ui.mouse.x != win_x || ui.mouse.y != win_y || !ui.mouse_valid {
-			ui.mouse.x = win_x
-			ui.mouse.y = win_y
-			ui.mouse_valid = true
-			// Repaint only if the frame drawn for this position would differ.
-			w, h := client_size(hwnd)
-			if hover_needs_repaint(ui.hover_painted, hover_signature_for_app(app, win_x, win_y, w, h)) {
-				windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			}
-		}
+		win_x, win_y := mouse_point(lparam)
+		on_mouse_move(hwnd, app, win_x, win_y)
 		return 0
 	case windows.WM_MOUSELEAVE:
 		ui.mouse_tracking = false
@@ -718,61 +906,15 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		if ui.hover_painted != {} { windows.InvalidateRect(hwnd, nil, windows.FALSE) }
 		return 0
 	case windows.WM_SETCURSOR:
-		if ui.tab == 0 && (u32(lparam) & 0xFFFF) == 1 { // HTCLIENT
-			if ui.zoom_drag == .Timeline {
+		if ui.tab == .Day && (u32(lparam) & 0xFFFF) == windows.HTCLIENT {
+			if zoom_drag() == .Timeline {
 				windows.SetCursor(ui_grab_cursor())
 				return 1
 			}
-			_update_mouse_client()
-			w, h := client_size(hwnd)
-			split := ui.pane_drag
-			if split == 0 { split = pane_split_hit(ui.mouse.x, ui.mouse.y, compute_layout(w, h)) }
-			if split != 0 {
-				cursor := u64(32645) if split == 1 else u64(32644) // IDC_SIZENS / IDC_SIZEWE
-				windows.SetCursor(windows.LoadCursorW(nil, transmute(cstring16)(cursor)))
-				return 1
-			}
-			_, edge := tag_edge_hit(app, ui.mouse.x, ui.mouse.y, compute_layout(w, h))
-			if edge != 0 || tag_ui.drag >= 2 {
-				windows.SetCursor(windows.LoadCursorW(nil, transmute(cstring16)(u64(32644))))
-				return 1
-			}
-			bar, _, _, _ := zoom_rects(compute_layout(w, h))
-			if rect_hit(bar, ui.mouse.x, ui.mouse.y) {
-				width := f64(bar.right - bar.left)
-				left := bar.left + i32(ui.zoom_start * width)
-				right := bar.left + i32(ui.zoom_end * width)
-				cursor := u64(32649) // IDC_HAND (pan)
-				if abs(ui.mouse.x - left) <= 6 || abs(ui.mouse.x - right) <= 6 {
-					cursor = 32644 // IDC_SIZEWE (resize)
-				}
-				windows.SetCursor(windows.LoadCursorW(nil, transmute(cstring16)(cursor)))
-				return 1
-			}
+			if on_set_cursor(app) { return 1 }
 		}
 	case windows.WM_MOUSEWHEEL:
-		if ui.tab != 0 || tag_ui.drag != 0 || ui.pane_drag != 0 || ui.zoom_drag != .None { return 0 }
-		delta := i32(i16((u32(wparam) >> 16) & 0xFFFF))
-		// WM_MOUSEWHEEL coordinates are screen-relative, including on other monitors.
-		p := windows.POINT{i32(i16(u32(lparam) & 0xFFFF)), i32(i16((u32(lparam) >> 16) & 0xFFFF))}
-		windows.ScreenToClient(hwnd, &p)
-		w, h := client_size(hwnd)
-		lay := compute_layout(w, h)
-		if p.x >= lay.chart_x && p.x < lay.chart_x + lay.chart_w &&
-		   p.y >= lay.ruler_y && p.y < lay.list_top {
-			if delta != 0 {
-				zoom_scale(0.8 if delta > 0 else 1.25,
-					clamp(f64(p.x - lay.chart_x) / f64(lay.chart_w), 0.0, 1.0))
-			}
-		}
-		if p.y >= lay.list_top && p.y < lay.list_bottom {
-			if p.x >= lay.chart_x && p.x < lay.sidebar_x - 8 {
-				pane_scroll_wheel(&ui.list_scroll, delta)
-			} else if p.x >= lay.sidebar_x && p.x < lay.sidebar_x + lay.sidebar_w {
-				pane_scroll_wheel(&ui.totals_scroll, delta)
-			}
-		}
-		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		on_mouse_wheel(hwnd, wparam, lparam)
 		return 0
 	case windows.WM_VSCROLL:
 		source := windows.HWND(uintptr(lparam))
@@ -792,84 +934,21 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			return 0
 		}
 	case windows.WM_MBUTTONDOWN:
-		x := i32(i16(u32(lparam) & 0xFFFF))
-		y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
-		w, h := client_size(hwnd)
-		if zoom_pan_down(x, y, compute_layout(w, h)) {
-			windows.SetCapture(hwnd)
-			windows.SetCursor(ui_grab_cursor())
-		}
+		m_x, m_y := mouse_point(lparam)
+		on_mbutton_down(hwnd, m_x, m_y)
 		return 0
 	case windows.WM_MBUTTONUP:
-		if ui.zoom_drag == .Timeline {
-			w, h := client_size(hwnd)
-			x := i32(i16(u32(lparam) & 0xFFFF))
-			zoom_pointer_move(x, compute_layout(w, h))
-			ui.zoom_drag = .None
-			windows.ReleaseCapture()
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-		}
+		m_x, _ := mouse_point(lparam)
+		on_mbutton_up(hwnd, m_x)
 		return 0
 	case windows.WM_LBUTTONDOWN, windows.WM_LBUTTONDBLCLK:
-		if ui.zoom_drag == .Timeline { return 0 }
-		win_x := i32(i16(u32(lparam) & 0xFFFF))
-		win_y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
-		w, h := client_size(hwnd)
-		if pane_pointer_down(win_x, win_y, compute_layout(w, h)) { return 0 }
-		if msg == windows.WM_LBUTTONDBLCLK && tag_gap_double_click(app, win_x, win_y, compute_layout(w, h)) {
-			return 0
-		}
-		if tag_pointer_down(app, win_x, win_y, compute_layout(w, h)) {
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		if zoom_pointer_down(win_x, win_y, compute_layout(w, h)) {
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		id := hit_test(win_x, win_y, w, h)
-		if (id >= HIT_BTN_PREV && id <= HIT_TOTALS_TREE) || id == HIT_SETTINGS {
-			ui.pressed_hit = id
-			windows.SetCapture(hwnd)
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-		} else {
-			handle_click(app, win_x, win_y)
-		}
+		d_x, d_y := mouse_point(lparam)
+		on_lbutton_down(hwnd, app, msg, d_x, d_y)
 		return 0
 	case windows.WM_LBUTTONUP:
-		if ui.zoom_drag == .Timeline { return 0 }
-		if ui.pane_drag != 0 {
-			w, h := client_size(hwnd)
-			x := i32(i16(u32(lparam) & 0xFFFF))
-			y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
-			pane_pointer_move(x, y, compute_layout(w, h))
-			ui.pane_drag = 0
-			windows.ReleaseCapture()
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		if tag_ui.drag != 0 {
-			w, h := client_size(hwnd)
-			x := i32(i16(u32(lparam) & 0xFFFF))
-			tag_pointer_up(app, x, compute_layout(w, h))
-			return 0
-		}
-		if ui.zoom_drag != .None {
-			ui.zoom_drag = .None
-			windows.ReleaseCapture()
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-			return 0
-		}
-		pressed := ui.pressed_hit
-		ui.pressed_hit = HIT_NONE
-		if pressed != HIT_NONE {
-			windows.ReleaseCapture()
-			x := i32(i16(u32(lparam) & 0xFFFF))
-			y := i32(i16((u32(lparam) >> 16) & 0xFFFF))
-			w, h := client_size(hwnd)
-			if hit_test(x, y, w, h) == pressed { handle_click(app, x, y) }
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
-		}
+		u_x, u_y := mouse_point(lparam)
+		w, h := client_size(hwnd)
+		on_lbutton_up(hwnd, app, u_x, u_y, w, h)
 		return 0
 	case windows.WM_CANCELMODE:
 		ui_cancel_interaction()
@@ -882,7 +961,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_KEYDOWN:
-		if wparam == 0x1B {
+		if wparam == windows.VK_ESCAPE {
 			ui_cancel_interaction()
 			if windows.GetCapture() == hwnd { windows.ReleaseCapture() }
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
@@ -890,7 +969,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		}
 	case windows.WM_COMMAND:
 		if ui.date_picker != nil && windows.HWND(uintptr(lparam)) == ui.date_picker && (u32(wparam) >> 16) == 0 {
-			if ui.tab == 0 { date_calendar_open() }
+			if ui.tab == .Day { date_calendar_open() }
 			return 0
 		}
 		if lparam == 0 && (u32(wparam) >> 16) == 0 {
@@ -921,7 +1000,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		return 0
 	case windows.WM_GETMINMAXINFO:
 		mmi := transmute(^windows.MINMAXINFO)(lparam)
-		mmi.ptMinTrackSize = windows.POINT{x = 720, y = 480}
+		mmi.ptMinTrackSize = windows.POINT{x = MIN_WINDOW_W, y = MIN_WINDOW_H}
 		return 0
 	case windows.WM_DESTROY:
 		ui_remove_tray()
@@ -936,13 +1015,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 // Idempotent cancellation shared by Escape, native modal transitions and
 // capture loss. Successful releases clear their state before ReleaseCapture.
 ui_cancel_interaction :: proc() {
-	pane_drag_cancel()
-	if ui.zoom_drag != .None {
-		ui.zoom_start, ui.zoom_end = ui.zoom_drag_start, ui.zoom_drag_end
-	}
-	ui.zoom_drag = .None
-	tag_ui.drag = 0
-	ui.pressed_hit = HIT_NONE
+	interaction_cancel()
 }
 
 client_size :: proc(hwnd: windows.HWND) -> (w, h: i32) {
@@ -986,53 +1059,51 @@ read_filter :: proc() {
 handle_click :: proc(app: ^App, x, y: i32) {
 	w, h := client_size(ui.hwnd)
 	id := hit_test(x, y, w, h)
-	switch {
-	case id == HIT_TOTALS_TREE:
+	switch id {
+	case .None:
+	case .Totals_Tree:
 		ui.totals_tree = !ui.totals_tree
 		ui.totals_scroll.pos = 0
-	case id == HIT_TOTALS_ROW:
+	case .Totals_Row:
 		totals_tree_click(app, y, compute_layout(w, h))
-	case id == HIT_THEME:
+	case .Theme:
 		theme_toggle()
-	case id == HIT_SETTINGS:
+	case .Settings:
 		settings_open()
-	case id == HIT_ZOOM_OUT:
+	case .Zoom_Out:
 		zoom_scale(1.5, 0.5)
-	case id == HIT_ZOOM_IN:
+	case .Zoom_In:
 		zoom_scale(1.0 / 1.5, 0.5)
-	case id == HIT_ZOOM_RESET:
+	case .Zoom_Reset:
 		ui.zoom_start, ui.zoom_end = 0, 1
-	case id == HIT_BTN_PREV:
+	case .Btn_Prev:
 		app.date = add_days(app.date, -1)
 		load_day(app)
 		sync_date_picker(app)
-	case id == HIT_BTN_NEXT:
+	case .Btn_Next:
 		app.date = add_days(app.date, 1)
 		load_day(app)
 		sync_date_picker(app)
-	case id == HIT_BTN_TODAY:
+	case .Btn_Today:
 		app.date = today_date_int()
 		load_day(app)
 		sync_date_picker(app)
-	case id == HIT_BTN_TASK:
+	case .Btn_Task:
 		if app.task.id != 0 {
 			if !task_stop(app, now_ms()) {
-				message_box("Could not stop task. Please try again.", "aika", 0x10)
+				message_box("Could not stop task. Please try again.", "aika", windows.MB_ICONERROR)
 			}
 		} else {
 			tag_ui.task_picker = true
 			tag_picker_open()
 		}
 		load_day(app)
-	case id == HIT_TAB_BASE:
-		ui.tab = 0
-	case id == HIT_TAB_BASE + 1:
-		ui.tab = 1
-	case id == HIT_TAB_BASE + 2:
-		ui.tab = 2
-	case id >= HIT_LANE_BASE && id < HIT_LANE_BASE + 3:
-		if ui.lane != i32(id - HIT_LANE_BASE) {
-			ui.lane = i32(id - HIT_LANE_BASE)
+	case .Tab_Day, .Tab_Timesheet, .Tab_Statistics:
+		ui.tab, _ = hit_as_tab(id)
+	case .Lane_Tags, .Lane_Computer, .Lane_Apps:
+		lane, _ := hit_as_lane(id)
+		if ui.lane != lane {
+			ui.lane = lane
 			ui.list_scroll.pos = 0
 			ui.totals_scroll.pos = 0
 		}
@@ -1042,7 +1113,7 @@ handle_click :: proc(app: ^App, x, y: i32) {
 }
 
 ui_sync_day_controls :: proc() {
-	show := ui.tab == 0
+	show := ui.tab == .Day
 	if !show { date_calendar_close(false) }
 	if ui.date_picker != nil && bool(windows.IsWindowVisible(ui.date_picker)) != show {
 		windows.ShowWindow(ui.date_picker, windows.SW_SHOW if show else windows.SW_HIDE)
@@ -1092,7 +1163,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	wc.style = windows.CS_DBLCLKS
 	wc.lpfnWndProc = wnd_proc
 	wc.hInstance = windows.HINSTANCE(hinstance)
-	wc.hCursor = windows.LoadCursorW(nil, transmute(cstring16)(u64(32512))) // IDC_ARROW
+	wc.hCursor = system_cursor(IDC_ARROW)
 	wc.lpszClassName = class_name
 	if windows.RegisterClassExW(&wc) == 0 {
 		return false
@@ -1115,7 +1186,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	// WS_CLIPCHILDREN keeps our BitBlt from painting over the filter EDIT.
 	style := windows.WS_OVERLAPPEDWINDOW | windows.WS_CLIPCHILDREN
 	ex_style := windows.DWORD(0)
-	client := windows.RECT{left = 0, top = 0, right = 1320, bottom = 860}
+	client := windows.RECT{left = 0, top = 0, right = INITIAL_CLIENT_W, bottom = INITIAL_CLIENT_H}
 	windows.AdjustWindowRectEx(&client, windows.WS_OVERLAPPEDWINDOW, windows.FALSE, ex_style)
 	outer_w := client.right - client.left
 	outer_h := client.bottom - client.top
@@ -1148,14 +1219,14 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	// Independent native scrollbars, initially hidden until row counts are known.
 	for s in ([2]^PaneScroll{&ui.list_scroll, &ui.totals_scroll}) {
 		s.hwnd = windows.CreateWindowExW(0, wtext("SCROLLBAR"), nil,
-			windows.WS_CHILD | windows.WS_TABSTOP | 1, // SBS_VERT
+			windows.WS_CHILD | windows.WS_TABSTOP | SBS_VERT,
 			0, 0, 0, 0, ui.hwnd, nil, windows.HINSTANCE(hinstance), nil)
 		if s.hwnd == nil { return false }
 	}
 	if checkpoint != nil && !checkpoint(.Scrollbars) { return false }
 
 	// Start with the Applications lane selected, like a fresh ManicTime day.
-	ui.lane = 2
+	ui.lane = .Apps
 
 	// Filter edit control. Its WM_COMMAND EN_CHANGE keeps ui.filter current.
 	ui.edit = windows.CreateWindowExW(
@@ -1171,7 +1242,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 		windows.SendMessageW(ui.edit, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	}
 	if ui.edit != nil {
-		previous := windows.SetWindowLongPtrW(ui.edit, -4, transmute(windows.LONG_PTR)(windows.WNDPROC(filter_edit_proc))) // GWLP_WNDPROC
+		previous := windows.SetWindowLongPtrW(ui.edit, windows.GWLP_WNDPROC, transmute(windows.LONG_PTR)(windows.WNDPROC(filter_edit_proc)))
 		filter_edit_original = transmute(windows.WNDPROC)(previous)
 		if previous == 0 { return false }
 	}
@@ -1183,7 +1254,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 		windows.DWORD(0),
 		wtext("BUTTON"),
 		nil,
-		windows.WS_CHILD | windows.WS_VISIBLE | windows.WS_TABSTOP | 0xB, // BS_OWNERDRAW
+		windows.WS_CHILD | windows.WS_VISIBLE | windows.WS_TABSTOP | windows.BS_OWNERDRAW,
 		0, 0, 120, 26,
 		ui.hwnd, nil, windows.HINSTANCE(hinstance), nil,
 	)
@@ -1213,7 +1284,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	if checkpoint != nil && !checkpoint(.Buffer) { return false }
 
 	theme_apply_native()
-	if windows.SetTimer(ui.hwnd, windows.UINT_PTR(APP_TIMER_ID), 500, nil) == 0 { return false }
+	if windows.SetTimer(ui.hwnd, windows.UINT_PTR(APP_TIMER_ID), APP_TIMER_INTERVAL_MS, nil) == 0 { return false }
 	if checkpoint != nil && !checkpoint(.Timer) { return false }
 	windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
 	ready = true

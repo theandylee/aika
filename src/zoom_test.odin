@@ -10,11 +10,14 @@ zoom_behavior :: proc(t: ^testing.T) {
 	zoom_bounds_uses_actual_day_length(t)
 	zoom_pan_and_edges_clamp(t)
 	zoom_middle_pan(t)
+	interaction_behavior(t)
 	zoom_layout_and_ticks(t)
 	pane_resize_behavior(t)
 	tag_drag_behavior(t)
 	totals_tree_behavior(t)
 	hover_repaint_behavior(t)
+	palette_apply_behavior(t)
+	geometry_behavior(t)
 	ui_visibility_and_cancellation(t)
 	ui_startup_unwinds_every_stage(t)
 }
@@ -62,17 +65,17 @@ zoom_pan_and_edges_clamp :: proc(t: ^testing.T) {
 	lay := compute_layout(1320, 860)
 	bar, _, _, _ := zoom_rects(lay)
 	ui.zoom_start, ui.zoom_end = 0.25, 0.75
-	ui.zoom_drag_start, ui.zoom_drag_end = 0.25, 0.75
-	ui.zoom_drag_anchor = 0.5
-	ui.zoom_drag = .Overview
+	zoom_begin(.Overview, 0.5)
 	zoom_pointer_move(bar.right + 500, lay)
 	testing.expect(t, ui.zoom_start == 0.5 && ui.zoom_end == 1)
 	zoom_pointer_move(bar.left - 500, lay)
 	testing.expect(t, ui.zoom_start == 0 && ui.zoom_end == 0.5)
-	ui.zoom_drag = .Left
+	interaction_end()
+	zoom_begin(.Left, 0.5)
 	zoom_pointer_move(bar.right, lay)
 	testing.expect(t, abs(ui.zoom_end - ui.zoom_start - ZOOM_MIN_SPAN) < 0.000001)
-	ui.zoom_drag = .Right
+	interaction_end()
+	zoom_begin(.Right, 0.5)
 	zoom_pointer_move(bar.left, lay)
 	testing.expect(t, abs(ui.zoom_end - ui.zoom_start - ZOOM_MIN_SPAN) < 0.000001)
 }
@@ -80,7 +83,8 @@ zoom_pan_and_edges_clamp :: proc(t: ^testing.T) {
 zoom_middle_pan :: proc(t: ^testing.T) {
 	old := ui
 	defer ui = old
-	ui.tab, ui.zoom_drag, ui.pane_drag, ui.pressed_hit = 0, .None, 0, HIT_NONE
+	ui.tab = .Day
+	ui.interaction = nil
 	lay := compute_layout(1320, 860)
 	x := lay.chart_x + lay.chart_w / 2
 	ui.zoom_start, ui.zoom_end = 0.25, 0.75
@@ -98,7 +102,7 @@ zoom_middle_pan :: proc(t: ^testing.T) {
 	zoom_pointer_move(x, lay)
 	testing.expect(t, ui.zoom_start == 0.25 && ui.zoom_end == 0.75)
 	testing.expect(t, !zoom_pan_down(x, lay.lane_y, lay)) // no nested drag
-	ui.zoom_drag = .None
+	interaction_end()
 	ui.zoom_start, ui.zoom_end = 0, 1
 	testing.expect(t, zoom_pan_down(x, lay.lane_y, lay))
 	zoom_pointer_move(x + 200, lay)

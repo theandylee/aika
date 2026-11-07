@@ -8,15 +8,18 @@ tag_drag_behavior :: proc(t: ^testing.T) {
 	old_ui, old_tag := ui, tag_ui
 	defer { ui = old_ui; tag_ui = old_tag }
 	lay := compute_layout(1320, 860)
-	tag_ui = TagUi{drag = 1, anchor = 5000, view_start = 1000, view_end = 9000}
+	tag_ui = TagUi{anchor = 5000, view_start = 1000, view_end = 9000}
+	tag_begin(.New_Range, 0)
 	tag_pointer_move(lay.chart_x, lay)
 	testing.expect(t, tag_ui.start_ms == 1000 && tag_ui.end_ms == 5000)
 	tag_pointer_move(lay.chart_x + lay.chart_w + 100, lay)
 	testing.expect(t, tag_ui.start_ms == 5000 && tag_ui.end_ms == 9000)
-	tag_ui.drag = 2
+	interaction_end()
+	tag_begin(.Left_Edge, 0)
 	tag_pointer_move(lay.chart_x + lay.chart_w, lay)
 	testing.expect(t, tag_ui.start_ms == tag_ui.end_ms - 1)
-	tag_ui.drag = 3
+	interaction_end()
+	tag_begin(.Right_Edge, 0)
 	tag_pointer_move(lay.chart_x - 100, lay)
 	testing.expect(t, tag_ui.end_ms == tag_ui.start_ms + 1)
 	neighbors := [3]Activity{
@@ -24,24 +27,26 @@ tag_drag_behavior :: proc(t: ^testing.T) {
 		{id = 2, timeline_id = TIMELINE_TAGS, start_ms = 6000, end_ms = 7000},
 		{id = 3, timeline_id = TIMELINE_TAGS, start_ms = 8000, end_ms = 9000},
 	}
-	tag_ui = TagUi{drag = 2, id = 2, start_ms = 6000, end_ms = 7000, view_start = 0, view_end = 10000}
+	tag_ui = TagUi{id = 2, start_ms = 6000, end_ms = 7000, view_start = 0, view_end = 10000}
+	tag_begin(.Left_Edge, 2)
 	tag_pointer_move(lay.chart_x, lay, neighbors[:])
 	testing.expect(t, tag_ui.start_ms == 3000, "Left resize stops at previous tag")
-	tag_ui.drag = 3
+	interaction_end()
+	tag_begin(.Right_Edge, 2)
 	tag_pointer_move(lay.chart_x + lay.chart_w, lay, neighbors[:])
 	testing.expect(t, tag_ui.end_ms == 8000, "Right resize stops at next tag")
 
 	app := App{date = 20261106}
 	ds, de := day_bounds_ms(app.date)
-	ui.tab, ui.zoom_start, ui.zoom_end = 0, 0.25, 0.75
+	ui.tab, ui.zoom_start, ui.zoom_end = .Day, 0.25, 0.75
 	vs, ve := zoom_bounds(ds, de)
 	activities := [1]Activity{{id = 42, timeline_id = TIMELINE_TAGS, start_ms = ds, end_ms = ds + (de - ds) / 2}}
 	app.activities = activities[:]
 	id, edge := tag_edge_hit(&app, x_for_ms(activities[0].end_ms, vs, ve, lay.chart_x, lay.chart_w), lay.lane_y + 10, lay)
-	testing.expect(t, id == 42 && edge == 3)
+	testing.expect(t, id == 42 && edge == .Right_Edge)
 	id, _ = tag_edge_hit(&app, lay.chart_x, lay.lane_y + 10, lay)
 	testing.expect(t, id == 0, "Clipped start must not become a resize handle")
-	testing.expect(t, lane_timeline(0) == TIMELINE_TAGS)
+	testing.expect(t, lane_timeline(.Tags) == TIMELINE_TAGS)
 	testing.expect(t, tag_block_hit(&app, lay.chart_x + 20, lay.lane_y + 10, lay) == 42,
 		"Clipped tag interiors still have a context menu")
 	testing.expect(t, tag_block_hit(&app, lay.chart_x + lay.chart_w - 20, lay.lane_y + 10, lay) == 0)
@@ -54,16 +59,16 @@ tag_drag_behavior :: proc(t: ^testing.T) {
 	boundary := x_for_ms(adjacent[0].end_ms, vs, ve, lay.chart_x, lay.chart_w)
 	for offset := i32(1); offset <= 6; offset += 1 {
 		id, edge = tag_edge_hit(&app, boundary - offset, lay.lane_y + 10, lay)
-		testing.expect(t, id == 10 && edge == 3, "Left interior selects left block's right handle")
+		testing.expect(t, id == 10 && edge == .Right_Edge, "Left interior selects left block's right handle")
 		id, edge = tag_edge_hit(&app, boundary + offset, lay.lane_y + 10, lay)
-		testing.expect(t, id == 11 && edge == 2, "Right interior selects right block's left handle")
+		testing.expect(t, id == 11 && edge == .Left_Edge, "Right interior selects right block's left handle")
 	}
 	// Selection must not depend on activity storage/paint order.
 	adjacent[0], adjacent[1] = adjacent[1], adjacent[0]
 	id, edge = tag_edge_hit(&app, boundary - 2, lay.lane_y + 10, lay)
-	testing.expect(t, id == 10 && edge == 3)
+	testing.expect(t, id == 10 && edge == .Right_Edge)
 	id, edge = tag_edge_hit(&app, boundary + 2, lay.lane_y + 10, lay)
-	testing.expect(t, id == 11 && edge == 2)
+	testing.expect(t, id == 11 && edge == .Left_Edge)
 	app.activities = activities[:]
 	// A live application must not leak into the tags totals.
 	app.tracker.current.active = true

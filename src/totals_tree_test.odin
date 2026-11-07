@@ -35,14 +35,14 @@ totals_tree_behavior :: proc(t: ^testing.T) {
 	testing.expect(t, rows[2].name == "Code" && rows[2].ms == 65 && rows[2].depth == 2)
 	testing.expect(t, rows[3].name == "Review" && rows[3].ms == 30)
 	// Lane-specific state cannot accidentally fold similarly named tags/apps.
-	ui.lane = 2
+	ui.lane = .Apps
 	testing.expect(t, len(totals_tree_rows(totals[:])) == 3)
-	ui.lane = 0
+	ui.lane = .Tags
 	ui.totals_expanded["0:/Work"] = false
 	testing.expect(t, len(totals_tree_rows(totals[:])) == 3)
 	testing.expect(t, len(totals_tree_rows(nil)) == 0)
 	lay := compute_layout(720, 480)
 	r := totals_mode_rect(lay)
 	testing.expect(t, r.left > lay.sidebar_x && r.right < lay.sidebar_x + lay.sidebar_w)
-	testing.expect(t, hit_test(r.left + 2, r.top + 2, 720, 480) == HIT_TOTALS_TREE)
+	testing.expect(t, hit_test(r.left + 2, r.top + 2, 720, 480) == .Totals_Tree)
 }

@@ -78,7 +78,7 @@ view_paint_measurement :: proc(t: ^testing.T) {
 	}
 
 	ui = {}
-	ui.lane = 2
+	ui.lane = .Apps
 	ui.zoom_start, ui.zoom_end = 0, 1
 	ui.mouse = {660, 0}
 	ui.mouse_valid = true
@@ -196,9 +196,8 @@ view_paint_measurement :: proc(t: ^testing.T) {
 			draw_toolbar(&app, snapshot, dc, lay)
 			samples[.Toolbar][i] = mark(&tick)
 			vs, ve := zoom_bounds(snapshot.day_start, snapshot.day_end)
-			for l in 0 ..< 3 {
-				ly := lay.lane_y + i32(l) * (lay.lane_h + LANE_GAP)
-				draw_lane(snapshot, dc, lay, i32(l), lay.chart_x, ly, lay.chart_w, lay.lane_h, vs, ve)
+			for lane in Lane {
+				draw_lane(snapshot, dc, lay, lane, lay.chart_x, lane_top(lay, lane), lay.chart_w, lay.lane_h, vs, ve)
 			}
 			samples[.Ruler_Lanes][i] = mark(&tick)
 			draw_zoom_bar(snapshot, dc, lay, snapshot.day_start, snapshot.day_end)
@@ -223,7 +222,7 @@ view_paint_measurement :: proc(t: ^testing.T) {
 	for phase in View_Bench_Phase {
 		ui.filter = "code" if phase == .Derived_Filter || phase == .Frame_Filter else ""
 		ui.totals_tree = phase == .Derived_Tree || phase == .Frame_Tree
-		ui.lane = 0 if ui.totals_tree else 2
+		ui.lane = .Tags if ui.totals_tree else .Apps
 		app.activities = clustered if phase == .Frame_Clustered else rows[:]
 		samples: [201]f64
 		blocks, out_band: int

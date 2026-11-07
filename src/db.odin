@@ -159,7 +159,7 @@ INSERT OR IGNORE INTO "Group" (TimelineId, DisplayName, Color, TextData, Key, Up
 	(2, 'Power off', 4279308561, NULL, 'kw+obQQ1f/3ZFvvhV3kgmhQRNnt+Lr2cgk7gFZdu/LU=', 0);
 `
 
-GROUP_COLORS := []u32 {
+GROUP_COLORS := []Argb {
 	0xFF4E79A7,
 	0xFFF28E2B,
 	0xFFE15759,
@@ -379,7 +379,7 @@ col_is_null :: proc(stmt: ^sqlite3_stmt, col: int) -> bool {
 	return sqlite3_column_type(stmt, c.int(col)) == SQLITE_NULL
 }
 
-group_color_for_key :: proc(key: string) -> u32 {
+group_color_for_key :: proc(key: string) -> Argb {
 	ctx: sha2.Context_256
 	sha2.init_256(&ctx)
 	sha2.update(&ctx, transmute([]byte)key)
@@ -399,7 +399,7 @@ key_hash :: proc(key: string) -> string {
 	return encoded
 }
 
-db_ensure_group :: proc(db: ^DB, timeline_id: i64, key: string, display_name: string, text_data: string) -> (i64, u32, DB_Result) {
+db_ensure_group :: proc(db: ^DB, timeline_id: i64, key: string, display_name: string, text_data: string) -> (i64, Argb, DB_Result) {
 	stmt, ok := db_prepare(db, `SELECT GroupId, Color FROM "Group" WHERE TimelineId = ?1 AND Key = ?2 LIMIT 1`)
 	if !ok {
 		return 0, 0, db_failure(db)
@@ -410,7 +410,7 @@ db_ensure_group :: proc(db: ^DB, timeline_id: i64, key: string, display_name: st
 	rc := sqlite3_step(stmt)
 	if rc == SQLITE_ROW {
 		id := col_i64(stmt, 0)
-		color := u32(col_i64(stmt, 1))
+		color := Argb(col_i64(stmt, 1))
 		return id, color, .Ok
 	}
 	if rc != SQLITE_DONE { return 0, 0, db_result(rc) }
@@ -657,7 +657,7 @@ Activity :: struct {
 	end_ms:       i64,
 	start_date:   int,
 	group_name:   string,
-	color:        u32,
+	color:        Argb,
 }
 
 // Day overlap is split by interval length so cost follows the day, not history:
@@ -741,7 +741,7 @@ db_load_activities :: proc(db: ^DB, date_int: int) -> ([]Activity, DB_Result) {
 			end_ms = col_i64(stmt, 5),
 			start_date = int(col_i64(stmt, 6)),
 			group_name = col_text(stmt, 7),
-			color = u32(col_i64(stmt, 8)),
+			color = Argb(col_i64(stmt, 8)),
 		}
 		append(&result, a)
 	}
@@ -773,7 +773,7 @@ db_count_activities :: proc(db: ^DB) -> i64 {
 	return 0
 }
 
-db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, u32, DB_Result) {
+db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, Argb, DB_Result) {
 	key: string
 	switch which {
 	case .Active:
@@ -793,7 +793,7 @@ db_usage_group :: proc(db: ^DB, which: UsageKind) -> (i64, u32, DB_Result) {
 	bound := db_result(bind_text(stmt, 1, key))
 	if bound != .Ok { return 0, 0, bound }
 	rc := sqlite3_step(stmt)
-	if rc == SQLITE_ROW { return col_i64(stmt, 0), u32(col_i64(stmt, 1)), .Ok }
+	if rc == SQLITE_ROW { return col_i64(stmt, 0), Argb(col_i64(stmt, 1)), .Ok }
 	if rc == SQLITE_DONE { return 0, 0, .Not_Found }
 	return 0, 0, db_result(rc)
 }

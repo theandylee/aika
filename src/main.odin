@@ -90,7 +90,7 @@ main :: proc() {
 	if !ok {
 		msg := fmt.tprintf("Failed to open database:\n%s", db_path)
 		fmt.eprintln(msg)
-		if !quiet { message_box(msg, "aika", 0x10) }
+		if !quiet { message_box(msg, "aika", windows.MB_ICONERROR) }
 		db_close(&db)
 		os.exit(1)
 	}
@@ -105,7 +105,7 @@ main :: proc() {
 		} else {
 			msg := fmt.tprintf("Import failed:\n%s", import_path)
 			fmt.eprintln(msg)
-			if !quiet { message_box(msg, "aika", 0x10) }
+			if !quiet { message_box(msg, "aika", windows.MB_ICONERROR) }
 			os.exit(1)
 		}
 		return
@@ -142,16 +142,16 @@ run_gui :: proc(db: DB, db_path: string) -> bool {
 	load_day(&app)
 
 	if !ui_bootstrap() {
-		message_box("Could not initialize the native window. aika will exit.", "aika", 0x10)
+		message_box("Could not initialize the native window. aika will exit.", "aika", windows.MB_ICONERROR)
 		tracker_shutdown(&app)
 		return false
 	}
 	defer {
 		if !task_stop(&app, now_ms()) {
-			message_box("Could not save the final task time. The last saved time is preserved.", "aika", 0x10)
+			message_box("Could not save the final task time. The last saved time is preserved.", "aika", windows.MB_ICONERROR)
 		}
 		if !tracker_shutdown(&app) {
-			message_box("Tracking writes remain unsaved. Normal Exit should be retried before closing.", "aika", 0x10)
+			message_box("Tracking writes remain unsaved. Normal Exit should be retried before closing.", "aika", windows.MB_ICONERROR)
 		}
 	}
 

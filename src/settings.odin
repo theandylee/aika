@@ -39,7 +39,7 @@ settings_switch_rect :: proc(w: i32) -> windows.RECT {
 
 draw_settings_switch :: proc(dc: windows.HDC, w: i32) {
 	r := settings_switch_rect(w)
-	draw_button(dc, r, "", HIT_SETTINGS)
+	draw_button(dc, r, "", .Settings)
 	old := windows.SelectObject(dc, windows.HGDIOBJ(ui.font_icons))
 	defer windows.SelectObject(dc, old)
 	windows.SetTextColor(dc, C_TXT)
@@ -49,13 +49,10 @@ draw_settings_switch :: proc(dc: windows.HDC, w: i32) {
 }
 
 draw_settings_tooltip :: proc(dc: windows.HDC, w: i32) {
-	if !ui.mouse_valid || ui.pressed_hit != HIT_NONE ||
+	if !ui.mouse_valid || press_hit() != .None ||
 	   !rect_hit(settings_switch_rect(w), ui.mouse.x, ui.mouse.y) { return }
 	width := text_pixel_width("Settings", ui.font_normal) + 16
-	x := w - 42 - width
-	fill_rect(dc, x, TAB_H + 4, width, 24, C_TIP_BG)
-	fill_frame(dc, x, TAB_H + 4, width, 24, C_TIP_BORDER)
-	draw_string(dc, "Settings", x + 8, TAB_H + 10, ui.font_normal, C_TXT)
+	draw_single_line_tooltip(dc, tab_tooltip_rect(w - 42, width), "Settings")
 }
 
 settings_close :: proc() {
@@ -73,16 +70,16 @@ settings_accept :: proc() {
 	text, _ := windows.utf16_to_utf8(buf[:max(0, n)], context.temp_allocator)
 	minutes, ok := settings_parse_minutes(text)
 	if !ok {
-		windows.MessageBoxW(settings_ui.hwnd, wtext("Enter a whole number from 1 to 500 minutes."), wtext("Tracking settings"), 0x30)
+		windows.MessageBoxW(settings_ui.hwnd, wtext("Enter a whole number from 1 to 500 minutes."), wtext("Tracking settings"), windows.MB_ICONWARNING)
 		windows.SetFocus(settings_ui.minutes)
-		windows.SendMessageW(settings_ui.minutes, 0xB1, 0, -1) // EM_SETSEL
+		windows.SendMessageW(settings_ui.minutes, windows.EM_SETSEL, 0, -1)
 		return
 	}
 	if !settings_save_minutes(global_app.db_path, minutes) {
-		windows.MessageBoxW(settings_ui.hwnd, wtext("Could not save settings beside the database. No changes were applied."), wtext("Settings"), 0x10)
+		windows.MessageBoxW(settings_ui.hwnd, wtext("Could not save settings beside the database. No changes were applied."), wtext("Settings"), windows.MB_ICONERROR)
 		return
 	}
-	global_app.tracker.idle_threshold_ms = i64(minutes) * 60_000
+	global_app.tracker.idle_threshold_ms = i64(minutes) * MS_PER_MINUTE
 	settings_close()
 }
 
@@ -101,7 +98,7 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		fill_rect(dc, 0, 0, w, h, C_BG)
 		fill_rect(dc, 8, 8, 142, h - 56, C_PANEL)
 		fill_frame(dc, 8, 8, 142, h - 56, C_BORDER)
-		fill_rect(dc, 10, 12, 138, 26, C_BTN_HOVER)
+		fill_rect(dc, 10, 12, 138, 26, C_SECTION_HEAD)
 		windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
 		draw_string(dc, "Tracking", 18, 18, ui.font_normal, C_TXT)
 		fill_frame(dc, 164, 22, 370, 100, C_BORDER)
@@ -118,8 +115,8 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		return 0
 	case windows.WM_COMMAND:
 		switch u32(wp) & 0xFFFF {
-		case 1: settings_accept()
-		case 2: settings_close()
+		case SETTINGS_ID_OK: settings_accept()
+		case SETTINGS_ID_CANCEL: settings_close()
 		}
 		return 0
 	}
@@ -141,7 +138,7 @@ settings_open :: proc() {
 	date_calendar_close(false)
 	hi := windows.HINSTANCE(windows.GetModuleHandleW(nil))
 	wc := windows.WNDCLASSEXW{cbSize = size_of(windows.WNDCLASSEXW), lpfnWndProc = settings_proc,
-		hInstance = hi, hCursor = windows.LoadCursorW(nil, transmute(cstring16)(u64(32512))),
+		hInstance = hi, hCursor = system_cursor(IDC_ARROW),
 		lpszClassName = wtext("aika_settings")}
 	windows.RegisterClassExW(&wc)
 	style := u32(windows.WS_CAPTION | windows.WS_SYSMENU | windows.WS_CLIPCHILDREN)
@@ -156,30 +153,30 @@ settings_open :: proc() {
 		x, y, width, height, ui.hwnd, nil, hi, nil)
 	if settings_ui.hwnd == nil { return }
 	settings_control("STATIC", "Computer is not used for", 0, 176, 58, 146, 22, 0)
-	settings_ui.minutes = settings_control("EDIT", fmt.tprintf("%d", global_app.tracker.idle_threshold_ms / 60_000),
-		windows.WS_BORDER | windows.WS_TABSTOP | 0x2000, 326, 54, 54, 24, 101) // ES_NUMBER
-	windows.SendMessageW(settings_ui.minutes, 0xC5, 3, 0) // EM_SETLIMITTEXT
+	settings_ui.minutes = settings_control("EDIT", fmt.tprintf("%d", global_app.tracker.idle_threshold_ms / MS_PER_MINUTE),
+		windows.WS_BORDER | windows.WS_TABSTOP | windows.ES_NUMBER, 326, 54, 54, 24, SETTINGS_ID_MINUTES)
+	windows.SendMessageW(settings_ui.minutes, windows.EM_SETLIMITTEXT, 3, 0)
 	settings_control("STATIC", "minutes (1–500)", 0, 388, 58, 136, 22, 0)
-	settings_control("BUTTON", "OK", windows.WS_TABSTOP | 1, 334, 394, 96, 28, 1)
-	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP, 438, 394, 96, 28, 2)
+	settings_control("BUTTON", "OK", windows.WS_TABSTOP | windows.BS_DEFPUSHBUTTON, 334, 394, 96, 28, SETTINGS_ID_OK)
+	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP, 438, 394, 96, 28, SETTINGS_ID_CANCEL)
 	if settings_ui.control_failed { settings_close(); return }
 	dark := windows.BOOL(ui.dark)
-	DwmSetWindowAttribute(settings_ui.hwnd, 20, &dark, size_of(dark))
+	DwmSetWindowAttribute(settings_ui.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, size_of(dark))
 	SetWindowTheme(settings_ui.minutes, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	windows.EnableWindow(ui.hwnd, windows.FALSE)
 	windows.ShowWindow(settings_ui.hwnd, windows.SW_SHOW)
 	windows.SetForegroundWindow(settings_ui.hwnd)
 	windows.SetFocus(settings_ui.minutes)
-	windows.SendMessageW(settings_ui.minutes, 0xB1, 0, -1)
+	windows.SendMessageW(settings_ui.minutes, windows.EM_SETSEL, 0, -1)
 }
 
 settings_key :: proc(msg: ^windows.MSG) -> bool {
 	if settings_ui.hwnd == nil { return false }
 	if msg.message == windows.WM_KEYDOWN {
 		switch msg.wParam {
-		case 0x1B: settings_close(); return true
-		case 0x0D:
-			if windows.GetDlgCtrlID(windows.GetFocus()) == 2 { settings_close() } else { settings_accept() }
+		case windows.VK_ESCAPE: settings_close(); return true
+		case windows.VK_RETURN:
+			if windows.GetDlgCtrlID(windows.GetFocus()) == SETTINGS_ID_CANCEL { settings_close() } else { settings_accept() }
 			return true
 		}
 	}

@@ -129,27 +129,31 @@ ui_visibility_and_cancellation :: proc(t: ^testing.T) {
 	defer { ui = old; tag_ui = old_tag }
 	ui = {}
 	lay := compute_layout(1320, 860)
-	for tab in ([2]i32{1, 2}) {
+	for tab in ([2]Tab{.Timesheet, .Statistics}) {
 		ui.tab = tab
 		for y := i32(TAB_H); y < 860; y += 4 {
 			for x := i32(0); x < 1320; x += 4 {
-				testing.expect(t, hit_test(x, y, 1320, 860) == HIT_NONE)
+				testing.expect(t, hit_test(x, y, 1320, 860) == .None)
 			}
 		}
 		testing.expect(t, !zoom_pointer_down(lay.chart_x + 100, lay.zoom_y + 10, lay))
 	}
 	for drag in ([4]Zoom_Drag{.Left, .Right, .Overview, .Timeline}) {
-		ui.zoom_drag = drag
+		ui.zoom_start, ui.zoom_end = 0.1, 0.8
+		zoom_begin(drag, 0.5)
 		ui.zoom_start, ui.zoom_end = 0.4, 0.5
-		ui.zoom_drag_start, ui.zoom_drag_end = 0.1, 0.8
-		tag_ui.drag = 1
-		ui.pressed_hit = HIT_SETTINGS
 		ui_cancel_interaction()
 		ui_cancel_interaction()
-		testing.expect(t, ui.zoom_drag == .None && ui.zoom_start == 0.1 && ui.zoom_end == 0.8)
-		testing.expect(t, tag_ui.drag == 0 && ui.pressed_hit == HIT_NONE)
+		testing.expect(t, zoom_drag() == .None && ui.zoom_start == 0.1 && ui.zoom_end == 0.8)
+		tag_begin(.New_Range, 0)
+		ui_cancel_interaction()
+		testing.expect(t, tag_drag() == .None)
+		press_begin(.Settings)
+		ui_cancel_interaction()
+		ui_cancel_interaction()
+		testing.expect(t, press_hit() == .None)
 	}
-	ui.tab = 0
+	ui.tab = .Day
 	ui.zoom_start, ui.zoom_end = 0.1, 0.3
 	bar, _, _, _ := zoom_rects(lay)
 	x := bar.left + (bar.right - bar.left) * 3 / 4

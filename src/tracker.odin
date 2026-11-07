@@ -27,7 +27,7 @@ CurrentActivity :: struct {
 	active:             bool,
 	persisted_id:       i64,
 	group_id:           i64,
-	group_color:        u32,
+	group_color:        Argb,
 	app_name:           string,
 	title:              string,
 	exe_path:           string,
@@ -44,7 +44,7 @@ Tracker :: struct {
 	usage_kind:            UsageKind,
 	usage_id:              i64,
 	usage_group:           i64,
-	usage_color:           u32,
+	usage_color:           Argb,
 	usage_active:          bool,
 	usage_start_ms:        i64,
 	usage_last_db_update:  i64,
@@ -135,7 +135,7 @@ extend_usage :: proc(app: ^App, now: i64) {
 	}
 }
 
-start_new_current :: proc(app: ^App, group_id: i64, color: u32, app_name, title, exe_path: string, start_ms: i64) {
+start_new_current :: proc(app: ^App, group_id: i64, color: Argb, app_name, title, exe_path: string, start_ms: i64) {
 	// If this is the same app+title as the last persisted row, extend that row
 	// instead of creating a new one. This handles quick switch-away-and-back.
 	last, result := db_last_activity(&app.db, TIMELINE_APPS)
@@ -263,7 +263,7 @@ poll_focus :: proc(app: ^App, now: i64) {
 
 tracker_init :: proc(app: ^App) {
 	app.tracker.enabled = true
-	app.tracker.idle_threshold_ms = i64(settings_load_minutes(app.db_path)) * 60_000
+	app.tracker.idle_threshold_ms = i64(settings_load_minutes(app.db_path)) * MS_PER_MINUTE
 	app.tracker.last_tick_ms = 0
 	now := tracker_now(app)
 	app.tracker.last_wall_ms = now

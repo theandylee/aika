@@ -225,6 +225,32 @@ odin check src -vet
 
 The project currently has zero vet warnings. Keep it that way.
 
+### Pixel snapshots (refactor safety net)
+
+`tools/pixel-snapshot.py` proves a refactor did not change rendered pixels. It
+builds a synthetic temp database (fixed activities on *yesterday*, so no live bar
+or now-marker), runs the exe with `--db` on a copy, and records the client area
+(PrintWindow) for light/dark themes at 1320x860 and 900x600: every lane, the three
+tabs, a list filter, totals tree mode and tooltip, zoom, and hovered controls and
+tooltips. The status bar (wall clock) is masked. Each scene is captured twice
+until stable, so results are deterministic.
+
+```bat
+git worktree add --detach %TEMP%\aika-head HEAD
+:: build the baseline exe there (copy assets\aika.res if the worktree lacks it)
+python tools\pixel-snapshot.py capture <baseline.exe> %TEMP%\snap\head
+odin build src -out:build\snap.exe -subsystem:windows -resource:assets/aika.rc
+python tools\pixel-snapshot.py capture build\snap.exe %TEMP%\snap\cur
+python tools\pixel-snapshot.py compare %TEMP%\snap\head %TEMP%\snap\cur
+```
+
+`compare` prints each differing image with its differing-pixel count and bounding
+box and exits 1 on any difference. Notes: hover scenes park the real mouse cursor
+over the window (the app's `TrackMouseEvent` would otherwise clear synthetic hover),
+so do not use the mouse while it runs (about 4 minutes); capture baseline and
+candidate on the same calendar day (the date label is "yesterday"); delete the
+alternate exes and `git worktree remove --force` the baseline when done.
+
 ### Console output
 
 The GUI build is `-subsystem:windows`, so `fmt.println` may not appear when

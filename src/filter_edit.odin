@@ -26,9 +26,9 @@ filter_edit_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM
 	context.temp_allocator = scratch_begin(&scratch)
 	defer scratch_end(&scratch)
 	// Ctrl+Backspace translates to DEL, which a plain Win32 EDIT inserts.
-	if msg == windows.WM_CHAR && wp == 0x7F {
+	if msg == windows.WM_CHAR && wp == CHAR_DELETE {
 		start, end: u32
-		windows.SendMessageW(hwnd, 0xB0, windows.WPARAM(uintptr(&start)), windows.LPARAM(uintptr(&end))) // EM_GETSEL
+		windows.SendMessageW(hwnd, EM_GETSEL, windows.WPARAM(uintptr(&start)), windows.LPARAM(uintptr(&end)))
 		if start == end {
 			n := windows.GetWindowTextLengthW(hwnd)
 			text := make([]u16, int(n) + 1, context.temp_allocator)
@@ -36,9 +36,9 @@ filter_edit_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM
 			start = u32(filter_word_start(text[:count], int(start)))
 		}
 		if start != end {
-			windows.SendMessageW(hwnd, 0xB1, windows.WPARAM(start), windows.LPARAM(end)) // EM_SETSEL
+			windows.SendMessageW(hwnd, EM_SETSEL, windows.WPARAM(start), windows.LPARAM(end))
 			empty: [1]u16
-			windows.SendMessageW(hwnd, 0xC2, 1, windows.LPARAM(uintptr(&empty[0]))) // EM_REPLACESEL, undoable
+			windows.SendMessageW(hwnd, EM_REPLACESEL, 1, windows.LPARAM(uintptr(&empty[0]))) // undoable
 		}
 		return 0
 	}

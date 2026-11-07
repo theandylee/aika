@@ -14,30 +14,7 @@ import "core:sys/windows"
 // loop); no derived view data is cached between frames. Measured on a 900-row
 // day, deriving rows/totals is ~0.2 ms of a ~4-6 ms frame: GDI calls dominate.
 
-// --- Palette (COLORREF = 0x00BBGGRR; comments show rgb(R,G,B)) ---
-
-C_BG:          windows.COLORREF = 0x00FAF7F5
-C_PANEL:       windows.COLORREF = 0x00FFFFFF
-C_BORDER:      windows.COLORREF = 0x00C0AF9C
-C_BORDER_SOFT: windows.COLORREF = 0x00E2D8CD
-C_LANE_BG:     windows.COLORREF = 0x00F4ECE2
-C_LANE_GRID:   windows.COLORREF = 0x00E4D8CB
-C_LANE_TXT:    windows.COLORREF = 0x00746658
-C_TXT:         windows.COLORREF = 0x0028221E
-C_DIM:         windows.COLORREF = 0x00908478
-C_ACCENT      :: 0x0030A0F0 // rgb(240,160,48) - selected lane, ManicTime orange
-C_GREEN       :: 0x0087C94C // rgb(76,201,135)
-C_ORANGE      :: 0x0050A0F0 // rgb(240,160,80)
-C_RED         :: 0x005A5ADE // rgb(222,90,90)
-C_TAB_BG:      windows.COLORREF = 0x00F5EFE8
-C_TAB_ACTIVE:  windows.COLORREF = 0x00FFFFFF
-C_BTN_FACE:    windows.COLORREF = 0x00FFFFFF
-C_BTN_BORDER:  windows.COLORREF = 0x00EAB47E
-C_BTN_HOVER:   windows.COLORREF = 0x00FCE0E4
-C_HEAD_BG:     windows.COLORREF = 0x00F8F4EF
-C_ROW_ALT:     windows.COLORREF = 0x00FCF9F6
-C_TIP_BG:      windows.COLORREF = 0x00E1FFFF
-C_TIP_BORDER:  windows.COLORREF = 0x008C8278
+// Palette colors (C_*) live in palette.odin.
 
 TAB_H     :: 26
 TOOLBAR_H :: 52
@@ -102,11 +79,11 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	wanted_lane_h := ui.pane_lane_h
 	if wanted_lane_h == 0 { wanted_lane_h = min(96, max(MIN_LANE_H, lane_area / 3)) }
 	max_lane_h := max(MIN_LANE_H, (bottom_limit - (lay.ruler_y + RULER_H) -
-		2 * LANE_GAP - 4 - ZOOM_H - SPLITTER_W - MIN_LOWER_H) / 3)
+		2 * LANE_GAP - ZOOM_LANES_GAP - ZOOM_H - SPLITTER_W - MIN_LOWER_H) / 3)
 	lay.lane_h = clamp(wanted_lane_h, MIN_LANE_H, max_lane_h)
 	lay.lane_y = lay.ruler_y + RULER_H
 	lay.lanes_bottom = lay.lane_y + 3 * lay.lane_h + 2 * LANE_GAP
-	lay.zoom_y = lay.lanes_bottom + 4
+	lay.zoom_y = lay.lanes_bottom + ZOOM_LANES_GAP
 	lay.list_top = lay.zoom_y + ZOOM_H + SPLITTER_W
 	lay.list_bottom = bottom_limit
 	wanted_totals_w := ui.pane_totals_w
@@ -126,56 +103,62 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay.filter_edit_h = FILTER_H - 8
 	lay.status_y = h - STATUS_H
 
-	bh := i32(26)
-	by := lay.toolbar_y + 12
-	lay.btn_prev = windows.RECT{left = MARGIN, top = by, right = MARGIN + 26, bottom = by + bh}
-	lay.btn_today = windows.RECT{left = MARGIN + 30, top = by, right = MARGIN + 98, bottom = by + bh}
-	lay.btn_next = windows.RECT{left = MARGIN + 102, top = by, right = MARGIN + 128, bottom = by + bh}
-	lay.date_pick = windows.RECT{left = MARGIN + 140, top = by, right = MARGIN + 140 + DATE_PICK_W, bottom = by + bh}
-	lay.btn_track = windows.RECT{left = MARGIN + 148 + DATE_PICK_W, top = by, right = MARGIN + 280 + DATE_PICK_W, bottom = by + bh}
+	btn_h := TOOLBAR_BTN_H
+	btn_y := lay.toolbar_y + 12
+	lay.btn_prev = windows.RECT{left = MARGIN, top = btn_y, right = MARGIN + 26, bottom = btn_y + btn_h}
+	lay.btn_today = windows.RECT{left = MARGIN + 30, top = btn_y, right = MARGIN + 98, bottom = btn_y + btn_h}
+	lay.btn_next = windows.RECT{left = MARGIN + 102, top = btn_y, right = MARGIN + 128, bottom = btn_y + btn_h}
+	lay.date_pick = windows.RECT{left = MARGIN + 140, top = btn_y, right = MARGIN + 140 + DATE_PICK_W, bottom = btn_y + btn_h}
+	lay.btn_track = windows.RECT{left = MARGIN + 148 + DATE_PICK_W, top = btn_y, right = MARGIN + 280 + DATE_PICK_W, bottom = btn_y + btn_h}
 
 	// Day start / day end / duration boxes anchored to the right.
-	bw := min(i32(108), (w - lay.btn_track.right - 24) / 3 - 4)
-	bh2 := i32(36)
-	by2 := lay.toolbar_y + 8
-	bx := w - MARGIN - bw
+	day_box_w := min(i32(108), (w - lay.btn_track.right - 24) / 3 - 4)
+	day_box_h := i32(36)
+	day_box_y := lay.toolbar_y + 8
+	day_box_x := w - MARGIN - day_box_w
 	for i := 2; i >= 0; i -= 1 {
-		lay.day_boxes[i] = windows.RECT{left = bx, top = by2, right = bx + bw, bottom = by2 + bh2}
-		bx -= bw + 4
+		lay.day_boxes[i] = windows.RECT{left = day_box_x, top = day_box_y, right = day_box_x + day_box_w, bottom = day_box_y + day_box_h}
+		day_box_x -= day_box_w + 4
 	}
 	return lay
 }
 
-compute_tabs :: proc(i: i32) -> windows.RECT {
-	txs := [3]i32{2, 58, 148}
-	tws := [3]i32{54, 88, 92}
-	return windows.RECT{left = txs[i], top = 0, right = txs[i] + tws[i], bottom = TAB_H}
+compute_tabs :: proc(tab: Tab) -> windows.RECT {
+	txs := [Tab]i32{.Day = 2, .Timesheet = 58, .Statistics = 148}
+	tws := [Tab]i32{.Day = 54, .Timesheet = 88, .Statistics = 92}
+	return windows.RECT{left = txs[tab], top = 0, right = txs[tab] + tws[tab], bottom = TAB_H}
 }
 
-tab_name :: proc(i: i32) -> string {
-	switch i {
-	case 1: return "Timesheet"
-	case 2: return "Statistics"
+tab_name :: proc(tab: Tab) -> string {
+	switch tab {
+	case .Day: return "Day"
+	case .Timesheet: return "Timesheet"
+	case .Statistics: return "Statistics"
 	}
 	return "Day"
 }
 
-lane_name :: proc(i: i32) -> string {
-	switch i {
-	case 0: return "Tags"
-	case 1: return "Computer Usage"
-	case 2: return "Applications"
+lane_name :: proc(lane: Lane) -> string {
+	switch lane {
+	case .Tags: return "Tags"
+	case .Computer: return "Computer Usage"
+	case .Apps: return "Applications"
 	}
 	return ""
 }
 
-lane_timeline :: proc(i: i32) -> i64 {
-	switch i {
-	case 0: return TIMELINE_TAGS
-	case 1: return TIMELINE_COMPUTER
-	case 2: return TIMELINE_APPS
+lane_timeline :: proc(lane: Lane) -> i64 {
+	switch lane {
+	case .Tags: return TIMELINE_TAGS
+	case .Computer: return TIMELINE_COMPUTER
+	case .Apps: return TIMELINE_APPS
 	}
 	return 0
+}
+
+// Top edge of a lane's rectangle; lanes are stacked with LANE_GAP between them.
+lane_top :: proc(lay: Layout, lane: Lane) -> i32 {
+	return lay.lane_y + i32(lane) * (lay.lane_h + LANE_GAP)
 }
 
 // --- Formatting ---
@@ -211,22 +194,22 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 		ui.list_scroll.pos = 0
 		ui.totals_scroll.pos = 0
 	}
-	if ui.tab != 0 {
+	if ui.tab != .Day {
 		pane_scroll_show(&ui.list_scroll, false)
 		pane_scroll_show(&ui.totals_scroll, false)
 	}
 	fill_rect(dc, 0, 0, w, h, C_BG)
 	switch ui.tab {
-	case 0:
+	case .Day:
 		draw_day(app, snapshot, dc, w, h)
-	case 1:
+	case .Timesheet:
 		draw_placeholder(dc, w, h, "Timesheet", "Timesheets are not implemented yet (see docs/ROADMAP.md).")
-	case 2:
+	case .Statistics:
 		draw_placeholder(dc, w, h, "Statistics", "Statistics are not implemented yet (see docs/ROADMAP.md).")
 	}
 	draw_filter_row(dc, w, h)
 	draw_status_bar(app, dc, w, h)
-	if ui.tab == 0 {
+	if ui.tab == .Day {
 		draw_tooltip(snapshot, dc, w, h)
 	}
 	draw_theme_tooltip(dc, w)
@@ -253,14 +236,14 @@ draw_tabs :: proc(dc: windows.HDC) {
 	line_h(dc, 0, TAB_H - 1, w, C_BORDER_SOFT)
 	draw_theme_switch(dc, w)
 	draw_settings_switch(dc, w)
-	for i := i32(0); i < 3; i += 1 {
-		t := compute_tabs(i32(i))
-		active := ui.tab == i
+	for tab in Tab {
+		t := compute_tabs(tab)
+		active := ui.tab == tab
 		state := i32(3) if active else i32(1) // TIS_SELECTED / TIS_NORMAL
 		if !active && ui.mouse_valid && rect_hit(t, ui.mouse.x, ui.mouse.y) {
 			state = 2 // TIS_HOT
 		}
-		if draw_themed_control(dc, ui.theme_tab, 1, state, t, tab_name(i)) {
+		if draw_themed_control(dc, ui.theme_tab, 1, state, t, tab_name(tab)) {
 			continue
 		}
 		bg: windows.COLORREF = C_TAB_ACTIVE if active else C_TAB_BG
@@ -271,8 +254,8 @@ draw_tabs :: proc(dc: windows.HDC) {
 			line_h(dc, t.left + 1, t.top, t.right - t.left - 2, C_ACCENT)
 		}
 		fill_frame(dc, t.left, t.top + 1, t.right - t.left, TAB_H - 1, C_BORDER_SOFT)
-		tw := text_pixel_width(tab_name(i32(i)), ui.font_normal)
-		draw_string(dc, tab_name(i32(i)),
+		tw := text_pixel_width(tab_name(tab), ui.font_normal)
+		draw_string(dc, tab_name(tab),
 			t.left + (t.right - t.left - tw) / 2, t.top + 6,
 			ui.font_normal, C_TXT if active else C_DIM)
 	}
@@ -282,13 +265,13 @@ draw_tabs :: proc(dc: windows.HDC) {
 
 draw_toolbar :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	draw_toolbar_background_rect(dc, 0, lay.toolbar_y, lay.w, TOOLBAR_H)
-	draw_button(dc, lay.btn_prev, "<", HIT_BTN_PREV)
-	draw_button(dc, lay.btn_next, ">", HIT_BTN_NEXT)
-	draw_button(dc, lay.btn_today, "Today", HIT_BTN_TODAY)
+	draw_button(dc, lay.btn_prev, "<", .Btn_Prev)
+	draw_button(dc, lay.btn_next, ">", .Btn_Next)
+	draw_button(dc, lay.btn_today, "Today", .Btn_Today)
 
 	label := "Start task"
 	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s", fmt_hms(app.task.end_ms - app.task.start_ms)) }
-	draw_button(dc, lay.btn_track, label, HIT_BTN_TASK)
+	draw_button(dc, lay.btn_track, label, .Btn_Task)
 
 	// Day start / day end / duration, ManicTime-style.
 	min_ms, max_ms := day_span(snapshot)
@@ -299,10 +282,10 @@ draw_toolbar :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, lay: La
 	}
 	for i := 0; i < 3; i += 1 {
 		b := lay.day_boxes[i]
-		bw := b.right - b.left
-		bhh := b.bottom - b.top
-		fill_rect(dc, b.left + 1, b.top + 1, bw - 2, bhh - 2, C_PANEL)
-		fill_frame(dc, b.left, b.top, bw, bhh, C_BTN_BORDER)
+		box_w := b.right - b.left
+		box_h := b.bottom - b.top
+		fill_rect(dc, b.left + 1, b.top + 1, box_w - 2, box_h - 2, C_PANEL)
+		fill_frame(dc, b.left, b.top, box_w, box_h, C_BTN_BORDER)
 		draw_string(dc, captions[i], b.left + 8, b.top + 3, ui.font_small, C_DIM)
 		draw_string(dc, values[i], b.left + 8, b.top + 18, ui.font_bold, C_TXT)
 	}
@@ -326,18 +309,18 @@ day_span :: proc(snapshot: Day_Snapshot) -> (min_ms, max_ms: i64) {
 	return
 }
 
-draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: int) {
+draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: Hit) {
 	hot := ui.mouse_valid && rect_hit(r, ui.mouse.x, ui.mouse.y)
 	state := i32(1) // PBS_NORMAL
 	if hot {
-		state = 3 if ui.pressed_hit == hit else 2 // PBS_PRESSED / PBS_HOT
+		state = 3 if press_hit() == hit else 2 // PBS_PRESSED / PBS_HOT
 	}
 	if draw_themed_control(dc, ui.theme_button, 1, state, r, label) { return }
 	w := r.right - r.left
 	h := r.bottom - r.top
 	bg: windows.COLORREF = C_BTN_FACE
 	if ui.mouse_valid && rect_hit(r, ui.mouse.x, ui.mouse.y) {
-		bg = C_BORDER_SOFT if ui.pressed_hit == hit else C_BTN_HOVER
+		bg = C_BORDER_SOFT if press_hit() == hit else C_BTN_HOVER
 	}
 	fill_rect(dc, r.left + 1, r.top + 1, w - 2, h - 2, bg)
 	fill_frame(dc, r.left, r.top, w, h, C_BTN_BORDER)
@@ -368,9 +351,9 @@ draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) 
 	}
 
 	// Lanes
-	for i := 0; i < 3; i += 1 {
-		ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
-		draw_lane(snapshot, dc, lay, i32(i), lay.chart_x, ly, lay.chart_w, lay.lane_h, view_start, view_end)
+	for lane in Lane {
+		r := lane_rect(lay, lane)
+		draw_lane(snapshot, dc, lay, lane, r.left, r.top, r.right - r.left, r.bottom - r.top, view_start, view_end)
 	}
 
 	// Now marker (today only)
@@ -397,14 +380,9 @@ x_for_ms :: proc(ms, day_start, day_end: i64, x, w: i32) -> i32 {
 	return x + i32(day_frac(ms, day_start, day_end) * f64(w))
 }
 
-argb_to_colorref :: proc(c: u32) -> windows.COLORREF {
-	if c == 0 { return 0 }
-	return rgb(i32((c >> 16) & 0xFF), i32((c >> 8) & 0xFF), i32(c & 0xFF))
-}
-
-activity_colorref :: proc(a: Activity) -> windows.COLORREF {
+activity_colorref :: proc(a: Activity) -> Colorref {
 	c := a.color
-	if c == 0 {
+	if argb_is_unset(c) {
 		index := a.group_id % i64(len(GROUP_COLORS))
 		if index < 0 { index = -index } // synthetic unresolved usage identities
 		c = GROUP_COLORS[int(index)]
@@ -412,7 +390,7 @@ activity_colorref :: proc(a: Activity) -> windows.COLORREF {
 	return argb_to_colorref(c)
 }
 
-draw_lane :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, idx, x, y, w, h: i32, day_start, day_end: i64) {
+draw_lane :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, lane: Lane, x, y, w, h: i32, day_start, day_end: i64) {
 	fill_rect(dc, x, y, w, h, C_LANE_BG)
 	step := zoom_tick_step(day_start, day_end, w)
 	local_start := snapshot.day_start
@@ -420,16 +398,16 @@ draw_lane :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, idx, x, 
 	for tick := first_tick; tick < day_end; tick += step {
 		line_v(dc, x_for_ms(tick, day_start, day_end, x, w), y, h, C_LANE_GRID)
 	}
-	draw_string(dc, lane_name(idx), x + 10, y + h / 2 - 9, ui.font_normal,
-		C_DIM if ui.lane == idx else C_LANE_TXT)
+	draw_string(dc, lane_name(lane), x + 10, y + h / 2 - 9, ui.font_normal,
+		C_DIM if ui.lane == lane else C_LANE_TXT)
 
-	tl := lane_timeline(idx)
+	tl := lane_timeline(lane)
 	if tl != 0 {
-		draw_lane_bars(snapshot, dc, idx, tl, x, y, w, h, day_start, day_end)
+		draw_lane_bars(snapshot, dc, lane, tl, x, y, w, h, day_start, day_end)
 	}
 
 	border := windows.COLORREF(C_BORDER)
-	if ui.lane == idx {
+	if ui.lane == lane {
 		border = C_ACCENT
 		border_w := i32(2)
 		fill_rect(dc, x, y, w, border_w, C_ACCENT)
@@ -475,12 +453,12 @@ bar_run_flush :: proc(run: ^Bar_Run) {
 	run.pending = false
 }
 
-bar_rect_for_lane :: proc(idx: i32, x, y, w, h: i32) -> windows.RECT {
+bar_rect_for_lane :: proc(lane: Lane, x, y, w, h: i32) -> windows.RECT {
 	return windows.RECT{left = x, top = y, right = x + w, bottom = y + h}
 }
 
-draw_lane_bars :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lane_idx: i32, tl: i64, x, y, w, h: i32, day_start, day_end: i64) {
-	br := bar_rect_for_lane(lane_idx, x, y, w, h)
+draw_lane_bars :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lane: Lane, tl: i64, x, y, w, h: i32, day_start, day_end: i64) {
+	br := bar_rect_for_lane(lane, x, y, w, h)
 	bar_h := br.bottom - br.top
 	bar_y := br.top
 	run := Bar_Run{dc = dc, y = bar_y, h = bar_h}
@@ -492,7 +470,7 @@ draw_lane_bars :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lane_idx: i32, t
 		}
 		s := max(row.start_ms, day_start)
 		e := min(row.end_ms, day_end)
-		if tl == TIMELINE_TAGS && tag_ui.drag >= 2 && a.id == tag_ui.id {
+		if tl == TIMELINE_TAGS && tag_drag_is_edge(tag_drag()) && a.id == tag_ui.id {
 			s, e = max(tag_ui.start_ms, day_start), min(tag_ui.end_ms, day_end)
 		}
 		if e <= s {
@@ -510,7 +488,7 @@ draw_lane_bars :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lane_idx: i32, t
 		if !row.live && tl != TIMELINE_TAGS { continue }
 		// Decorated bars paint over their fill immediately.
 		bar_run_flush(&run)
-		if row.live { fill_frame(dc, x1, bar_y, bw, bar_h, rgb(255, 255, 255)) }
+		if row.live { fill_frame(dc, x1, bar_y, bw, bar_h, C_LIVE_FRAME) }
 		if tl == TIMELINE_TAGS {
 			fill_frame(dc, x1, bar_y, bw, bar_h, C_BORDER)
 			draw_string(dc, a.display_name, x1 + 6, bar_y + 8, ui.font_bold, bar_text_color(color), bw - 12)
@@ -519,7 +497,7 @@ draw_lane_bars :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lane_idx: i32, t
 		}
 	}
 	bar_run_flush(&run)
-	if tl == TIMELINE_TAGS && (tag_ui.drag == 1 || (tag_ui.popup != nil && !tag_ui.task_picker)) {
+	if tl == TIMELINE_TAGS && (tag_drag() == .New_Range || (tag_ui.popup != nil && !tag_ui.task_picker)) {
 		lay := compute_layout(ui.mem_w, ui.mem_h)
 		tag_draw_range(dc, lay, day_start, day_end)
 	}
@@ -534,14 +512,14 @@ ListRow :: struct {
 	start_ms:   i64,
 	end_ms:     i64,
 	full_start_ms, full_end_ms: i64,
-	color:      u32,
+	color:      Argb,
 	is_current: bool,
 }
 
 TotRow :: struct {
 	group_id: i64,
 	name:     string,
-	color:    u32,
+	color:    Argb,
 	ms:       i64,
 }
 
@@ -589,51 +567,49 @@ build_rows :: proc(snapshot: Day_Snapshot, tl: i64, filter: string = "") -> []Li
 }
 
 draw_list :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
-	x := lay.chart_x
-	w := lay.sidebar_x - lay.chart_x - 8
+	pane := list_pane_rect(lay)
+	x := pane.left
+	w := pane.right - pane.left
 
-	fill_rect(dc, x, lay.list_top, w, lay.list_bottom - lay.list_top, C_PANEL)
-	rows := build_rows(snapshot, lane_timeline(i32(ui.lane)), ui.filter)
-	rows_view_h := max(0, lay.list_bottom - lay.list_top - LIST_HDR)
-	visible := max(1, rows_view_h / LIST_ROW)
+	fill_rect(dc, x, pane.top, w, pane.bottom - pane.top, C_PANEL)
+	rows := build_rows(snapshot, lane_timeline(ui.lane), ui.filter)
+	visible := list_rows_visible(lay)
 	w -= pane_scroll_update(&ui.list_scroll, i32(len(rows)), visible,
-		x + w, lay.list_top + LIST_HDR, lay.list_bottom)
+		x + w, list_rows_top(lay), lay.list_bottom)
 	skip := ui.list_scroll.pos
 
 	// Header
 	fill_rect(dc, x, lay.list_top, w, LIST_HDR, C_HEAD_BG)
 	fill_frame(dc, x, lay.list_top, w, LIST_HDR, C_BORDER_SOFT)
-	col_start := x + w - 64 // duration column left edge
-	col_end := x + w - 128
-	col_dur := x + w - 186
-	draw_string(dc, "Title", x + 8, lay.list_top + 4, ui.font_normal, C_TXT, col_dur - x - 16)
-	draw_string(dc, "Start", col_dur + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
-	draw_string(dc, "End", col_end + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
-	draw_string(dc, "Duration", col_start + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
+	cols := list_columns(x, w)
+	draw_string(dc, "Title", x + 8, lay.list_top + 4, ui.font_normal, C_TXT, cols.start - x - 16)
+	draw_string(dc, "Start", cols.start + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
+	draw_string(dc, "End", cols.end + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
+	draw_string(dc, "Duration", cols.duration + 4, lay.list_top + 4, ui.font_normal, C_DIM, 60)
 
-	tl := lane_timeline(i32(ui.lane))
+	tl := lane_timeline(ui.lane)
 	if tl == 0 {
-		msg := "No tags recorded yet." if ui.lane == 0 else "No data for this lane."
-		draw_string(dc, msg, x + 8, lay.list_top + LIST_HDR + 8, ui.font_normal, C_DIM)
+		msg := "No tags recorded yet." if ui.lane == .Tags else "No data for this lane."
+		draw_string(dc, msg, x + 8, list_rows_top(lay) + 8, ui.font_normal, C_DIM)
 		return
 	}
 
 	if len(rows) == 0 {
-		draw_string(dc, "No activity recorded for this day.", x + 8, lay.list_top + LIST_HDR + 8, ui.font_normal, C_DIM)
+		draw_string(dc, "No activity recorded for this day.", x + 8, list_rows_top(lay) + 8, ui.font_normal, C_DIM)
 		return
 	}
 
 	n_rows := i32(len(rows))
 	for i := skip; i < n_rows && i < skip + visible; i += 1 {
 		row := rows[i]
-		ry := lay.list_top + LIST_HDR + i32(i - skip) * LIST_ROW
+		ry := list_rows_top(lay) + i32(i - skip) * LIST_ROW
 		fill_rect(dc, x, ry, w, LIST_ROW, C_ROW_ALT if (i - skip) % 2 == 1 else C_PANEL)
 		color := activity_colorref(Activity{group_id = row.group_id, color = row.color})
 		fill_rect(dc, x + 2, ry + 4, 4, LIST_ROW - 8, color)
-		draw_string(dc, row.name, x + 10, ry + 3, ui.font_normal, C_TXT, col_dur - x - 18)
-		draw_string(dc, fmt_snapshot_clock(snapshot, row.start_ms), col_dur + 4, ry + 3, ui.font_normal, C_DIM, 60)
-		draw_string(dc, fmt_snapshot_clock(snapshot, row.end_ms), col_end + 4, ry + 3, ui.font_normal, C_DIM, 60)
-		draw_string(dc, fmt_span_hm(row.end_ms - row.start_ms), col_start + 4, ry + 3, ui.font_normal, C_DIM, 60)
+		draw_string(dc, row.name, x + 10, ry + 3, ui.font_normal, C_TXT, cols.start - x - 18)
+		draw_string(dc, fmt_snapshot_clock(snapshot, row.start_ms), cols.start + 4, ry + 3, ui.font_normal, C_DIM, 60)
+		draw_string(dc, fmt_snapshot_clock(snapshot, row.end_ms), cols.end + 4, ry + 3, ui.font_normal, C_DIM, 60)
+		draw_string(dc, fmt_span_hm(row.end_ms - row.start_ms), cols.duration + 4, ry + 3, ui.font_normal, C_DIM, 60)
 	}
 }
 
@@ -677,7 +653,7 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	fill_rect(dc, x, lay.list_top, w, total_h, C_PANEL)
 	fill_frame(dc, x, lay.list_top, w, total_h, C_BORDER_SOFT)
 
-	totals := build_totals(snapshot, lane_timeline(i32(ui.lane)))
+	totals := build_totals(snapshot, lane_timeline(ui.lane))
 	defer free_totals_slice(totals)
 
 	total_ms: i64
@@ -689,8 +665,7 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	draw_totals_mode(dc, lay)
 	line_h(dc, x + 1, lay.list_top + 24, w - 2, C_BORDER_SOFT)
 
-	view_h := max(0, total_h - 52)
-	visible := max(1, view_h / LIST_ROW)
+	visible := totals_rows_visible(lay)
 	tree_rows: []^Totals_Node
 	row_count := len(totals)
 	if ui.totals_tree {
@@ -698,11 +673,11 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 		row_count = len(tree_rows)
 	}
 	bar_w := pane_scroll_update(&ui.totals_scroll, i32(row_count), visible,
-		x + w - 1, lay.list_top + 32, lay.list_bottom - 20)
+		x + w - 1, totals_rows_top(lay), totals_scroll_bottom(lay))
 	row_w := w - bar_w
 	skip := ui.totals_scroll.pos
 
-	y := lay.list_top + 32
+	y := totals_rows_top(lay)
 	n_totals := i32(row_count)
 	for i := skip; i < n_totals && i < skip + visible; i += 1 {
 		if ui.totals_tree {
@@ -724,10 +699,10 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	}
 
 	// Total line pinned to the bottom.
-	draw_string(dc, "Total:", x + 8, lay.list_bottom - 20, ui.font_bold, C_TXT)
+	draw_string(dc, "Total:", x + 8, totals_footer_y(lay), ui.font_bold, C_TXT)
 	tval := fmt_hms(total_ms)
 	tv_w := text_pixel_width(tval, ui.font_bold)
-	draw_string(dc, tval, x + w - 8 - tv_w, lay.list_bottom - 20, ui.font_bold, C_TXT)
+	draw_string(dc, tval, x + w - 8 - tv_w, totals_footer_y(lay), ui.font_bold, C_TXT)
 }
 
 // list was made with the default allocator (defer-safe delete).
@@ -756,7 +731,7 @@ draw_status_bar :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	clock := fmt.tprintf("%02d.%02d.%04d %02d:%02d:%02d", st.day, st.month, st.year, st.hour, st.minute, st.second)
 	draw_string(dc, clock, 8, lay.status_y + 4, ui.font_normal, C_TXT)
 
-	dot := C_GREEN if app.tracker.enabled else rgb(200, 204, 208)
+	dot: Colorref = C_GREEN if app.tracker.enabled else C_TRACKER_OFF
 	dot_x := 8 + text_pixel_width(clock, ui.font_normal) + 6
 	fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, dot)
 	status := app_storage_status(app)
@@ -772,60 +747,45 @@ rect_hit :: proc(r: windows.RECT, x, y: i32) -> bool {
 	return x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
-hit_test :: proc(x, y, w, h: i32) -> int {
-	if rect_hit(theme_switch_rect(w), x, y) { return HIT_THEME }
-	if rect_hit(settings_switch_rect(w), x, y) { return HIT_SETTINGS }
-	for i := 0; i < 3; i += 1 {
-		if rect_hit(compute_tabs(i32(i)), x, y) {
-			return HIT_TAB_BASE + i
+hit_test :: proc(x, y, w, h: i32) -> Hit {
+	if rect_hit(theme_switch_rect(w), x, y) { return .Theme }
+	if rect_hit(settings_switch_rect(w), x, y) { return .Settings }
+	for tab in Tab {
+		if rect_hit(compute_tabs(tab), x, y) {
+			return hit_tab(tab)
 		}
 	}
 	// Placeholder tabs draw only the shared tab/theme/settings strip.
-	if ui.tab != 0 { return HIT_NONE }
+	if ui.tab != .Day { return .None }
 	lay := compute_layout(w, h)
-	if ui.tab == 0 {
-		if rect_hit(totals_mode_rect(lay), x, y) { return HIT_TOTALS_TREE }
-		visible := max(1, max(0, lay.list_bottom - lay.list_top - 52) / LIST_ROW)
-		if ui.totals_tree && x >= lay.sidebar_x && x < lay.sidebar_x + lay.sidebar_w &&
-		   y >= lay.list_top + 32 && y < lay.list_top + 32 + visible * LIST_ROW {
-			return HIT_TOTALS_ROW
-		}
+	if ui.tab == .Day {
+		if rect_hit(totals_mode_rect(lay), x, y) { return .Totals_Tree }
+		if ui.totals_tree && rect_hit(totals_rows_rect(lay), x, y) { return .Totals_Row }
 		_, minus, plus, reset := zoom_rects(lay)
-		if rect_hit(minus, x, y) { return HIT_ZOOM_OUT }
-		if rect_hit(plus, x, y) { return HIT_ZOOM_IN }
-		if rect_hit(reset, x, y) { return HIT_ZOOM_RESET }
+		if rect_hit(minus, x, y) { return .Zoom_Out }
+		if rect_hit(plus, x, y) { return .Zoom_In }
+		if rect_hit(reset, x, y) { return .Zoom_Reset }
 	}
-	if y >= lay.ruler_y && x >= lay.chart_x && x < lay.chart_x + lay.chart_w {
-		for i := 0; i < 3; i += 1 {
-			ly := lay.lane_y + i32(i) * (lay.lane_h + LANE_GAP)
-			if y >= ly && y < ly + lay.lane_h {
-				return HIT_LANE_BASE + i
-			}
-		}
-	}
-	if rect_hit(lay.btn_prev, x, y) { return HIT_BTN_PREV }
-	if rect_hit(lay.btn_next, x, y) { return HIT_BTN_NEXT }
-	if rect_hit(lay.btn_today, x, y) { return HIT_BTN_TODAY }
-	if rect_hit(lay.btn_track, x, y) { return HIT_BTN_TASK }
-	return HIT_NONE
+	if lane, in_lane := lane_at(lay, x, y); in_lane { return hit_lane(lane) }
+	if rect_hit(lay.btn_prev, x, y) { return .Btn_Prev }
+	if rect_hit(lay.btn_next, x, y) { return .Btn_Next }
+	if rect_hit(lay.btn_today, x, y) { return .Btn_Today }
+	if rect_hit(lay.btn_track, x, y) { return .Btn_Task }
+	return .None
 }
 
 // --- Tooltip ---
 
-// Lane whose bar rectangle contains the point while a bar tooltip may show, or
-// -1. Shared by draw_tooltip and hover tracking (hover.odin).
-tooltip_lane :: proc(x, y: i32, valid: bool, w, h: i32) -> i32 {
-	if !valid || ui.tab != 0 || ui.pane_drag != 0 || tag_ui.drag != 0 || tag_ui.popup != nil || tag_ui.menu_open { return -1 }
+// Lane whose bar rectangle contains the point while a bar tooltip may show
+// (ok = false otherwise). Shared by draw_tooltip and hover tracking (hover.odin).
+tooltip_lane :: proc(x, y: i32, valid: bool, w, h: i32) -> (lane: Lane, ok: bool) {
+	if !valid || ui.tab != .Day || interaction_active() || tag_ui.popup != nil || tag_ui.menu_open { return }
 	lay := compute_layout(w, h)
-	if x < lay.chart_x || x >= lay.chart_x + lay.chart_w { return -1 }
-	for lane_i := i32(0); lane_i <= 2; lane_i += 1 {
-		ly := lay.lane_y + lane_i * (lay.lane_h + LANE_GAP)
-		if y < ly || y >= ly + lay.lane_h { continue }
-		br := bar_rect_for_lane(lane_i, lay.chart_x, ly, lay.chart_w, lay.lane_h)
-		if y < br.top || y >= br.bottom { return -1 }
-		return lane_i
-	}
-	return -1
+	candidate, in_lane := lane_at(lay, x, y)
+	if !in_lane { return }
+	br := bar_rect_for_lane(candidate, lay.chart_x, lane_top(lay, candidate), lay.chart_w, lay.lane_h)
+	if y < br.top || y >= br.bottom { return }
+	return candidate, true
 }
 
 tooltip_title :: proc(a: Activity) -> string {
@@ -836,8 +796,8 @@ tooltip_title :: proc(a: Activity) -> string {
 // Snapshot row index of the bar whose tooltip is shown at the point, or -1
 // (no bar, or the filter hides its title).
 tooltip_bar_hit :: proc(snapshot: Day_Snapshot, x, y: i32, valid: bool, w, h: i32) -> int {
-	lane := tooltip_lane(x, y, valid, w, h)
-	if lane < 0 { return -1 }
+	lane, in_lane := tooltip_lane(x, y, valid, w, h)
+	if !in_lane { return -1 }
 	lay := compute_layout(w, h)
 	day_start, day_end := zoom_bounds(snapshot.day_start, snapshot.day_end)
 	index := snapshot_bar_hit(snapshot, lane_timeline(lane), x, lay.chart_x, lay.chart_w, day_start, day_end)
@@ -860,14 +820,9 @@ draw_tooltip :: proc(snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) {
 draw_tooltip_box :: proc(dc: windows.HDC, w, h: i32, line1, line2, line3: string) {
 	tw := max(
 		max(text_pixel_width(line1, ui.font_normal), text_pixel_width(line2, ui.font_normal) + 40),
-		text_pixel_width(line3, ui.font_small)) + 20
-	th := i32(58)
-	tx := ui.mouse.x + 14
-	ty := ui.mouse.y + 14
-	if tx + tw > w - 8 { tx = ui.mouse.x - tw - 14 }
-	if ty + th > h - 8 { ty = ui.mouse.y - th - 14 }
-	if tx < 0 { tx = 0 }
-	if ty < 0 { ty = 0 }
+		text_pixel_width(line3, ui.font_small)) + TOOLTIP_FOLLOW_W_PAD
+	th := TOOLTIP_FOLLOW_H
+	tx, ty := tooltip_follow_origin(ui.mouse.x, ui.mouse.y, tw, th, w, h)
 	fill_rect(dc, tx, ty, tw, th, C_TIP_BG)
 	fill_frame(dc, tx, ty, tw, th, C_TIP_BORDER)
 	draw_string(dc, line1, tx + 8, ty + 6, ui.font_normal, C_TXT, tw - 16)

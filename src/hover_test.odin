@@ -54,8 +54,8 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 	testing.expect(t, hover_needs_repaint(on, sig(snapshot, today.right, today.top + 2)))
 	// Every hover-drawn rectangle owns a distinct bit.
 	_, minus, plus, reset := zoom_rects(lay)
-	hot := [?]windows.RECT{theme_switch_rect(W), settings_switch_rect(W), compute_tabs(0), compute_tabs(1),
-		compute_tabs(2), lay.btn_prev, lay.btn_next, lay.btn_today, lay.btn_track,
+	hot := [?]windows.RECT{theme_switch_rect(W), settings_switch_rect(W), compute_tabs(.Day), compute_tabs(.Timesheet),
+		compute_tabs(.Statistics), lay.btn_prev, lay.btn_next, lay.btn_today, lay.btn_track,
 		totals_mode_rect(lay), minus, plus, reset, lay.timeline_split, lay.totals_split}
 	seen: u32
 	for r in hot {
@@ -64,11 +64,11 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 		seen |= bits
 	}
 	// Placeholder tabs draw only the tab strip.
-	ui.tab = 1
+	ui.tab = .Timesheet
 	testing.expect(t, sig(snapshot, today.left + 2, today.top + 2) == Hover_Signature{})
 	testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y) == Hover_Signature{})
 	testing.expect(t, sig(snapshot, 3, 3).targets != 0)
-	ui.tab = 0
+	ui.tab = .Day
 
 	// A visible bar tooltip follows the cursor: every move repaints.
 	editor := sig(snapshot, x_at(lay, 9.5), apps_y)
@@ -89,15 +89,15 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 	}
 
 	// Drags, the tag picker and context menu suppress the tooltip as draw_tooltip does.
-	tag_ui.drag = 1
+	tag_begin(.New_Range, 0)
 	testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).bar == 0)
-	tag_ui.drag = 0
+	interaction_end()
 	tag_ui.menu_open = true
 	testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).bar == 0)
 	tag_ui.menu_open = false
-	ui.pane_drag = 1
+	pane_begin(.Timeline_Height, 0)
 	testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).bar == 0)
-	ui.pane_drag = 0
+	interaction_end()
 
 	// The filter hides a bar's tooltip: no tooltip and no follow-the-cursor repaints.
 	ui.filter = "browser"

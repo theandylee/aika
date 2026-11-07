@@ -8,14 +8,14 @@ import "core:sys/windows"
 Totals_Node :: struct {
 	name, path: string,
 	ms: i64,
-	color: u32,
+	color: Argb,
 	group_id: i64,
 	depth: i32,
 	children: [dynamic]^Totals_Node,
 }
 
 totals_tree_key :: proc(path: string) -> string {
-	return fmt.tprintf("%d:%s", ui.lane, path)
+	return fmt.tprintf("%d:%s", int(ui.lane), path)
 }
 
 totals_tree_rows :: proc(totals: []TotRow) -> []^Totals_Node {
@@ -81,7 +81,7 @@ totals_mode_rect :: proc(lay: Layout) -> windows.RECT {
 
 draw_totals_mode :: proc(dc: windows.HDC, lay: Layout) {
 	r := totals_mode_rect(lay)
-	draw_button(dc, r, "", HIT_TOTALS_TREE)
+	draw_button(dc, r, "", .Totals_Tree)
 	color := C_ACCENT if ui.totals_tree else C_TXT
 	if ui.totals_tree { fill_frame(dc, r.left, r.top, 24, 20, C_ACCENT) }
 	x, y := r.left + 6, r.top + 5
@@ -93,15 +93,11 @@ draw_totals_mode :: proc(dc: windows.HDC, lay: Layout) {
 }
 
 draw_totals_mode_tooltip :: proc(dc: windows.HDC, lay: Layout) {
-	if ui.tab != 0 || !ui.mouse_valid || ui.pressed_hit != HIT_NONE || ui.pane_drag != 0 ||
-	   tag_ui.drag != 0 || tag_ui.popup != nil ||
+	if ui.tab != .Day || !ui.mouse_valid || interaction_active() || tag_ui.popup != nil ||
 	   !rect_hit(totals_mode_rect(lay), ui.mouse.x, ui.mouse.y) { return }
 	label := "Show flat totals" if ui.totals_tree else "Group totals by /"
 	w := text_pixel_width(label, ui.font_normal) + 16
-	x, y := lay.sidebar_x + lay.sidebar_w - w - 5, lay.list_top - 26
-	fill_rect(dc, x, y, w, 24, C_TIP_BG)
-	fill_frame(dc, x, y, w, 24, C_TIP_BORDER)
-	draw_string(dc, label, x + 8, y + 6, ui.font_normal, C_TXT)
+	draw_single_line_tooltip(dc, totals_mode_tooltip_rect(lay, w), label)
 }
 
 draw_totals_tree_row :: proc(dc: windows.HDC, node: ^Totals_Node, x, y, w: i32) {
@@ -132,10 +128,10 @@ draw_totals_tree_row :: proc(dc: windows.HDC, node: ^Totals_Node, x, y, w: i32) 
 
 totals_tree_click :: proc(app: ^App, y: i32, lay: Layout) {
 	snapshot := build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
-	totals := build_totals(snapshot, lane_timeline(i32(ui.lane)))
+	totals := build_totals(snapshot, lane_timeline(ui.lane))
 	defer free_totals_slice(totals)
 	rows := totals_tree_rows(totals)
-	index := int(ui.totals_scroll.pos + (y - lay.list_top - 32) / LIST_ROW)
+	index := int(ui.totals_scroll.pos + totals_row_index(lay, y))
 	if index < 0 || index >= len(rows) { return }
 	node := rows[index]
 	if len(node.children) == 0 { return }

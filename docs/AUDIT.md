@@ -330,7 +330,7 @@ verified. References describe the source at audit time; line numbers may drift.
 
 ## Structure, readability, and maintainability
 
-- [ ] **18. UI interaction state is coupled through globals and integer modes.**
+- [x] **18. UI interaction state is coupled through globals and integer modes.**
   References: `src/winui.odin:29–72`, `src/winui.odin:441–755`,
   `src/tags.odin:8–19`.
   `ui`, `tag_ui`, `settings_ui`, and `global_app` are tightly coupled. Integer
@@ -344,6 +344,21 @@ verified. References describe the source at audit time; line numbers may drift.
   cover Escape, capture loss and native modal transitions. Overview drags restore
   their original range too; Settings uses normal press/release feedback. Tag and
   pane modes remain integers, and a broader handler/state rewrite is deferred.
+  Partial: batch A (constants + typed Tab/Lane/Pane_Drag/Tag_Drag/Hit). Tab, lane,
+  pane and tag drag modes and hit targets are enums; pressable targets use
+  `hit_is_pressable` instead of a numeric range. Interaction-state unification
+  and the window-procedure split remain open.
+  Fixed (batch C): one `Interaction` union in `ui.interaction`
+  (`src/interaction.odin`: `Press`/`Pane`/`Zoom`/`Tag` payloads with cancel
+  snapshots) replaces `ui.pane_drag`/`ui.zoom_drag`+anchors/snapshots,
+  `tag_ui.drag` and `ui.pressed_hit`. Single `interaction_active()` predicate,
+  idempotent `interaction_cancel` (restores pane geometry and zoom range, keeps
+  the tag range for the picker), state-nil-before-`ReleaseCapture` ordering, and
+  per-message `wnd_proc` handlers (`on_mouse_move`, `on_set_cursor`,
+  `on_mouse_wheel`, `on_mbutton_down/up`, `on_lbutton_down/up`).
+  Verified by 104 tests, all tools/test-*-ui.py scripts, and 92/92 pixel-identical
+  snapshots against HEAD (`tools/pixel-snapshot.py`). `ui`/`tag_ui` remain the
+  state roots by design.
 
 - [x] **19. Hidden Day-view controls remain clickable on placeholder tabs.**
   Reference: `src/ui.odin:783–815`.
@@ -393,7 +408,7 @@ verified. References describe the source at audit time; line numbers may drift.
   rules test 23/25-hour days without changing the machine's timezone. Daily list
   clipping and live overlays remain separate step-5 work.
 
-- [ ] **23. Constants, names, and palette representation invite mistakes.**
+- [x] **23. Constants, names, and palette representation invite mistakes.**
   References: `src/theme.odin:42–54`, `src/ui.odin:601–607`,
   `src/ui.odin:83`, `src/ui.odin:462`.
   Palette selection relies on three positionally synchronized arrays.
@@ -404,6 +419,25 @@ verified. References describe the source at audit time; line numbers may drift.
   usage identity.
   Partial progress: ComputerUsage rendering no longer assumes Active has group ID
   1; snapshot usage identity comes from tracker state/resolved group metadata.
+  Partial: batch A (constants + typed Tab/Lane/Pane_Drag/Tag_Drag/Hit). Timers,
+  thresholds, window sizes, Win32 messages/styles/cursor ids, control ids,
+  tooltip and zoom-bar geometry are named (`src/ui_consts.odin`, preferring
+  `windows.*`). The palette arrays and the `col_start`/`col_dur` names remain.
+  Partial: batches A+B. One named `Palette` (`PALETTE_LIGHT`/`PALETTE_DARK`) replaces
+  the three synchronized arrays and the duplicated light literals; `C_*` are
+  assigned from it. Semantic fields replace reuse of `C_BTN_HOVER`; `Colorref` and
+  a distinct `Argb` separate GDI and stored colors; magic colors/luma thresholds are
+  named; list columns are `List_Columns{start,end,duration}` and toolbar names are
+  unit-explicit. Remaining: usage identity centralization is done: rendering reads it from tracker
+  state/resolved group metadata, never from an assumed group ID. Fixed accents
+  are typed `windows.COLORREF` constants; `WS_EX_TOOLWINDOW`,
+  `MONITOR_DEFAULTTONEAREST`, `ODS_SELECTED`/`ODS_FOCUS`,
+  `EM_GETSEL`/`EM_SETSEL`/`EM_REPLACESEL` and `CHAR_DELETE` are named in
+  `src/ui_consts.odin` (no `core:sys/windows` equivalent exists) and used in
+  `date_picker.odin`/`filter_edit.odin`. A shared `mouse_point` helper replaces
+  the repeated signed-word `lparam` decoding in `wnd_proc` handlers. The
+  remaining raw `& 0xFFFF`/`>> 16` message plumbing is standard Win32 word
+  extraction.
 
 - [ ] **24. DPI and keyboard behavior need a coherent UI policy.**
   References: `assets/aika.manifest`, `src/winui.odin:853–870`,

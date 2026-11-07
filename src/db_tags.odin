@@ -8,7 +8,7 @@ DB_Tag_Result :: enum { Ok, Overlap, Invalid, Not_Found, Busy, Failed }
 
 DB_Tag_Block :: struct {
 	id, group_id: i64,
-	color: u32,
+	color: Argb,
 }
 
 db_tag_result :: proc(result: DB_Result) -> DB_Tag_Result {
@@ -53,14 +53,14 @@ db_start_task :: proc(db: ^DB, group_id: i64, name: string, start: i64) -> (DB_T
 	return db_create_tag_block(db, group_id, name, start, start + 1)
 }
 
-db_tag_color :: proc(db: ^DB, id: i64) -> (u32, DB_Result) {
+db_tag_color :: proc(db: ^DB, id: i64) -> (Argb, DB_Result) {
 	stmt, ok := db_prepare(db, `SELECT Color FROM "Group" WHERE GroupId=?1 AND TimelineId=1`)
 	if !ok { return 0, db_failure(db) }
 	defer sqlite3_finalize(stmt)
 	bound := db_result(bind_i64(stmt, 1, id))
 	if bound != .Ok { return 0, bound }
 	rc := sqlite3_step(stmt)
-	if rc == SQLITE_ROW { return u32(col_i64(stmt, 0)), .Ok }
+	if rc == SQLITE_ROW { return Argb(col_i64(stmt, 0)), .Ok }
 	if rc == SQLITE_DONE { return 0, .Not_Found }
 	return 0, db_result(rc)
 }

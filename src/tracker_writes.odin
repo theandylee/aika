@@ -10,7 +10,7 @@ Pending_Activity :: struct {
 	start_ms, end_ms: i64,
 	title: string, // owned only while queued
 	group_name: string, // owned only while queued
-	color: u32,
+	color: Argb,
 	usage_kind: UsageKind, // resolve a missing usage group again on retry
 	spell: u64, // ownership survives retries and wall-clock discontinuities
 }

@@ -21,11 +21,11 @@ hover_targets :: proc(x, y, w, h: i32) -> u32 {
 	n := 0
 	rects[n] = theme_switch_rect(w); n += 1
 	rects[n] = settings_switch_rect(w); n += 1
-	for i := i32(0); i < 3; i += 1 {
-		rects[n] = compute_tabs(i); n += 1
+	for tab in Tab {
+		rects[n] = compute_tabs(tab); n += 1
 	}
 	// Placeholder tabs draw only the shared tab/theme/settings strip.
-	if ui.tab == 0 {
+	if ui.tab == .Day {
 		lay := compute_layout(w, h)
 		_, minus, plus, reset := zoom_rects(lay)
 		for r in ([10]windows.RECT{lay.btn_prev, lay.btn_next, lay.btn_today, lay.btn_track,
@@ -50,7 +50,7 @@ hover_signature :: proc(snapshot: Day_Snapshot, x, y: i32, valid: bool, w, h: i3
 // Same result as hover_signature, building the snapshot only over the lanes.
 hover_signature_for_app :: proc(app: ^App, x, y, w, h: i32) -> Hover_Signature {
 	snapshot: Day_Snapshot
-	if tooltip_lane(x, y, true, w, h) >= 0 {
+	if _, in_lane := tooltip_lane(x, y, true, w, h); in_lane {
 		snapshot = build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
 	}
 	return hover_signature(snapshot, x, y, true, w, h)

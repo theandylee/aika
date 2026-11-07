@@ -412,11 +412,35 @@ hover-drawn rectangles under the cursor plus the bar-tooltip row), and
 `WM_MOUSEMOVE` repaints when the signature at the new position differs, or on
 every move while the cursor-following bar tooltip is painted or about to be.
 Drags invalidate on their own paths. `TrackMouseEvent` delivers
-`WM_MOUSELEAVE`, which clears hover visuals. Palette values
-are `COLORREF` literals (`0x00BBGGRR`). `src/theme.odin` switches the mutable
-UI palette between light and dark via the top-right toggle, saving the choice
-beside the selected database as `<database path>.theme`. Dark buttons and tabs
-use GDI rather than light UxTheme drawing; stored activity colors are unchanged.
+`WM_MOUSELEAVE`, which clears hover visuals. Theme values live in one
+`Palette` struct (`src/palette.odin`) with named semantic fields and two constant
+instances, `PALETTE_LIGHT` and `PALETTE_DARK`; there are no positional arrays. The
+drawing code reads `C_*` variables (`C_BG`, `C_TXT`, ...) that `palette_apply`
+assigns from the active palette, so `theme_set_palette` in `src/theme.odin` is a
+one-liner and call sites did not change. `C_ACCENT/GREEN/ORANGE/RED` are fixed
+constants shared by both themes. Fields that reuse another field's value for a
+different purpose have their own names (`splitter_hot`, `tag_preview`,
+`section_head` all equal `button_hover` today), and `zoom_selection` is themed.
+Adding a color means one struct field, one value per palette, one `C_*` variable and
+one line in `palette_apply`; `palette_is_applied` (tested) catches a forgotten
+assignment. The toggle is saved beside the selected database as
+`<database path>.theme`. Dark buttons and tabs use GDI rather than light UxTheme
+drawing; stored activity colors are unchanged.
+
+Two color types meet in `src/colors.odin`: `Colorref` (= `windows.COLORREF`,
+`0x00BBGGRR`, what GDI draws with) and the distinct `Argb` (`0xAARRGGBB`, what
+`"Group".Color` stores and rows carry; 0 = unset, so the renderer derives a color
+from the group id). `argb_to_colorref` is the only crossing and keeps 0 as 0;
+`colorref_r/g/b` read channels; `bar_text_color` picks dark or light text for tag
+fills from named luma weights/threshold. The remaining fixed colors (live-bar
+outline, paused-tracker dot) are named there too.
+
+Geometry shared by drawing and hit-testing is computed once in
+`src/geometry.odin` (`lane_rect`/`lane_at`, list and totals pane rectangles, the
+totals rows area and row index, the list column edges, tooltip rectangles and the
+cursor-following tooltip origin). Hit tests, wheel routing and painting call the
+same helpers, and `geometry_behavior` checks they agree with the previous inline
+expressions.
 
 Odin note: native callbacks use a non-default calling convention and start with
 `context = rt.default_context()`, then install a fresh `Scratch` allocator and
@@ -431,10 +455,44 @@ Backbuffer replacement acquires DC/bitmap/selection before releasing the previou
 buffer; failed resize paints a direct error fallback and retries on later paints.
 Final tracker teardown releases owned metadata without acknowledging lost writes.
 
-Zoom uses typed drag states. Escape, capture loss and native cancellation share
-one idempotent interaction-cancellation helper; successful releases clear state
-before releasing capture. Overview and middle-button cancellation restore the
-original range. Non-Day tabs expose only shared tab/theme/Settings hit targets.
+### Interaction state machine
+
+One pointer interaction at a time lives in `ui.interaction` (`src/interaction.odin`),
+a tagged union of `Press_State` (toolbar-style button held down), `Pane_State`
+(splitter drag with pointer offset and a geometry snapshot), `Zoom_State`
+(handle/overview/timeline drag with anchor and a view-range snapshot) and
+`Tag_State` (new-range/edge drag with the resized block id). The window holds
+mouse capture exactly while the value is non-nil. The selected tab, lane and
+drag modes are enums (`Tab`, `Lane`, `Pane_Drag`, `Tag_Drag`, `Zoom_Drag`);
+their declaration order is the former numeric order, and the totals-tree
+expansion key still formats the lane as `int(lane)`. Hit-test results are a
+`Hit` enum whose numeric values carry no meaning: use `hit_is_pressable`
+(toolbar/zoom/theme/Settings/totals-mode buttons that press on down and act on
+up) and the `hit_tab`/`hit_as_tab`, `hit_lane`/`hit_as_lane` helpers, never
+ranges. Read the active kind through `pane_drag()`/`zoom_drag()`/`tag_drag()`/
+`press_hit()` or `interaction_kind()`; there is exactly one
+`interaction_active()` predicate, used by tooltips, wheel routing, pan/tag/zoom
+entry points and the off-Day-tab gate.
+
+Rules: `*_begin` stores the payload (snapshotting live geometry/view first),
+then the caller takes capture. Commit (`interaction_end`) and every pointer-up
+path set the value to nil BEFORE `ReleaseCapture`, because `ReleaseCapture`
+sends `WM_CAPTURECHANGED` synchronously, which re-enters cancellation.
+`interaction_cancel` is idempotent, never calls `ReleaseCapture` itself, rolls
+pane geometry and the zoom range back to the payload snapshot, and only clears
+the tag kind: the dragged range outlives the interaction in `tag_ui`
+(`start_ms`/`end_ms` feed the picker, edge previews read them while active).
+Timers, thresholds, window sizes, Win32 ids and shared geometry (tooltip box,
+zoom bar, lane/list/totals rects in `src/geometry.odin`) are named in
+`src/ui_consts.odin`, preferring `core:sys/windows` constants.
+
+`wnd_proc` (in `src/winui.odin`) dispatches mouse input to one proc per message
+(`on_mouse_move`, `on_set_cursor`, `on_mouse_wheel`, `on_mbutton_down/up`,
+`on_lbutton_down/up`); the window procs stay contextless (`context =
+rt.default_context()` + scratch) and the helpers are plain procs. Left-button
+down/up ignore input while a `.Timeline` pan is active; down also ignores input
+while any interaction is active (capture is held). Non-Day tabs expose only
+shared tab/theme/Settings hit targets.
 
 ### Timeline
 

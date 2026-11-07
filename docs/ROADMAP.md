@@ -129,6 +129,16 @@ DPI/keyboard policy and new tracker features were not part of this step.
   `DrawTextW` over 12,131 overflowing renderings (20 strings, 8 fonts, every
   width). Tag labels ~2.5x cheaper; `Ruler_Lanes` 4.90 → 3.56 ms.
 
+- [x] **A13. Unified interaction state (audit #18, #23)** (`src/interaction.odin`,
+  `src/winui.odin`, `src/panes.odin`, `src/zoom.odin`, `src/tags.odin`).
+  One `ui.interaction` union (`Press`/`Pane`/`Zoom`/`Tag` with cancel snapshots)
+  replaces parallel `pane_drag`/`zoom_drag`/`tag_ui.drag`/`pressed_hit` fields;
+  single `interaction_active()` predicate, idempotent `interaction_cancel`, and
+  per-message `wnd_proc` handlers. Typed `Tab`/`Lane`/`Pane_Drag`/`Tag_Drag`/`Hit`
+  enums, named `Palette`, `Colorref`/`Argb` discipline, shared geometry helpers,
+  named Win32/EM/ODS constants and typed fixed accents. Verified by 104 tests,
+  all UI scripts, and 92/92 pixel-identical snapshots against HEAD.
+
 ---
 
 ## P0 — finish the tracker core

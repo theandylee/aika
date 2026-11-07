@@ -16,7 +16,7 @@ Tracker_IO :: struct {
 	sample: proc(data: rawptr) -> (WindowInfo, bool),
 	identify: proc(data: rawptr, pid: u32) -> (Process_Identity, bool),
 	metadata: proc(data: rawptr, key: Process_Identity) -> (WindowInfo, bool),
-	ensure_focus_group: proc(data: rawptr, db: ^DB, hash, name, text: string) -> (i64, u32, DB_Result),
+	ensure_focus_group: proc(data: rawptr, db: ^DB, hash, name, text: string) -> (i64, Argb, DB_Result),
 	insert: proc(data: rawptr, db: ^DB, timeline: i64, title: string, group: i64, start, end: i64) -> (i64, DB_Result),
 	update_end: proc(data: rawptr, db: ^DB, id, end: i64) -> DB_Result,
 }
