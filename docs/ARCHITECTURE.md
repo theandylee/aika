@@ -411,10 +411,12 @@ the window resizes correctly. Repaints are on-demand: the timer invalidates
 every 500 ms (which also drives the 1 Hz tracker sampling inside
 `tracker_tick`). Mouse movement invalidates only when the frame would change
 (`src/hover.odin`): each paint records a `Hover_Signature` (bitmask of the
-hover-drawn rectangles under the cursor plus the bar-tooltip row), and
+hover-drawn rectangles under the cursor plus the hovered timeline row), and
 `WM_MOUSEMOVE` repaints when the signature at the new position differs, or on
-every move while the cursor-following bar tooltip is painted or about to be.
-Drags invalidate on their own paths. `TrackMouseEvent` delivers
+every move while the cursor-following timeline hint is painted or about to be.
+Over empty lane space the hint is just the under-cursor time; over a block it
+adds the block's usual rows beneath the time. Drags invalidate on their own paths.
+`TrackMouseEvent` delivers
 `WM_MOUSELEAVE`, which clears hover visuals. Theme values live in one
 `Palette` struct (`src/palette.odin`) with named semantic fields and two constant
 instances, `PALETTE_LIGHT` and `PALETTE_DARK`; there are no positional arrays. The

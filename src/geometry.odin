@@ -12,6 +12,8 @@ TOTALS_CHROME_H :: TOTALS_ROWS_DY + TOTALS_FOOTER_H
 
 TOOLTIP_FOLLOW_W_PAD :: i32(20)  // horizontal padding of the cursor-following tooltip
 TOOLTIP_FOLLOW_H     :: i32(58)  // three text lines
+TOOLTIP_LINE_PITCH   :: i32(16) // vertical distance between hint text rows (first at +6)
+TOOLTIP_BOX_PAD      :: i32(10) // vertical padding around the hint rows (16*3+10 = 58)
 TOOLTIP_FOLLOW_GAP   :: i32(14)  // distance from the cursor
 TOOLTIP_EDGE_MARGIN  :: i32(8)   // keep this far from the client edge when flipping
 

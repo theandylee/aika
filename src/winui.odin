@@ -727,28 +727,33 @@ on_mouse_move :: proc(hwnd: windows.HWND, app: ^App, win_x, win_y: i32) {
 }
 
 // True when the cursor is handled (caller returns 1). The ui.tab gate stays
-// with the caller; only HTCLIENT points reach here.
+// with the caller; only HTCLIENT points reach here. Uses a side-effect-free
+// cursor query: it must not touch ui.mouse, which belongs to on_mouse_move
+// (change detection) and WM_PAINT (timer freshness). Writing it here would
+// pre-consume the next WM_MOUSEMOVE delta — WM_SETCURSOR precedes it — and
+// reduce hover repaints to the 500 ms timer rate.
 on_set_cursor :: proc(app: ^App) -> bool {
-	_update_mouse_client()
+	mx, my, valid := _cursor_client()
+	if !valid { return false }
 	w, h := client_size(ui.hwnd)
 	split := pane_drag()
-	if split == .None { split = pane_split_hit(ui.mouse.x, ui.mouse.y, compute_layout(w, h)) }
+	if split == .None { split = pane_split_hit(mx, my, compute_layout(w, h)) }
 	if split != .None {
 		windows.SetCursor(system_cursor(IDC_SIZENS if split == .Timeline_Height else IDC_SIZEWE))
 		return true
 	}
-	_, edge := tag_edge_hit(app, ui.mouse.x, ui.mouse.y, compute_layout(w, h))
+	_, edge := tag_edge_hit(app, mx, my, compute_layout(w, h))
 	if tag_drag_is_edge(edge) || tag_drag_is_edge(tag_drag()) {
 		windows.SetCursor(system_cursor(IDC_SIZEWE))
 		return true
 	}
 	bar, _, _, _ := zoom_rects(compute_layout(w, h))
-	if rect_hit(bar, ui.mouse.x, ui.mouse.y) {
+	if rect_hit(bar, mx, my) {
 		width := f64(bar.right - bar.left)
 		left := bar.left + i32(ui.zoom_start * width)
 		right := bar.left + i32(ui.zoom_end * width)
 		cursor := IDC_HAND // pan
-		if abs(ui.mouse.x - left) <= dpi_px(EDGE_HIT_PX) || abs(ui.mouse.x - right) <= dpi_px(EDGE_HIT_PX) {
+		if abs(mx - left) <= dpi_px(EDGE_HIT_PX) || abs(mx - right) <= dpi_px(EDGE_HIT_PX) {
 			cursor = IDC_SIZEWE // resize
 		}
 		windows.SetCursor(system_cursor(cursor))
@@ -896,6 +901,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		w := i32(u32l & 0xFFFF)
 		h := i32((u32l >> 16) & 0xFFFF)
 		recreate_backbuffer(w, h)
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		return 0
 	case windows.WM_MOUSEMOVE:
 		win_x, win_y := mouse_point(lparam)
@@ -1037,6 +1043,19 @@ client_size :: proc(hwnd: windows.HWND) -> (w, h: i32) {
 	rc: windows.RECT
 	windows.GetClientRect(hwnd, &rc)
 	return rc.right - rc.left, rc.bottom - rc.top
+}
+
+// Screen cursor in client coords without touching ui.mouse (see on_set_cursor).
+_cursor_client :: proc() -> (x, y: i32, valid: bool) {
+	screen: windows.POINT
+	if !windows.GetCursorPos(&screen) { return 0, 0, false }
+	windows.ScreenToClient(ui.hwnd, &screen)
+	rc: windows.RECT
+	windows.GetClientRect(ui.hwnd, &rc)
+	if screen.x < 0 || screen.y < 0 || screen.x >= rc.right || screen.y >= rc.bottom {
+		return screen.x, screen.y, false
+	}
+	return screen.x, screen.y, true
 }
 
 _update_mouse_client :: proc() {

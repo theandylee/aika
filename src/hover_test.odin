@@ -38,9 +38,11 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 	list_b := sig(snapshot, lay.chart_x + 90, lay.list_top + 120)
 	testing.expect(t, list_a == Hover_Signature{} && list_b == list_a)
 	testing.expect(t, !hover_needs_repaint(list_a, list_b))
+	// Empty lane areas show no tooltip, but the cursor line follows the mouse,
+	// so every move repaints while it is (or would become) visible.
 	empty_lane := sig(snapshot, x_at(lay, 3), apps_y)
-	testing.expect(t, empty_lane.bar == 0)
-	testing.expect(t, !hover_needs_repaint(empty_lane, sig(snapshot, x_at(lay, 4), apps_y + 3)))
+	testing.expect(t, empty_lane.bar == 0 && empty_lane.cursor)
+	testing.expect(t, hover_needs_repaint(empty_lane, sig(snapshot, x_at(lay, 4), apps_y + 3)))
 	testing.expect(t, !hover_needs_repaint(Hover_Signature{}, hover_signature(snapshot, 5, 5, false, W, H)))
 
 	// Crossing onto and off a button repaints; moving within it does not.
@@ -68,9 +70,10 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 	testing.expect(t, sig(snapshot, 3, 3).targets != 0)
 	ui.tab = .Day
 
-	// A visible bar tooltip follows the cursor: every move repaints.
+	// A visible bar tooltip follows the cursor: every move repaints. The cursor
+	// line is visible over the same lanes, with or without a bar beneath it.
 	editor := sig(snapshot, x_at(lay, 9.5), apps_y)
-	testing.expect(t, editor.bar != 0 && snapshot.rows[editor.bar - 1].activity.id == 1)
+	testing.expect(t, editor.bar != 0 && editor.cursor && snapshot.rows[editor.bar - 1].activity.id == 1)
 	editor_next := sig(snapshot, x_at(lay, 9.5) + 1, apps_y)
 	testing.expect(t, editor_next == editor && hover_needs_repaint(editor, editor_next))
 	testing.expect(t, hover_needs_repaint(editor, empty_lane) && hover_needs_repaint(empty_lane, editor))
@@ -86,26 +89,35 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 		testing.expect(t, hover_signature_for_app(&app, p[0], p[1], W, H) == sig(snapshot, p[0], p[1]))
 	}
 
-	// Drags, the tag picker and context menu suppress the tooltip as draw_tooltip does.
+	// The cursor line shares the tooltip's lane gate: hidden off-lane, while a
+	// drag is active, and while the tag picker or its menu is open.
+	list_sig := sig(snapshot, lay.chart_x + 40, lay.list_top + 60)
+	testing.expect(t, !list_sig.cursor)
+	testing.expect(t, !sig(snapshot, lay.chart_x + 40, lay.ruler_y + 2).cursor)
 	tag_begin(.New_Range, 0)
 	testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).bar == 0)
+	testing.expect(t, !sig(snapshot, x_at(lay, 9.5), apps_y).cursor)
 	interaction_end()
 	tag_ui.menu_open = true
 	testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).bar == 0)
+	testing.expect(t, !sig(snapshot, x_at(lay, 9.5), apps_y).cursor)
 	tag_ui.menu_open = false
 	pane_begin(.Timeline_Height, 0)
 	testing.expect(t, sig(snapshot, x_at(lay, 9.5), apps_y).bar == 0)
+	testing.expect(t, !sig(snapshot, x_at(lay, 9.5), apps_y).cursor)
 	interaction_end()
 
-	// The filter hides a bar's tooltip: no tooltip and no follow-the-cursor repaints.
+	// The filter hides a bar's block rows but not the time hint or cursor line:
+	// moves over the hidden bar still repaint to follow the cursor.
 	ui.filter = "browser"
 	hidden := sig(snapshot, x_at(lay, 9.5), apps_y)
-	testing.expect(t, hidden.bar == 0 && tooltip_bar_hit(snapshot, x_at(lay, 9.5), apps_y, true, W, H) == -1)
-	testing.expect(t, !hover_needs_repaint(hidden, sig(snapshot, x_at(lay, 9.5) + 1, apps_y)))
+	testing.expect(t, hidden.bar == 0 && hidden.cursor && tooltip_bar_hit(snapshot, x_at(lay, 9.5), apps_y, true, W, H) == -1)
+	testing.expect(t, hover_needs_repaint(hidden, sig(snapshot, x_at(lay, 9.5) + 1, apps_y)))
 	testing.expect(t, sig(snapshot, x_at(lay, 10.5), apps_y) == browser)
 	testing.expect(t, hover_needs_repaint(hidden, browser))
 
-	// draw_tooltip paints a box exactly when the signature reports a bar.
+	// draw_tooltip always paints a time hint over the lanes; the block rows
+	// below it appear exactly when the signature reports a bar.
 	screen := windows.GetDC(nil)
 	testing.expect(t, screen != nil)
 	if screen == nil { return }
@@ -129,8 +141,24 @@ hover_repaint_behavior :: proc(t: ^testing.T) {
 		fill_rect(dc, 0, 0, W, H, BLANK)
 		ui.mouse, ui.mouse_valid = windows.POINT{p[0], p[1]}, true
 		draw_tooltip(snapshot, dc, W, H)
-		shown := GetPixel(dc, p[0] + 17, p[1] + 17) == C_TIP_BG
-		testing.expect(t, shown == (p[2] == 1))
-		testing.expect(t, shown == (sig(snapshot, p[0], p[1]).bar != 0))
+		// Time row: inside even the one-row box, left of the text padding.
+		testing.expect(t, GetPixel(dc, p[0] + 17, p[1] + 17) == C_TIP_BG)
+		testing.expect(t, sig(snapshot, p[0], p[1]).cursor)
+		// Block rows: a fourth row exists only for a bar hit.
+		testing.expect(t, (GetPixel(dc, p[0] + 17, p[1] + 45) == C_TIP_BG) == (p[2] == 1))
+		testing.expect(t, (p[2] == 1) == (sig(snapshot, p[0], p[1]).bar != 0))
+	}
+
+	// draw_cursor_line paints one accent pixel column exactly when the
+	// signature reports the cursor, spanning ruler to lanes bottom.
+	ui.filter = ""
+	for p in ([3][2]i32{{x_at(lay, 3), apps_y}, {x_at(lay, 9.5), apps_y}, {lay.chart_x + 40, lay.list_top + 60}}) {
+		fill_rect(dc, 0, 0, W, H, BLANK)
+		ui.mouse, ui.mouse_valid = windows.POINT{p[0], p[1]}, true
+		draw_cursor_line(dc, W, H)
+		want := sig(snapshot, p[0], p[1]).cursor
+		testing.expect(t, (GetPixel(dc, p[0], apps_y) == C_ACCENT) == want)
+		testing.expect(t, (GetPixel(dc, p[0], lay.ruler_y + 2) == C_ACCENT) == want)
+		testing.expect(t, GetPixel(dc, p[0] + 5, apps_y) == BLANK)
 	}
 }

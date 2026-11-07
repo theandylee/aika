@@ -361,6 +361,7 @@ draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) 
 		nx := x_for_ms(snapshot.now, view_start, view_end, lay.chart_x, lay.chart_w)
 		line_v(dc, nx, lay.ruler_y, lay.lanes_bottom - lay.ruler_y, C_RED)
 	}
+	draw_cursor_line(dc, w, h)
 
 	// Details list + totals
 	draw_zoom_bar(snapshot, dc, lay, day_start, day_end)
@@ -806,26 +807,62 @@ tooltip_bar_hit :: proc(snapshot: Day_Snapshot, x, y: i32, valid: bool, w, h: i3
 }
 
 draw_tooltip :: proc(snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) {
+	_, in_lane := tooltip_lane(ui.mouse.x, ui.mouse.y, ui.mouse_valid, w, h)
+	if !in_lane { return }
+	lay := compute_layout(w, h)
+	day_start, day_end := zoom_bounds(snapshot.day_start, snapshot.day_end)
+	cursor_ms := tag_ms_for_x(ui.mouse.x, lay, day_start, day_end)
 	index := tooltip_bar_hit(snapshot, ui.mouse.x, ui.mouse.y, ui.mouse_valid, w, h)
-	if index < 0 { return }
+	if index < 0 {
+		draw_tooltip_lines(dc, w, h, []Tooltip_Line{{fmt_snapshot_clock(snapshot, cursor_ms), ui.font_normal, C_TXT}})
+		return
+	}
 	row := snapshot.rows[index]
 	a := row.activity
-	draw_tooltip_box(dc, w, h,
-		a.group_name,
-		tooltip_title(a),
-		fmt.tprintf("%s - %s  (%s)", fmt_snapshot_clock(snapshot, row.start_ms), fmt_snapshot_clock(snapshot, row.end_ms),
-			fmt_span_hm(row.end_ms - row.start_ms)))
+	draw_tooltip_lines(dc, w, h, []Tooltip_Line{
+		{fmt_snapshot_clock(snapshot, cursor_ms), ui.font_normal, C_TXT},
+		{a.group_name, ui.font_normal, C_TXT},
+		{tooltip_title(a), ui.font_normal, C_TXT},
+		{fmt.tprintf("%s - %s  (%s)", fmt_snapshot_clock(snapshot, row.start_ms), fmt_snapshot_clock(snapshot, row.end_ms),
+			fmt_span_hm(row.end_ms - row.start_ms)), ui.font_small, C_DIM},
+	})
 }
 
-draw_tooltip_box :: proc(dc: windows.HDC, w, h: i32, line1, line2, line3: string) {
-	tw := max(
-		max(text_pixel_width(line1, ui.font_normal), text_pixel_width(line2, ui.font_normal) + 40),
-		text_pixel_width(line3, ui.font_small)) + dpi_px(TOOLTIP_FOLLOW_W_PAD)
-	th := dpi_px(TOOLTIP_FOLLOW_H)
+Tooltip_Line :: struct {
+	text:  string,
+	font:  windows.HFONT,
+	color: windows.COLORREF,
+}
+
+// Cursor-following hint: the under-cursor time, plus the hovered block's usual
+// rows beneath it. Height follows the row count (one row over empty space);
+// width fits the widest row. The block title keeps its historical +40 slack so
+// the box does not jitter while sweeping across blocks.
+draw_tooltip_lines :: proc(dc: windows.HDC, w, h: i32, lines: []Tooltip_Line) {
+	if len(lines) == 0 { return }
+	tw := i32(0)
+	for l, i in lines {
+		// The block title (index 2) keeps its historical +40 slack so the box
+		// does not jitter while sweeping across blocks.
+		extra := i32(40) if i == 2 && len(lines) > 1 else i32(0)
+		tw = max(tw, text_pixel_width(l.text, l.font) + extra)
+	}
+	tw += dpi_px(TOOLTIP_FOLLOW_W_PAD)
+	th := dpi_px(TOOLTIP_LINE_PITCH * i32(len(lines)) + TOOLTIP_BOX_PAD)
 	tx, ty := tooltip_follow_origin(ui.mouse.x, ui.mouse.y, tw, th, w, h)
 	fill_rect(dc, tx, ty, tw, th, C_TIP_BG)
 	fill_frame(dc, tx, ty, tw, th, C_TIP_BORDER)
-	draw_string(dc, line1, tx + 8, ty + 6, ui.font_normal, C_TXT, tw - 16)
-	draw_string(dc, line2, tx + 8, ty + 22, ui.font_normal, C_TXT, tw - 16)
-	draw_string(dc, line3, tx + 8, ty + 38, ui.font_small, C_DIM, tw - 16)
+	for l, i in lines {
+		draw_string(dc, l.text, tx + 8, ty + 6 + i32(i) * TOOLTIP_LINE_PITCH, l.font, l.color, tw - 16)
+	}
+}
+
+// Cursor line: the now marker's span and weight, but following the mouse
+// while it studies the timeline. Accent orange keeps it distinct from the
+// red now line. Drawn over the bars like the now marker; the tooltip box
+// (painted later) covers it near the cursor.
+draw_cursor_line :: proc(dc: windows.HDC, w, h: i32) {
+	if _, ok := tooltip_lane(ui.mouse.x, ui.mouse.y, ui.mouse_valid, w, h); !ok { return }
+	lay := compute_layout(w, h)
+	line_v(dc, ui.mouse.x, lay.ruler_y, lay.lanes_bottom - lay.ruler_y, C_ACCENT)
 }

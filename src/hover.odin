@@ -3,13 +3,14 @@ package main
 import "core:sys/windows"
 
 // Everything the painted frame derives from the mouse position. WM_MOUSEMOVE
-// repaints only when this changes, or while the cursor-following bar tooltip is
-// (or would become) visible. Other state (pressed button, drags, data, filter,
-// zoom, theme) invalidates on its own paths, and the next paint records the
-// signature it actually drew.
+// repaints only when this changes, or while the cursor-following timeline hint
+// or cursor line is (or would become) visible. Other state (pressed button,
+// drags, data, filter, zoom, theme) invalidates on its own paths, and the next
+// paint records the signature it actually drew.
 Hover_Signature :: struct {
 	targets: u32, // bit i: hover-sensitive rectangle i contains the cursor
-	bar:     int, // snapshot row index + 1 of the bar tooltip; 0 = none
+	bar:     int, // snapshot row index + 1 of the hovered block; 0 = empty space (time-only hint)
+	cursor:  bool, // cursor line and hint on the timeline; follows x pixel-exactly
 }
 
 // Rectangles whose drawing reads ui.mouse: tabs, theme/settings switches (and
@@ -41,10 +42,13 @@ hover_targets :: proc(x, y, w, h: i32) -> u32 {
 }
 
 // Pure: the snapshot is consulted only when the cursor is over a lane bar.
+// The cursor line shares the tooltip's lane gate (Day tab, no drag/popup),
+// so it never fights tag/zoom interactions.
 hover_signature :: proc(snapshot: Day_Snapshot, x, y: i32, valid: bool, w, h: i32) -> Hover_Signature {
 	if !valid { return {} }
+	_, in_lane := tooltip_lane(x, y, valid, w, h)
 	return Hover_Signature{targets = hover_targets(x, y, w, h),
-		bar = tooltip_bar_hit(snapshot, x, y, valid, w, h) + 1}
+		bar = tooltip_bar_hit(snapshot, x, y, valid, w, h) + 1, cursor = in_lane}
 }
 
 // Same result as hover_signature, building the snapshot only over the lanes.
@@ -56,10 +60,11 @@ hover_signature_for_app :: proc(app: ^App, x, y, w, h: i32) -> Hover_Signature {
 	return hover_signature(snapshot, x, y, true, w, h)
 }
 
-// The bar tooltip box follows the cursor, so every move repaints while one is
-// painted or about to be painted.
+// The timeline hint and the cursor line both follow the cursor, so every
+// move repaints while either is painted or about to be painted.
 hover_needs_repaint :: proc(painted, next: Hover_Signature) -> bool {
-	return painted != next || painted.bar != 0 || next.bar != 0
+	return painted != next || painted.bar != 0 || next.bar != 0 ||
+		painted.cursor || next.cursor
 }
 
 // Ask for WM_MOUSELEAVE so hover visuals clear when the cursor leaves the
