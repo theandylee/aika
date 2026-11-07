@@ -3,7 +3,7 @@ package main
 import "core:sys/windows"
 
 // Fractions of the selected local day keep the view stable across date changes.
-// The overview always shows the whole day; lists and totals are never filtered.
+// The overview always shows the whole day; the lists and totals follow the filter.
 // ZOOM_H, ZOOM_PAD and ZOOM_BAR_H live in ui_consts.odin.
 ZOOM_MIN_SPAN :: 1.0 / 1440.0
 

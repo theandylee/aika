@@ -634,7 +634,7 @@ draw_list :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 
 // --- Totals panel (bottom right) ---
 
-build_totals :: proc(snapshot: Day_Snapshot, tl: i64) -> []TotRow {
+build_totals :: proc(snapshot: Day_Snapshot, tl: i64, filter: string = "") -> []TotRow {
 	if tl == 0 {
 		return nil
 	}
@@ -648,6 +648,9 @@ build_totals :: proc(snapshot: Day_Snapshot, tl: i64) -> []TotRow {
 		name := a.group_name
 		if len(name) == 0 {
 			name = a.display_name
+		}
+		if !snapshot_filter_matches(name, filter) {
+			continue
 		}
 		entry, ok := m[a.group_id]
 		if !ok {
@@ -672,7 +675,7 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	fill_rect(dc, x, lay.list_top, w, total_h, C_PANEL)
 	fill_frame(dc, x, lay.list_top, w, total_h, C_BORDER_SOFT)
 
-	totals := build_totals(snapshot, lane_timeline(ui.lane))
+	totals := build_totals(snapshot, lane_timeline(ui.lane), ui.filter)
 	defer free_totals_slice(totals)
 
 	total_ms: i64
