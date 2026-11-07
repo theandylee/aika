@@ -416,6 +416,20 @@ hover-drawn rectangles under the cursor plus the hovered timeline row), and
 every move while the cursor-following timeline hint is painted or about to be.
 Over empty lane space the hint is just the under-cursor time; over a block it
 adds the block's usual rows beneath the time. Drags invalidate on their own paths.
+Hover repaints are **partial**: while the only change is the cursor line and
+hint, `hover_dirty_rect` invalidates the union of what the last frame drew
+(`ui.hover_rect`, recorded by `draw_cursor_line`/`draw_tooltip_lines`) and
+everything the next one can draw (the line column plus a bound from
+`TOOLTIP_MAX_W` and four hint rows). `WM_PAINT` clips the back buffer to
+`rcPaint`, publishes it as `ui.paint_rect`, and `draw_day` skips the tabs,
+toolbar, ruler, lanes, zoom bar and list/totals panes that `paint_needs` says it
+does not touch (their scrollbar/state updates only matter after a full
+invalidation). Rules: any other hover-dependent drawing must either flip a
+`Hover_Signature.targets` bit (which forces a full invalidate) or be inside the
+dirty rect; every non-hover state change must invalidate with a nil rect; a
+hint taller or wider than the bound must raise `TOOLTIP_MAX_W`/the row count in
+`hover_dirty_rect` (`src/hover_dirty_test.odin` checks coverage). The day
+snapshot is not cached: building it is ~16 us per paint.
 `TrackMouseEvent` delivers
 `WM_MOUSELEAVE`, which clears hover visuals. Theme values live in one
 `Palette` struct (`src/palette.odin`) with named semantic fields and two constant
