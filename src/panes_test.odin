@@ -20,7 +20,7 @@ pane_resize_behavior :: proc(t: ^testing.T) {
 	pane_begin(.Timeline_Height, -4)
 	pane_pointer_move(100, lay.list_top - 4 + 90, lay)
 	grown := compute_layout(1320, 860)
-	testing.expect(t, grown.lane_h == 126 && grown.list_top == lay.list_top + 90)
+	testing.expect(t, abs(grown.lane_h - 126) <= 1 && abs(grown.list_top - (lay.list_top + 90)) <= 3)
 	testing.expect(t, grown.sidebar_w == lay.sidebar_w)
 	pane_pointer_move(100, 10000, grown)
 	grown = compute_layout(1320, 860)
@@ -31,14 +31,14 @@ pane_resize_behavior :: proc(t: ^testing.T) {
 	pane_begin(.List_Width, -4)
 	pane_pointer_move(lay.sidebar_x - 4 - 100, 600, lay)
 	wide := compute_layout(1320, 860)
-	testing.expect(t, wide.sidebar_w == dpi_px(SIDEBAR_W) + 100)
+	testing.expect(t, abs(wide.sidebar_w - (dpi_px(SIDEBAR_W) + 100)) <= 1)
 	pane_pointer_move(-10000, 600, wide)
 	wide = compute_layout(1320, 860)
 	testing.expect(t, wide.sidebar_x - dpi_px(SPLITTER_W) - wide.chart_x >= dpi_px(MIN_LIST_W))
 	pane_pointer_move(10000, 600, wide)
 	testing.expect(t, compute_layout(1320, 860).sidebar_w == dpi_px(MIN_TOTALS_W))
 
-	ui.pane_lane_h, ui.pane_totals_w = 160, 600
+	ui.pane_lane_frac, ui.pane_totals_frac = 0.5, 0.45
 	for size in ([3][2]i32{{704, 440}, {1320, 860}, {1920, 1080}}) {
 		r := compute_layout(size[0], size[1])
 		testing.expect(t, r.lane_h >= dpi_px(MIN_LANE_H))
@@ -48,11 +48,14 @@ pane_resize_behavior :: proc(t: ^testing.T) {
 		bar, _, _, _ := zoom_rects(r)
 		testing.expect(t, bar.bottom <= r.timeline_split.top)
 	}
-	testing.expect(t, compute_layout(1320, 860).lane_h == 160)
-	testing.expect(t, compute_layout(1320, 860).sidebar_w == 600)
-	ui.pane_lane_h, ui.pane_totals_w = 160, 600
+	// Sizes are fractions: they scale with the window instead of staying absolute.
+	ui.pane_lane_frac, ui.pane_totals_frac = 0.3, 0.4
+	small, big := compute_layout(1000, 700), compute_layout(2000, 1400)
+	testing.expect(t, abs(small.sidebar_w * big.chart_w - big.sidebar_w * small.chart_w) <= 2 * big.chart_w)
+	testing.expect(t, big.lane_h > small.lane_h * 3 / 2)
+	ui.pane_lane_frac, ui.pane_totals_frac = 0.31, 0.27
 	pane_begin(.Timeline_Height, -4)
-	ui.pane_lane_h, ui.pane_totals_w = 0, 0
+	ui.pane_lane_frac, ui.pane_totals_frac = 0, 0
 	ui_cancel_interaction()
-	testing.expect(t, pane_drag() == .None && ui.pane_lane_h == 160 && ui.pane_totals_w == 600)
+	testing.expect(t, pane_drag() == .None && ui.pane_lane_frac == 0.31 && ui.pane_totals_frac == 0.27)
 }

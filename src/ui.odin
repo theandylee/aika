@@ -76,8 +76,15 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	// Start with the original layout; user sizes are clamped, not overwritten,
 	// when the window shrinks so they return when it grows again.
 	lane_area := bottom_limit - (lay.ruler_y + dpi_px(RULER_H)) - dpi_px(120) - dpi_px(LIST_HDR) - 2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_H)
-	wanted_lane_h := ui.pane_lane_h
-	if wanted_lane_h == 0 { wanted_lane_h = min(dpi_px(96), max(dpi_px(MIN_LANE_H), lane_area / 3)) }
+	// User sizes are stored as fractions of the available span so they scale
+	// with the window; zero means "use the default".
+	lane_span := bottom_limit - (lay.ruler_y + dpi_px(RULER_H))
+	wanted_lane_h: i32
+	if ui.pane_lane_frac > 0 {
+		wanted_lane_h = i32(f32(lane_span) * ui.pane_lane_frac / 3)
+	} else {
+		wanted_lane_h = min(dpi_px(96), max(dpi_px(MIN_LANE_H), lane_area / 3))
+	}
 	max_lane_h := max(dpi_px(MIN_LANE_H), (bottom_limit - (lay.ruler_y + dpi_px(RULER_H)) -
 		2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_LANES_GAP) - dpi_px(ZOOM_H) - dpi_px(SPLITTER_W) - dpi_px(MIN_LOWER_H)) / 3)
 	lay.lane_h = clamp(wanted_lane_h, dpi_px(MIN_LANE_H), max_lane_h)
@@ -86,8 +93,8 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay.zoom_y = lay.lanes_bottom + dpi_px(ZOOM_LANES_GAP)
 	lay.list_top = lay.zoom_y + dpi_px(ZOOM_H) + dpi_px(SPLITTER_W)
 	lay.list_bottom = bottom_limit
-	wanted_totals_w := ui.pane_totals_w
-	if wanted_totals_w == 0 { wanted_totals_w = dpi_px(SIDEBAR_W) }
+	wanted_totals_w := dpi_px(SIDEBAR_W)
+	if ui.pane_totals_frac > 0 { wanted_totals_w = i32(f32(lay.chart_w) * ui.pane_totals_frac) }
 	lay.sidebar_w = clamp(wanted_totals_w, dpi_px(MIN_TOTALS_W),
 		max(dpi_px(MIN_TOTALS_W), lay.chart_w - dpi_px(SPLITTER_W) - dpi_px(MIN_LIST_W)))
 	lay.sidebar_x = lay.chart_x + lay.chart_w - lay.sidebar_w

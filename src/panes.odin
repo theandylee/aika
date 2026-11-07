@@ -28,11 +28,14 @@ pane_pointer_move :: proc(x, y: i32, lay: Layout) {
 	case .Timeline_Height:
 		max_h := max(dpi_px(MIN_LANE_H), (lay.list_bottom - lay.lane_y -
 			2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_LANES_GAP) - dpi_px(ZOOM_H) - dpi_px(SPLITTER_W) - dpi_px(MIN_LOWER_H)) / 3)
-		ui.pane_lane_h = clamp((y - s.offset - lay.lane_y -
+		lane_h := clamp((y - s.offset - lay.lane_y -
 			2 * dpi_px(LANE_GAP) - dpi_px(ZOOM_LANES_GAP) - dpi_px(ZOOM_H) - dpi_px(SPLITTER_W)) / 3, dpi_px(MIN_LANE_H), max_h)
+		span := max(1, lay.list_bottom - lay.lane_y)
+		ui.pane_lane_frac = f32(3 * lane_h) / f32(span)
 	case .List_Width:
-		ui.pane_totals_w = clamp(lay.chart_x + lay.chart_w - x + s.offset,
+		totals_w := clamp(lay.chart_x + lay.chart_w - x + s.offset,
 			dpi_px(MIN_TOTALS_W), max(dpi_px(MIN_TOTALS_W), lay.chart_w - dpi_px(SPLITTER_W) - dpi_px(MIN_LIST_W)))
+		ui.pane_totals_frac = f32(totals_w) / f32(max(1, lay.chart_w))
 	}
 }
 

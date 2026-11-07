@@ -39,15 +39,14 @@ dpi_scaling_behavior :: proc(t: ^testing.T) {
 	testing.expect(t, lay192.list_top > lay96.list_top)
 	testing.expect(t, lay192.sidebar_w == 2*lay96.sidebar_w)
 
-	// Stored pane sizes rescale across a DPI change instead of staying small.
+	// Stored pane fractions are DPI-independent; defaults (zero) stay zero.
 	dpi_set(96)
-	ui.pane_lane_h, ui.pane_totals_w = 100, 320
+	ui.pane_lane_frac, ui.pane_totals_frac = 0.4, 0.25
 	ui_apply_dpi(192)
-	testing.expect(t, ui.pane_lane_h == 200 && ui.pane_totals_w == 640)
-	// Defaults (zero) stay zero so they recompute from scaled constants.
-	ui.pane_lane_h, ui.pane_totals_w = 0, 0
+	testing.expect(t, ui.pane_lane_frac == 0.4 && ui.pane_totals_frac == 0.25)
+	ui.pane_lane_frac, ui.pane_totals_frac = 0, 0
 	ui_apply_dpi(96)
-	testing.expect(t, ui.pane_lane_h == 0 && ui.pane_totals_w == 0)
+	testing.expect(t, ui.pane_lane_frac == 0 && ui.pane_totals_frac == 0)
 
 	// ui_apply_dpi rebuilds real GDI fonts; drop them so the test leaks nothing.
 	for f in ([5]windows.HFONT{ui.font_normal, ui.font_bold, ui.font_small, ui.font_title, ui.font_icons}) {

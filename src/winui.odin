@@ -77,7 +77,7 @@ UiState :: struct {
 	totals_expanded: map[string]bool,
 	scroll_date: int,
 	zoom_start, zoom_end: f64,
-	pane_lane_h, pane_totals_w: i32, // zero = default; retained for this session
+	pane_lane_frac, pane_totals_frac: f32, // fraction of available span; zero = default; retained for this session
 }
 
 ui: UiState
@@ -1220,10 +1220,7 @@ ui_apply_dpi :: proc(new_dpi: u32) {
 	if new_dpi == 0 || new_dpi == ui.dpi {
 		return
 	}
-	old := dpi_current()
 	ui.dpi = new_dpi
-	ui.pane_lane_h = dpi_rescale(ui.pane_lane_h, old, new_dpi)
-	ui.pane_totals_w = dpi_rescale(ui.pane_totals_w, old, new_dpi)
 	ui_recreate_fonts()
 	if ui.hwnd != nil {
 		w, h := client_size(ui.hwnd)

@@ -219,10 +219,10 @@ interaction_cancel_is_idempotent :: proc(t: ^testing.T) {
 
 	// Nothing active: cancelling changes nothing at all.
 	ui.zoom_start, ui.zoom_end = 0.3, 0.6
-	ui.pane_lane_h, ui.pane_totals_w = 101, 402
+	ui.pane_lane_frac, ui.pane_totals_frac = 0.31, 0.27
 	tag_ui.id, tag_ui.start_ms, tag_ui.end_ms = 7, 100, 200
 	ui_cancel_interaction()
-	testing.expect(t, ui.zoom_start == 0.3 && ui.zoom_end == 0.6 && ui.pane_lane_h == 101 && ui.pane_totals_w == 402)
+	testing.expect(t, ui.zoom_start == 0.3 && ui.zoom_end == 0.6 && ui.pane_lane_frac == 0.31 && ui.pane_totals_frac == 0.27)
 	testing.expect(t, tag_ui.id == 7 && tag_ui.start_ms == 100 && tag_ui.end_ms == 200)
 
 	// Pane: restores once. A later change must not be rolled back by a second
@@ -230,12 +230,12 @@ interaction_cancel_is_idempotent :: proc(t: ^testing.T) {
 	testing.expect(t, pane_pointer_down(100, lay.list_top - 4, lay))
 	testing.expect(t, pane_drag() == .Timeline_Height)
 	pane_pointer_move(100, lay.list_top + 40, lay)
-	testing.expect(t, ui.pane_lane_h != 101)
+	testing.expect(t, ui.pane_lane_frac != 0.31)
 	ui_cancel_interaction()
-	testing.expect(t, pane_drag() == .None && ui.pane_lane_h == 101 && ui.pane_totals_w == 402)
-	ui.pane_lane_h, ui.pane_totals_w = 140, 500
+	testing.expect(t, pane_drag() == .None && ui.pane_lane_frac == 0.31 && ui.pane_totals_frac == 0.27)
+	ui.pane_lane_frac, ui.pane_totals_frac = 0.4, 0.3
 	ui_cancel_interaction()
-	testing.expect(t, ui.pane_lane_h == 140 && ui.pane_totals_w == 500)
+	testing.expect(t, ui.pane_lane_frac == 0.4 && ui.pane_totals_frac == 0.3)
 
 	// Zoom: same.
 	bar, _, _, _ := zoom_rects(lay)

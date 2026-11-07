@@ -22,8 +22,8 @@ Press_State :: struct {
 Pane_State :: struct {
 	kind:          Pane_Drag,
 	offset:        i32,
-	saved_lane_h:  i32,
-	saved_totals_w: i32,
+	saved_lane_frac:   f32,
+	saved_totals_frac: f32,
 }
 
 // Zoom drag: kind selects handle/pan, start/end snapshot the live view for
@@ -76,7 +76,7 @@ interaction_end :: proc() {
 interaction_cancel :: proc() {
 	switch v in ui.interaction {
 	case Pane_State:
-		ui.pane_lane_h, ui.pane_totals_w = v.saved_lane_h, v.saved_totals_w
+		ui.pane_lane_frac, ui.pane_totals_frac = v.saved_lane_frac, v.saved_totals_frac
 	case Zoom_State:
 		ui.zoom_start, ui.zoom_end = v.start, v.end
 	case Tag_State:
@@ -101,7 +101,7 @@ press_hit :: proc() -> Hit {
 
 pane_begin :: proc(kind: Pane_Drag, offset: i32) {
 	ui.interaction = Pane_State{kind = kind, offset = offset,
-		saved_lane_h = ui.pane_lane_h, saved_totals_w = ui.pane_totals_w}
+		saved_lane_frac = ui.pane_lane_frac, saved_totals_frac = ui.pane_totals_frac}
 }
 
 pane_drag :: proc() -> Pane_Drag {
