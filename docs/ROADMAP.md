@@ -29,7 +29,7 @@ fixes before expanding the tracker. Checkboxes reflect verified follow-up work.
   (`src/tracker.odin`, `src/db.odin`). Trim or remove all application intervals
   overlapping the backdated idle period, including persisted rows from title
   changes during the grace period. Reconcile the in-memory activity as well.
-  **Acceptance:** title changes during the ten-minute idle grace period produce
+  **Acceptance:** title changes during the 60-second idle grace period produce
   no negative-duration rows and no application activity within the resulting
   Away interval. Cover a current activity that starts after the transition time.
   Implemented as an atomic, retryable transaction over current-spell-owned rows,
@@ -112,7 +112,7 @@ DPI/keyboard policy and new tracker features were not part of this step.
   measurement reuses the backbuffer DC, and overpainted bars coalesce. Frames
   dropped to ~5.7 ms (spread day) and ~4.4–5.0 ms (clustered day). Pixel-parity
   tests cover bars and space-free text; text containing spaces may shift ≤1 px.
-  Repaint frequency on mouse move is a separate, unaddressed lever.
+  Mouse-move repaint frequency was then addressed separately (A11).
 
 - [x] **A11. Mouse-move repaints** (`src/hover.odin`, `src/winui.odin`).
   `WM_MOUSEMOVE` no longer invalidates the whole frame on every position
@@ -182,6 +182,14 @@ idle threshold fires.
   timeline 2 and timeline 3 has a gap.
 - Unlock → `Active` resumes and a new app activity starts.
 - Sleep/resume behaves the same.
+
+ManicTime reference (from the former reverse-engineering notes, kept here so
+the file could go): two idle strategies — `TrackAwayWithIdleTime`
+(`TimeLimitedInactivity` checks `GetLastInputInfo` every 5 minutes and backdates
+away to `now - threshold`, default 10 minutes) versus `ScreenSaverInactivity`
+(screensaver/monitor-off/lock events). aika already implements the first
+strategy with 1-second checks and a 1-minute default; this item only adds the
+lock/power event sources and their `SessionLocked`/`PowerOff` rows.
 
 ### 2. Settings
 
@@ -253,12 +261,13 @@ records window titles.
 DocumentInfo :: struct {
     display_name: string,
     document_name: string,
-    group_name: string,
-    type: DocumentType,
+    group_name: string, // stable identity (ManicTime: DocumentGroupName)
+    type: DocumentType, // ManicTime: File / WebSite / Other
 }
 ```
 
-- Add a retriever registry ordered by priority.
+- Add a retriever registry ordered by priority (ManicTime: `CallOrder`),
+  caching results per window.
 - Implement Chrome/Edge URL retrieval:
   - `EnumChildWindows` on the foreground window
   - find the omnibox class
@@ -309,6 +318,12 @@ creation, persisted tag blocks, border resizing, details and totals. See
 - Export to CSV.
 - Chart view: reuse the stacked-bar drawing from `src/ui.odin`.
 
+ManicTime reference (from the former reverse-engineering notes): the day loader
+queries by local date range over the `Activity` rows (no session table), trims
+bar start/end to the day, refreshes every second but re-queries a timeline only
+after its `UpdateInterval` (10 s for local timelines), and catches up
+incrementally via `UpdatedTimestamp`/deletion timestamps.
+
 Keep it read-only initially; do not build an editor until tags are stable.
 
 ---
@@ -348,10 +363,9 @@ Improvements:
 - Group legend with toggles.
 - Hover highlight for all bars, not just app bars.
 - Zoom/pan is implemented, including overview resizing and middle-button panning.
+- DPI scaling is implemented centrally via `dpi_px` (Per-Monitor V2, audit #24):
+  design constants, fonts, stored pane sizes and minimum tracking size all scale.
 - Keyboard shortcuts: `T` today, arrows for days, `Space` pause.
-- DPI scaling: GDI text sizes are fixed pixels today; `GetDpiForWindow` +
-  font recreation (or `SystemParametersInfo`) is a likely future step.
-- High-DPI font sizes.
 - Empty-state hints.
 
 ---
@@ -361,7 +375,9 @@ Improvements:
 ### 10. Direct `.sdf` access via .NET sidecar
 
 Not recommended for the core app, but useful if live two-way compatibility is
-required:
+required (ManicTime's tracker/client split was mapped with Ghidra/ilspycmd
+against `Finkit.ManicTime.*` in `C:\Program Files (x86)\ManicTime`; re-derive
+from the installed assemblies if this is ever revived):
 
 - Build a small C# helper that exposes a line-based JSON protocol over
   stdin/stdout or a named pipe.
@@ -384,14 +400,14 @@ Document the trade-off clearly before implementing.
 
 | Item | Notes |
 |---|---|
-| Automated reliability coverage | 84 Odin tests plus isolated native UI/import scripts; extend with each change |
+| Automated reliability coverage | 119 Odin tests plus isolated native UI/import scripts; extend with each change |
 | Hardcoded timing constants | Move to `Settings` |
 | Hardcoded group colors | ManicTime-like palette is fine, but make it configurable |
 | Additive schema migrations | Schema version 1 with import provenance; targeted indexes created idempotently |
 | `Sequence` table unused | Needed only for exact ManicTime ID behavior |
 | Document table unused | Implement with the Documents timeline |
 | No error log | Add rotating `aika.log` |
-| UI uses fixed pixel sizes | Add DPI-aware scaling |
+| UI uses fixed pixel sizes | Central `dpi_px` scaling (Per-Monitor V2) since audit #24 |
 | Importer recomputes local dates | Preserve exported local fields for exact history |
 | `fmt.println` in GUI build | No console; use a log file for diagnostics |
 

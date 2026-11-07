@@ -109,7 +109,7 @@ main message loop, without a separate modal loop. The window follows the palette
    - `ProductName` (used as the group display name)
    - `CompanyName`
    - `FileDescription`
-6. Fall back to `Process.MainWindowTitle`-style behavior if the title is empty
+6. Fall back to the resolved application name when the title is empty.
 7. On cache miss/expiry, build the group identity:
    ```
    key      = lowercase(file_name + ";" + product_name)
@@ -276,8 +276,11 @@ This is a correctness projection, not a derived-view cache: snapshot arrays/maps
 are rebuilt per paint, and new write-through cache rows currently copy the day
 array. Their lifetime is bounded by the paint callback's independent scratch scope.
 Derived-view caching and array-capacity changes remain deferred pending
-measurements. Step 6 optimized latest-row/task-neighbor queries; the later audit
-#13 follow-up adds only the bounded foreground metadata/group cache above.
+measurements. Step 6 optimized latest-row/task-neighbor queries; the later
+follow-ups split the day load into a start-time seek plus the partial
+`IX_Activity_Long` index (audit #14), reuse prepared statements on measured
+hot paths (audit #17), and add the bounded foreground metadata/group cache
+above (audit #13).
 
 ## Persistence layer
 
@@ -619,13 +622,15 @@ heights together; the vertical divider trades list width for totals width.
 Sizes are retained for the current session and clamped to usable minimums on
 window resize. Escape or capture loss restores the sizes from before the drag.
 
-### Header and footer
+### Toolbar and status bar
 
 - Date navigation (`<`, Today, `>`).
 - Start/Stop task with elapsed timer.
-- Current window label.
-- Activity count / idle time.
-- DB path.
+- Day start / Day end / Duration boxes (ManicTime-style).
+- Filter row with the native EDIT control.
+- Status bar: local wall-clock date/time, a tracking-state dot (green while
+  tracking, grey when paused, orange with a message on storage errors), and
+  retained save/load warnings until the problem clears.
 
 ## Import pipeline
 

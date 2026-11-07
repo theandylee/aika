@@ -35,7 +35,7 @@ Working MVP:
 - Idle/away detection (`GetLastInputInfo`, default 1 min without keyboard or mouse input)
 - Tracking settings (top-right Settings button or tray menu): 1–500 minute idle timeout, saved per database
 - ManicTime-style day view: tab strip, date navigation, full 24 h timeline with
-  Tags / Computer Usage / Applications / Documents lanes
+  Tags / Computer Usage / Applications lanes
 - Application timeline with live current-activity bar
 - Computer usage lane (Active / Away)
 - Time tagging: drag a range, search/select or create a tag, resize either edge
@@ -43,7 +43,8 @@ Working MVP:
 - Per-application totals with color chips and a grand total
 - Filter box wired to the lists
 - Date navigation
-- Pause/resume tracking
+- Automatic tracking pause with retry on persistent write failures (no manual
+  pause control yet)
 - ManicTime `.sdf` → JSON → SQLite importer
 - ManicTime-compatible date semantics (`StartLocalDate` = days since 2000-01-01)
 
@@ -60,7 +61,7 @@ Not implemented yet:
 Requirements:
 
 - Windows
-- Odin (tested with `dev-2025-11-nightly`)
+- Odin (tested with `dev-2026-11-nightly:10e57eb`)
 - `vendor/sqlite/sqlite3.lib` (already built in this repo)
 
 Run:
@@ -102,7 +103,7 @@ without time snapping. Tags appear in the lane, details list, and totals, and
 survive restarting the app. Tag blocks cannot overlap: a drag within a block is
 a no-op, and dragging out of a block selects only the free time beyond its edge.
 Selections stop at the next occupied block; resizing also stops at neighboring
-blocks. Deleting/renaming tags and moving whole blocks are not yet
+blocks. Renaming tags and moving whole blocks are not yet
 implemented.
 
 Right-click a tag block and choose **Delete** to remove that time interval.
@@ -200,7 +201,7 @@ GetForegroundWindow (1 Hz)
   -> GetWindowThreadProcessId + QueryFullProcessImageNameW
   -> FileVersionInfo (ProductName, CompanyName, FileDescription)
   -> GetWindowTextW (title)
-  -> compare (process id, title, document)
+  -> compare (group_id, window title)
   -> ApplicationActivated
   -> activity row start/end
   -> heartbeat extends current row every 10 s
@@ -220,11 +221,20 @@ Like ManicTime:
 src/
   main.odin       entry point, native message loop, date navigation
   tracker.odin    foreground polling, idle/away state, activity lifecycle
+  tracker_io.odin injectable time/idle/foreground/write callbacks (tests)
+  tracker_writes.odin bounded pending-write queue, outage pause, retry
+  focus_cache.odin bounded process-instance metadata/group cache
+  activity_snapshot.odin effective day projection, write-through cache
   win32.odin      Win32 bindings, time helpers, version info, group identity
   db.odin         SQLite schema/repository, ManicTime-compatible dates
+  db_tags.odin    tag/task repository transactions
+  db_time.odin    shared timestamp binding
   sqlite.odin     SQLite C bindings
   winui.odin      native window: WndProc, timer, GDI helpers, double buffer, hit tests
   ui.odin         ManicTime-style day view (lanes, ruler, list, totals, tooltip)
+  interaction.odin one ui.interaction union, begin/end/cancel
+  dpi.odin        central Per-Monitor V2 scaling
+  palette.odin    named Palette struct and C_* mirror
   importer.odin   JSON import command
 tools/
   export-manictime.ps1
@@ -233,7 +243,6 @@ vendor/
 docs/
   ARCHITECTURE.md
   DATABASE.md
-  MANICTIME.md
   DEVELOPMENT.md
   ROADMAP.md
 ```
@@ -246,6 +255,6 @@ docs/
 | [`docs/ODIN-PITFALLS.md`](docs/ODIN-PITFALLS.md) | Odin compiler pitfalls hit during the native-UI rewrite (read before touching GDI/UI code) |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Tracker, persistence, and UI internals |
 | [`docs/DATABASE.md`](docs/DATABASE.md) | Schema, date/group semantics, example queries |
-| [`docs/MANICTIME.md`](docs/MANICTIME.md) | Reverse-engineering notes from the original app |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Toolchain, build, debugging, common failures |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Next features and technical debt |
+| [`docs/AUDIT.md`](docs/AUDIT.md) | Project audit backlog and follow-up verification |

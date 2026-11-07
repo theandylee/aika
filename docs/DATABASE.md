@@ -13,7 +13,7 @@ data\aika.db
 Override with:
 
 ```bat
-build\aika.exe --db D:\somewhere\aika.db
+build\aika.exe --db <path>\aika.db
 ```
 
 SQLite is opened with:
@@ -233,7 +233,7 @@ Examples from the real ManicTime database:
 
 | Date | Stored value |
 |---|---:|
-| 2022-03-07 | 8104 |
+| 2022-03-07 | 8101 |
 | 2026-11-06 | 9806 |
 
 Conversion helpers in `src/win32.odin`:
@@ -511,7 +511,8 @@ Always use read-only mode while aika or another tool may be writing:
 
 ```python
 import sqlite3
-p = r"D:\Dev\aika\data\aika.db"
+from pathlib import Path
+p = Path("data/aika.db").resolve()
 c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
 for row in c.execute("SELECT COUNT(*) FROM Activity"):
     print(row)

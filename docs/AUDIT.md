@@ -494,13 +494,27 @@ verified. References describe the source at audit time; line numbers may drift.
   and the pixel harness were migrated to it with identical coordinates and
   assertions. The opt-in view benchmark takes the same lock when enabled.
 
-- [ ] **26. Documentation has drifted from implementation.**
+- [x] **26. Documentation has drifted from implementation.**
   References: `AGENTS.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md`.
   Examples include raylib references, four-lane descriptions despite three
   rendered lanes, outdated status-bar descriptions, and “merged backward”
   guidance versus code that backdates the next activity.
   Resolve behavioral contracts first, especially short-activity merge direction,
   then update documentation. Preserve deliberate platform/tracking invariants.
+  Fixed after all behavior was settled: `AGENTS.md` no longer calls the app
+  raylib-based and its repo map covers the current modules; `README.md` claims
+  three lanes, documents implemented tag deletion and the real
+  `(group_id, title)` comparison; `ARCHITECTURE.md` describes the actual
+  toolbar/status bar and the empty-title fallback; `DATABASE.md` corrects the
+  `2022-03-07` example to 8101; `ROADMAP.md` drops the ten-minute grace
+  period, the "unaddressed" mouse-move lever, the fixed-pixel future and the
+  84-test count; `DEVELOPMENT.md` documents the Per-Monitor V2 manifest, the
+  `Palette`/`palette_apply` split, the no-manual-pause reality, and labels the
+  raylib-era error rows historical. Verified by re-reading every doc against
+  `src/` (no code changed): the `(group_id, title)` comparison lives in
+  `poll_focus`, the toolbar draws prev/next/Today/task/day boxes, the status
+  bar draws the wall clock plus tracking dot and storage warnings, empty
+  titles fall back to the resolved app name, and `2022-03-07` is day 8101.
 
 ## Follow-up verification — step 2
 
@@ -804,6 +818,21 @@ verified. References describe the source at audit time; line numbers may drift.
 - Not done: overnight GDI/handle profiling, heap-OOM injection, and
   `test-import.py` (CLI-only, no window helpers) stays outside the native
   harness. `tools/__pycache__/` and the alternate binaries stay untracked.
+
+## Follow-up verification — audit item 26
+
+- Docs-only change: no `src/` or `tools/` behavior touched, so the 119-test
+  suite, builds and native scripts from the audit #25 verification still
+  stand. Claims were re-checked against code instead of re-running everything:
+  `poll_focus` comparison, toolbar/status-bar drawing, empty-title fallback,
+  ManicTime day arithmetic, and the documented test/toolchain counts.
+- Behavioral contracts were settled before editing (short activities merge
+  backward into the same-spell predecessor and are omitted without one;
+  idle cutoff is 60 s; the UI draws three lanes). Platform/tracking
+  invariants in `AGENTS.md` were preserved, not rewritten.
+- `docs/ODIN-PITFALLS.md` needed no changes (compiler traps, unaffected by
+  behavior work). Historical verification counts in `AUDIT.md`
+  and `ROADMAP.md` follow-ups were left as written.
 
 ## Guardrails for follow-up work
 

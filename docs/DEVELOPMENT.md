@@ -10,13 +10,7 @@
 | C compiler for SQLite | MSVC 2022 (`cl.exe` 14.38) |
 | PowerShell | Windows PowerShell 5.1 for the exporter |
 
-Odin on this machine:
-
-```
-D:\Programs\odin\odin.exe
-```
-
-The project does not require `ODIN_ROOT` to be set; `odin` on `PATH` is enough.
+Just put `odin` on `PATH`; the project does not require `ODIN_ROOT` to be set.
 After updating the user PATH, restart existing terminals/apps so they inherit
 the new location (the previous install used WinGet's package directory).
 
@@ -31,11 +25,11 @@ integer literals. See [`ODIN-PITFALLS.md`](ODIN-PITFALLS.md) for migration detai
 ## Build
 
 ```bat
-cd /d D:\Dev\aika
+:: from the repository root
 build.bat
 ```
 
-`build.bat` runs:
+`build.bat` runs (it changes to its own directory first):
 
 ```bat
 odin build src -out:build\aika.exe -subsystem:windows -resource:assets/aika.rc
@@ -46,8 +40,10 @@ odin build src -out:build\aika-cli.exe -resource:assets/aika.rc
 imports and debugging.
 
 Both executables embed `assets/aika.manifest` via `assets/aika.rc` to opt into
-Common Controls v6 visual styles. Keep the resource flag when building manually;
-without it native controls revert to their classic appearance.
+Common Controls v6 visual styles and Per-Monitor V2 DPI awareness (the window
+handles `WM_DPICHANGED`; see `src/dpi.odin`). Keep the resource flag when
+building manually; without it native controls revert to their classic
+appearance and Windows bitmap-scales the window on high-DPI monitors.
 
 Run:
 
@@ -127,8 +123,11 @@ before touching it:
 - Bootstrap failure unwinds acquired resources and exits nonzero. Backbuffer
   allocation is transactional: DC/bitmap/selection failure releases only the new
   partial buffer and paints an error fallback, never a stale-sized BitBlt.
-- Colors are `COLORREF` literals (`0x00BBGGRR`); mutable UI palette variables
-  are assigned by `theme_set_palette`. Semantic activity colors remain constants.
+- Colors live in one `Palette` struct (`src/palette.odin`) with named semantic
+  fields; `palette_apply` mirrors the active palette into the `C_*`
+  (`0x00BBGGRR`) variables the drawing code reads, and `theme_set_palette`
+  in `src/theme.odin` only selects light vs dark. Semantic activity colors
+  remain constants.
 - `i32` vs `int` matters: loop counters and rectangle coordinates are `i32`,
   while `len()` and array literals produce `int`. Cast with `i32(...)` at
   call sites.
@@ -196,9 +195,9 @@ available locally in `vendor\sqlite\sqlite3.c` and `sqlite3.h`.
 Rebuild with MSVC:
 
 ```bat
-call "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat"
+call "<Visual Studio install>\VC\Auxiliary\Build\vcvars64.bat"
 
-cd /d D:\Dev\aika\vendor\sqlite
+cd /d <repo-root>\vendor\sqlite
 cl /nologo /c /O2 /DSQLITE_THREADSAFE=1 /DSQLITE_OMIT_LOAD_EXTENSION /DSQLITE_DQS=0 sqlite3.c /Fosqlite3.obj
 lib /nologo /out:sqlite3.lib sqlite3.obj
 ```
@@ -268,7 +267,8 @@ Use Python read-only:
 
 ```python
 import sqlite3
-p = r"D:\Dev\aika\data\aika.db"
+from pathlib import Path
+p = Path("data/aika.db").resolve()
 c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
 print(c.execute("select count(*) from Activity").fetchone())
 for r in c.execute("select * from Activity order by ActivityId desc limit 5"):
@@ -293,7 +293,9 @@ Past causes:
 
 Check:
 
-1. Is `tracker.enabled` true? The header button toggles it.
+1. Is `tracker.enabled` true? There is no manual pause button: `enabled` is
+   lifecycle state (automatic pause on write-outage queue exhaustion, resume on
+   drain, cleared on shutdown). A grey/orange status-bar dot reports it.
 2. Is the user idle? `idle_ms() >= configured timeout` switches to Away and stops
    app rows (default 1 minute; change it in Settings → Tracking).
 3. Is the window title changing every couple of seconds? The 5 s rule discards
@@ -490,8 +492,8 @@ fallback and continued activity tracking while open, using an isolated database.
 `python tools/test-tags-ui.py build/aika.exe` runs a native UI smoke test with
 its own temporary database (create, reverse drag, search/reuse, resize both
 edges, cancel, non-overlap, context-menu delete, tag reuse, persistence).
-Close the running app before rebuilding its EXE;
-otherwise build to a separate filename and pass that path to the smoke test.
+The running app owns its EXE, so never kill it to rebuild: build to a separate
+filename and pass that path to the smoke test instead.
 Build GUI and CLI sequentially: the resource compiler shares `assets/aika.res`.
 Use this manual checklist for
 the UI and tracker:
@@ -504,7 +506,9 @@ the UI and tracker:
 6. Leave both keyboard and mouse untouched beyond the configured timeout (default
    1 minute); verify an `Away` row in timeline 2
    and a gap in timeline 3.
-7. Pause tracking; verify no new rows. Resume; verify rows resume.
+7. Tracking pause/resume has no manual control; outage pause and recovery are
+   covered by `odin test src -vet` (queue exhaustion) and
+   `test-persistence-ui.py`. Verify rows resume after the configured timeout.
 8. Navigate dates; verify the timeline reloads.
 9. Import the sample JSON into a fresh DB; verify 202 activities / 2745 groups.
 10. Close via the window close button; verify the window hides and tracking continues.
@@ -521,9 +525,9 @@ the UI and tracker:
 | `LNK2005 CloseWindow already defined` | raylib era only — resolved by the native UI rewrite |
 | `LNK2019 ___chkstk_ms` | SQLite built with MinGW; rebuild with MSVC |
 | White window / no draw | font temp-allocator hang or stale exe |
-| Raygui button captions invisible | prebuilt `raygui.lib` stops drawing text after control-level style writes; see "Invisible raygui captions" — buttons are custom now, don't reintroduce raygui |
-| Blurry text | font atlas base size smaller than drawn size; see "Font atlas size" |
-| Uniformly too-small UI | missing `* UI_S` scaling; see "The `UI_S` scale factor" |
+| Raygui button captions invisible | historical (raylib era): prebuilt `raygui.lib` stops drawing text after control-level style writes; see "Invalid raygui captions" — buttons are custom now, don't reintroduce raygui |
+| Blurry text | font created at the wrong DPI or a missing Per-Monitor V2 manifest entry; fonts rebuild from scaled heights via `dpi_px` |
+| Uniformly too-small UI | manifest not embedded (missing `-resource:assets/aika.rc`) so Windows bitmap-scales the window, or design constants bypassing `dpi_px` |
 | `Access to the database file is not allowed` | SQL CE needs `Temp Path`; close ManicTime |
 | `there was an error parsing the query ... Key` | quote `[Key]` or `"Key"` / use `"Group"` |
 | Dates off by decades | used `yyyyMMdd` instead of days since 2000-01-01 |

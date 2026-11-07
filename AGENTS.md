@@ -1,7 +1,7 @@
 # AGENTS.md — aika
 
 This is the entry point for any agent working on **aika**, a Windows activity
-tracker and timeline viewer written in **Odin + raylib**.
+tracker and timeline viewer written in **Odin + native Win32/GDI**.
 
 Read this file first, then the focused docs it links to.
 
@@ -24,7 +24,7 @@ It is a **working MVP**, not a finished product. See `docs/ROADMAP.md`.
 ## 2. Quick start
 
 ```bat
-cd /d D:\Dev\aika
+:: from the repository root
 build.bat
 run.bat
 ```
@@ -150,6 +150,8 @@ src/
   main.odin       Entry point, args, message loop, date load
   tracker.odin    Focus polling, idle/away state, activity lifecycle
   tracker_intervals.odin  Atomic idle reconciliation, short merges, clock endpoints
+  tracker_io.odin Injectable time/idle/foreground/write callbacks for tests
+  tracker_writes.odin  Bounded pending-write queue, outage pause, retry
   focus_cache.odin  Bounded process-instance metadata/group cache; no title caching
   activity_snapshot.odin  Effective day projection, daily clipping, write-through cache
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
@@ -160,8 +162,26 @@ src/
   sqlite.odin     SQLite C bindings
   winui.odin      Native window: WndProc, timer, GDI helpers, double buffer, hit tests
   ui.odin         ManicTime-style Day view drawn with GDI (lanes, list, totals, tooltip)
+  ui_consts.odin  Named timers, thresholds, sizes, messages, control/pen IDs
+  geometry.odin   Shared layout rects for drawing and hit-testing
+  palette.odin    Named Palette struct, C_* mirror, fixed accents
+  colors.odin     Colorref vs Argb, channel/luma helpers, fixed UI colors
+  dpi.odin        Central Per-Monitor V2 scaling (dpi_px), DPI changes
+  interaction.odin  One ui.interaction union (Press/Pane/Zoom/Tag), begin/end/cancel
+  hover.odin      Hover signatures, on-demand mouse-move repaints
+  panes.odin      Captured splitter drags for timeline/list-totals panes
+  zoom.odin       Overview/timeline zoom and pan, wheel routing
+  cursor.odin     Cursor shapes for hit targets
+  filter_edit.odin  Native filter EDIT control behavior
+  date_picker.odin  Native owner-drawn date button and calendar popup
+  theme.odin      Light/dark toggle, palette/native control colors
+  settings.odin   Native Tracking settings window and .settings file
   tags.odin       Time-range dragging, native searchable tag picker, tag resizing
+  task.odin       Running-task lifecycle (tick/stop/flush, clock jumps)
+  totals_tree.odin  Hierarchical totals from slash-separated names
+  scratch.odin    Scoped reentrancy-safe scratch arenas for native callbacks
   importer.odin   JSON import command
+  ui_test_harness.odin  Shared-test guard: ui/tag_ui/palette snapshot + test mutex
 tools/
   export-manictime.ps1   Read ManicTime.sdf and write JSON
 vendor/
@@ -169,7 +189,6 @@ vendor/
 docs/
   ARCHITECTURE.md
   DATABASE.md
-  MANICTIME.md
   DEVELOPMENT.md
   ROADMAP.md
 ```
@@ -228,7 +247,8 @@ After changes:
 ```powershell
 @'
 import sqlite3
-p = r"D:\Dev\aika\data\aika.db"
+from pathlib import Path
+p = Path("data/aika.db").resolve()
 c = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
 print("activities", c.execute("select count(*) from Activity").fetchone()[0])
 for r in c.execute("select ActivityId,TimelineId,DisplayName,GroupId,StartLocalDate,StartLocalTime,EndLocalTime from Activity order by ActivityId desc limit 5"):
@@ -272,8 +292,6 @@ same ID for one source database generation, never an export filename or date.
 - `docs/ARCHITECTURE.md` — how tracking, persistence, and UI work in detail.
 - `docs/ODIN-PITFALLS.md` — compiler traps hit during the native-UI rewrite; read before touching `src/winui.odin` / `src/ui.odin`.
 - `docs/DATABASE.md` — schema, ManicTime date/key semantics, example queries.
-- `docs/MANICTIME.md` — reverse-engineering notes from the original ManicTime.
 - `docs/DEVELOPMENT.md` — toolchain, build, debugging, common failures.
 - `docs/ROADMAP.md` — next features with implementation notes.
 - `README.md` — user-facing overview.
-```
