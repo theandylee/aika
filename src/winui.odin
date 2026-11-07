@@ -1380,7 +1380,12 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	theme_apply_native()
 	if windows.SetTimer(ui.hwnd, windows.UINT_PTR(APP_TIMER_ID), APP_TIMER_INTERVAL_MS, nil) == 0 { return false }
 	if checkpoint != nil && !checkpoint(.Timer) { return false }
-	windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
+	// --hidden (login autostart) opens straight to the tray when it is available.
+	if start_hidden && ui_add_tray() {
+		windows.ShowWindow(ui.hwnd, windows.SW_HIDE)
+	} else {
+		windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
+	}
 	ready = true
 	return true
 }

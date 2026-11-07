@@ -2,6 +2,7 @@
 
 import "core:fmt"
 import "core:os"
+import "core:path/filepath"
 import "core:sys/windows"
 import "core:strings"
 
@@ -32,6 +33,9 @@ load_day :: proc(app: ^App) -> bool {
 	return true
 }
 
+// Set by --hidden: the GUI starts in the system tray instead of showing.
+start_hidden := false
+
 main :: proc() {
 	scratch: Scratch
 	context.temp_allocator = scratch_begin(&scratch)
@@ -47,6 +51,8 @@ main :: proc() {
 		switch args[i] {
 		case "--quiet", "-q":
 			quiet = true
+		case "--hidden":
+			start_hidden = true
 		case "--db":
 			if i + 1 >= len(args) || strings.has_prefix(args[i + 1], "--") || args[i + 1] == "" {
 				fmt.eprintln("--db requires a path")
@@ -69,7 +75,7 @@ main :: proc() {
 			i += 1
 			import_source = args[i]
 		case "--help", "-h":
-			msg := "aika - a ManicTime-style activity tracker\nusage: aika [--db path] [--import export.json [--import-source database-id]] [--quiet]"
+			msg := "aika - a ManicTime-style activity tracker\nusage: aika [--db path] [--import export.json [--import-source database-id]] [--quiet] [--hidden]"
 			fmt.println(msg)
 			if !quiet { message_box(msg, "aika") }
 			return
@@ -90,7 +96,11 @@ main :: proc() {
 		return
 	}
 
-	_ = os.make_directory("data")
+	// Create the database's own directory (not the cwd's "data"): autostart
+	// launches with an unrelated working directory and an absolute --db.
+	if dir := filepath.dir(db_path); dir != "" && dir != "." {
+		_ = os.make_directory(dir)
+	}
 
 	db, ok := db_open(db_path)
 	if !ok {

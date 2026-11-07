@@ -30,8 +30,44 @@ settings_save_minutes :: proc(db_path: string, minutes: int) -> bool {
 		transmute([]u8)fmt.tprintf("%d\n", minutes)) == nil
 }
 
-SettingsUi :: struct { hwnd, minutes: windows.HWND, control_failed: bool }
+SettingsUi :: struct {
+	hwnd, minutes, autostart: windows.HWND,
+	tracking_labels: [2]windows.HWND, // static labels beside the minutes box
+	page: int,                        // index into SETTINGS_PAGES
+	control_failed: bool,
+}
 settings_ui: SettingsUi
+
+SETTINGS_PAGES :: [2]string{"General", "Tracking"}
+SETTINGS_PAGE_GENERAL  :: 0
+SETTINGS_PAGE_TRACKING :: 1
+
+settings_page_rect :: proc(i: int) -> windows.RECT {
+	y := i32(12 + 28 * i)
+	return windows.RECT{10, y, 148, y + 26}
+}
+
+// Shows one page's controls and hides the other's; the parent repaints the
+// section list and group frames.
+settings_show_page :: proc(page: int) {
+	settings_ui.page = page
+	tracking := page == SETTINGS_PAGE_TRACKING
+	windows.ShowWindow(settings_ui.minutes, windows.SW_SHOW if tracking else windows.SW_HIDE)
+	for label in settings_ui.tracking_labels {
+		windows.ShowWindow(label, windows.SW_SHOW if tracking else windows.SW_HIDE)
+	}
+	windows.ShowWindow(settings_ui.autostart, windows.SW_HIDE if tracking else windows.SW_SHOW)
+	windows.InvalidateRect(settings_ui.hwnd, nil, windows.TRUE)
+}
+
+settings_focus_page :: proc() {
+	if settings_ui.page == SETTINGS_PAGE_TRACKING {
+		windows.SetFocus(settings_ui.minutes)
+		windows.SendMessageW(settings_ui.minutes, windows.EM_SETSEL, 0, -1)
+	} else {
+		windows.SetFocus(settings_ui.autostart)
+	}
+}
 
 // The settings window exists only while open (settings_close destroys it),
 // so a non-nil handle means it owns the cursor.
@@ -76,17 +112,43 @@ settings_accept :: proc() {
 	text, _ := windows.utf16_to_utf8(buf[:max(0, n)], context.temp_allocator)
 	minutes, ok := settings_parse_minutes(text)
 	if !ok {
+		settings_show_page(SETTINGS_PAGE_TRACKING)
 		windows.MessageBoxW(settings_ui.hwnd, wtext("Enter a whole number from 1 to 500 minutes."), wtext("Tracking settings"), windows.MB_ICONWARNING)
-		windows.SetFocus(settings_ui.minutes)
-		windows.SendMessageW(settings_ui.minutes, windows.EM_SETSEL, 0, -1)
+		settings_focus_page()
+		return
+	}
+	was_autostart := autostart_enabled()
+	want_autostart := windows.SendMessageW(settings_ui.autostart, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
+	if want_autostart != was_autostart && !autostart_set(want_autostart, global_app.db_path) {
+		windows.MessageBoxW(settings_ui.hwnd, wtext("Could not change the Windows startup entry. No changes were applied."), wtext("Settings"), windows.MB_ICONERROR)
 		return
 	}
 	if !settings_save_minutes(global_app.db_path, minutes) {
+		if want_autostart != was_autostart { autostart_set(was_autostart, global_app.db_path) }
 		windows.MessageBoxW(settings_ui.hwnd, wtext("Could not save settings beside the database. No changes were applied."), wtext("Settings"), windows.MB_ICONERROR)
 		return
 	}
 	global_app.tracker.idle_threshold_ms = i64(minutes) * MS_PER_MINUTE
 	settings_close()
+}
+
+// OK/Cancel are owner-drawn with the same flat face/border as the date button,
+// so they match the palette in both themes.
+draw_settings_button :: proc(item: ^Draw_Item) {
+	dc, r := item.hDC, item.rcItem
+	bg := C_BTN_FACE
+	if item.itemState & ODS_SELECTED != 0 { bg = C_BORDER_SOFT }
+	fill_rect(dc, r.left, r.top, r.right - r.left, r.bottom - r.top, bg)
+	fill_frame(dc, r.left, r.top, r.right - r.left, r.bottom - r.top, C_BTN_BORDER)
+	windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
+	buf: [32]u16
+	n := windows.GetWindowTextW(item.hwndItem, &buf[0], len(buf))
+	label, _ := windows.utf16_to_utf8(buf[:max(0, n)], context.temp_allocator)
+	draw_button_text(dc, label, r)
+	if item.itemState & ODS_FOCUS != 0 {
+		focus := windows.RECT{r.left + 3, r.top + 3, r.right - 3, r.bottom - 3}
+		DrawFocusRect(dc, &focus)
+	}
 }
 
 settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
@@ -104,18 +166,44 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		fill_rect(dc, 0, 0, w, h, C_BG)
 		fill_rect(dc, 8, 8, 142, h - 56, C_PANEL)
 		fill_frame(dc, 8, 8, 142, h - 56, C_BORDER)
-		fill_rect(dc, 10, 12, 138, 26, C_SECTION_HEAD)
 		windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
-		draw_string(dc, "Tracking", 18, 18, ui.font_normal, C_TXT)
-		fill_frame(dc, 164, 22, 370, 100, C_BORDER)
-		fill_rect(dc, 172, 14, 180, 18, C_BG)
-		draw_string(dc, "Time is marked as Away when", 176, 16, ui.font_normal, C_TXT)
-		draw_string(dc, "No keyboard or mouse input.", 176, 148, ui.font_normal, C_DIM)
-		draw_string(dc, "Changes apply when you click OK.", 176, 170, ui.font_normal, C_DIM)
+		pages := SETTINGS_PAGES
+		for name, i in pages {
+			r := settings_page_rect(i)
+			if i == settings_ui.page { fill_rect(dc, r.left, r.top, r.right - r.left, r.bottom - r.top, C_SECTION_HEAD) }
+			draw_string(dc, name, 18, r.top + 6, ui.font_normal, C_TXT)
+		}
+		if settings_ui.page == SETTINGS_PAGE_GENERAL {
+			fill_frame(dc, 164, 22, 370, 82, C_BORDER)
+			fill_rect(dc, 172, 14, 62, 18, C_BG)
+			draw_string(dc, "Startup", 176, 16, ui.font_normal, C_TXT)
+			draw_string(dc, "Runs from this folder; toggle again if you move aika.", 176, 76, ui.font_normal, C_DIM)
+		} else {
+			fill_frame(dc, 164, 22, 370, 100, C_BORDER)
+			fill_rect(dc, 172, 14, 180, 18, C_BG)
+			draw_string(dc, "Time is marked as Away when", 176, 16, ui.font_normal, C_TXT)
+			draw_string(dc, "No keyboard or mouse input.", 176, 148, ui.font_normal, C_DIM)
+		}
 		windows.EndPaint(hwnd, &ps)
 		return 0
-	case windows.WM_CTLCOLOREDIT, windows.WM_CTLCOLORSTATIC:
+	case windows.WM_CTLCOLOREDIT, windows.WM_CTLCOLORSTATIC, windows.WM_CTLCOLORBTN:
 		return theme_control_colors(wp)
+	case windows.WM_DRAWITEM:
+		item := transmute(^Draw_Item)(lp)
+		if item != nil && (item.CtlID == SETTINGS_ID_OK || item.CtlID == SETTINGS_ID_CANCEL) {
+			draw_settings_button(item)
+			return 1
+		}
+		return 0
+	case windows.WM_LBUTTONDOWN:
+		x, y := i32(i16(lp & 0xFFFF)), i32(i16((lp >> 16) & 0xFFFF))
+		for i in 0 ..< len(SETTINGS_PAGES) {
+			if rect_hit(settings_page_rect(i), x, y) {
+				if i != settings_ui.page { settings_show_page(i); settings_focus_page() }
+				break
+			}
+		}
+		return 0
 	case windows.WM_CLOSE:
 		settings_close()
 		return 0
@@ -158,22 +246,28 @@ settings_open :: proc() {
 	settings_ui.hwnd = windows.CreateWindowExW(0, wc.lpszClassName, wtext("Settings"), style,
 		x, y, width, height, ui.hwnd, nil, hi, nil)
 	if settings_ui.hwnd == nil { return }
-	settings_control("STATIC", "Computer is not used for", 0, 176, 58, 146, 22, 0)
+	settings_ui.tracking_labels[0] = settings_control("STATIC", "Computer is not used for", 0, 176, 58, 146, 22, 0)
 	settings_ui.minutes = settings_control("EDIT", fmt.tprintf("%d", global_app.tracker.idle_threshold_ms / MS_PER_MINUTE),
 		windows.WS_BORDER | windows.WS_TABSTOP | windows.ES_NUMBER, 326, 54, 54, 24, SETTINGS_ID_MINUTES)
 	windows.SendMessageW(settings_ui.minutes, windows.EM_SETLIMITTEXT, 3, 0)
-	settings_control("STATIC", "minutes (1–500)", 0, 388, 58, 136, 22, 0)
-	settings_control("BUTTON", "OK", windows.WS_TABSTOP | windows.BS_DEFPUSHBUTTON, 334, 394, 96, 28, SETTINGS_ID_OK)
-	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP, 438, 394, 96, 28, SETTINGS_ID_CANCEL)
+	settings_ui.tracking_labels[1] = settings_control("STATIC", "minutes (1–500)", 0, 388, 58, 136, 22, 0)
+	settings_ui.autostart = settings_control("BUTTON", "Start aika when I sign in to Windows",
+		windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 176, 44, 340, 24, SETTINGS_ID_AUTOSTART)
+	if settings_ui.autostart != nil && autostart_enabled() {
+		windows.SendMessageW(settings_ui.autostart, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
+	}
+	settings_control("BUTTON", "OK", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 334, 394, 96, 28, SETTINGS_ID_OK)
+	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 438, 394, 96, 28, SETTINGS_ID_CANCEL)
 	if settings_ui.control_failed { settings_close(); return }
 	dark := windows.BOOL(ui.dark)
 	DwmSetWindowAttribute(settings_ui.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, size_of(dark))
 	SetWindowTheme(settings_ui.minutes, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
+	SetWindowTheme(settings_ui.autostart, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	windows.EnableWindow(ui.hwnd, windows.FALSE)
+	settings_show_page(SETTINGS_PAGE_GENERAL)
 	windows.ShowWindow(settings_ui.hwnd, windows.SW_SHOW)
 	windows.SetForegroundWindow(settings_ui.hwnd)
-	windows.SetFocus(settings_ui.minutes)
-	windows.SendMessageW(settings_ui.minutes, windows.EM_SETSEL, 0, -1)
+	settings_focus_page()
 }
 
 settings_key :: proc(msg: ^windows.MSG) -> bool {
