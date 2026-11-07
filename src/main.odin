@@ -84,6 +84,12 @@ main :: proc() {
 		os.exit(2)
 	}
 
+	// Only the GUI is single-instance; CLI imports may run alongside it.
+	if import_path == "" && !acquire_single_instance() {
+		activate_existing_instance()
+		return
+	}
+
 	_ = os.make_directory("data")
 
 	db, ok := db_open(db_path)

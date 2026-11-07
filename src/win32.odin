@@ -24,6 +24,32 @@ foreign aika_gdi {
 	SelectClipRgn :: proc(dc: windows.HDC, rgn: windows.HRGN) -> i32 ---
 }
 
+@(default_calling_convention = "system")
+foreign aika_k32 {
+	CreateMutexW :: proc(attrs: rawptr, initial_owner: windows.BOOL, name: windows.LPCWSTR) -> windows.HANDLE ---
+}
+
+// Claims the per-session single-instance mutex. Returns false when another
+// aika GUI already owns it. The handle is intentionally never closed: the OS
+// releases it at process exit, which is exactly the lifetime we want.
+acquire_single_instance :: proc() -> bool {
+	h := CreateMutexW(nil, windows.FALSE, windows.utf8_to_wstring("Local\\aika_single_instance", context.temp_allocator))
+	if h == nil { return true } // cannot tell; do not block startup
+	return windows.GetLastError() != windows.ERROR_ALREADY_EXISTS
+}
+
+// Shows the already-running instance's main window (it may be hidden in the tray).
+activate_existing_instance :: proc() {
+	hwnd := windows.FindWindowW(windows.utf8_to_wstring(WNDC_CLASS, context.temp_allocator), nil)
+	if hwnd == nil { return }
+	if windows.IsIconic(hwnd) {
+		windows.ShowWindow(hwnd, windows.SW_RESTORE)
+	} else {
+		windows.ShowWindow(hwnd, windows.SW_SHOW)
+	}
+	windows.SetForegroundWindow(hwnd)
+}
+
 ETO_CLIPPED :: 0x0004
 GCP_USEKERNING :: 0x0008
 GGI_MARK_NONEXISTING_GLYPHS :: 0x0001
