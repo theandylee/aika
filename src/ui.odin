@@ -871,12 +871,18 @@ draw_tooltip_lines :: proc(dc: windows.HDC, w, h: i32, lines: []Tooltip_Line) {
 	}
 	tw = min(tw + dpi_px(TOOLTIP_FOLLOW_W_PAD), dpi_px(TOOLTIP_MAX_W))
 	th := dpi_px(TOOLTIP_LINE_PITCH * i32(len(lines)) + TOOLTIP_BOX_PAD)
-	tx, ty := tooltip_follow_origin(ui.mouse.x, ui.mouse.y, tw, th, w, h)
+	lay := compute_layout(w, h)
+	right_half := ui.mouse.x >= lay.chart_x + lay.chart_w / 2
+	tx, ty := tooltip_follow_origin(ui.mouse.x, ui.mouse.y, tw, th, w, h, right_half)
 	ui.hover_rect = rect_union(ui.hover_rect, windows.RECT{tx, ty, tx + tw, ty + th})
 	fill_rect(dc, tx, ty, tw, th, C_TIP_BG)
 	fill_frame(dc, tx, ty, tw, th, C_TIP_BORDER)
 	for l, i in lines {
-		draw_string(dc, l.text, tx + 8, ty + 6 + i32(i) * TOOLTIP_LINE_PITCH, l.font, l.color, tw - 16)
+		x := tx + 8
+		if tx < ui.mouse.x { // box is left of the cursor: right-align the text
+			x = tx + tw - 8 - min(text_pixel_width(l.text, l.font), tw - 16)
+		}
+		draw_string(dc, l.text, x, ty + 6 + i32(i) * TOOLTIP_LINE_PITCH, l.font, l.color, tw - 16)
 	}
 }
 

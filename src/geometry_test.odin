@@ -89,6 +89,8 @@ geometry_behavior :: proc(t: ^testing.T) {
 	testing.expect(t, x == 700 - 200 - 14 && y == 114)
 	x, y = tooltip_follow_origin(100, 580, 200, dpi_px(TOOLTIP_FOLLOW_H), W, H) // would pass the bottom edge
 	testing.expect(t, x == 114 && y == 580 - dpi_px(TOOLTIP_FOLLOW_H) - 14)
+	x, y = tooltip_follow_origin(300, 100, 200, dpi_px(TOOLTIP_FOLLOW_H), W, H, true) // forced left even with room
+	testing.expect(t, x == 300 - 200 - 14 && y == 114)
 	x, y = tooltip_follow_origin(5, 5, 900, 700, W, H) // flipped above/left, clamped to the origin
 	testing.expect(t, x == 0 && y == 0)
 

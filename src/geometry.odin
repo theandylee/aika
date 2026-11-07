@@ -113,10 +113,12 @@ draw_single_line_tooltip :: proc(dc: windows.HDC, r: windows.RECT, label: string
 
 // Top-left of the cursor-following tooltip: below-right of the cursor, flipped to
 // the other side near the right/bottom edge, then clamped to the client origin.
-tooltip_follow_origin :: proc(mouse_x, mouse_y, tw, th, w, h: i32) -> (x, y: i32) {
+// force_left pins the box to the cursor's left (used in the timeline's right
+// half so it never jumps sides depending on the remaining space).
+tooltip_follow_origin :: proc(mouse_x, mouse_y, tw, th, w, h: i32, force_left := false) -> (x, y: i32) {
 	x = mouse_x + dpi_px(TOOLTIP_FOLLOW_GAP)
 	y = mouse_y + dpi_px(TOOLTIP_FOLLOW_GAP)
-	if x + tw > w - dpi_px(TOOLTIP_EDGE_MARGIN) { x = mouse_x - tw - dpi_px(TOOLTIP_FOLLOW_GAP) }
+	if force_left || x + tw > w - dpi_px(TOOLTIP_EDGE_MARGIN) { x = mouse_x - tw - dpi_px(TOOLTIP_FOLLOW_GAP) }
 	if y + th > h - dpi_px(TOOLTIP_EDGE_MARGIN) { y = mouse_y - th - dpi_px(TOOLTIP_FOLLOW_GAP) }
 	if x < 0 { x = 0 }
 	if y < 0 { y = 0 }
