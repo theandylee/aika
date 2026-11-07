@@ -89,6 +89,13 @@ deferred. DPI/keyboard policy and new tracker features were not part of this ste
   completed writes stay visible before the next reload and rollback never changes
   the cache. Running tasks use acknowledged endpoints to respect tag neighbors.
 
+- [x] **A8. Repository boundary cleanup (audit #20)** (`src/db_tags.odin`,
+  `src/db_time.odin`). Tag/task transactions, overlap/neighbor checks and identity
+  lookup now live behind repository operations rather than in UI/task code.
+  Timestamp bindings are shared across tracker, tags and imports. Checked results
+  distinguish storage failure from overlap, and failed writes/commits cannot
+  advance task/cache state. No schema migration or interval-policy change.
+
 ---
 
 ## P0 — finish the tracker core

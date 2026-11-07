@@ -397,6 +397,13 @@ multi-day clipping, queue recovery, failed reads, atomic cache publication after
 idle COMMIT, clock-jump/frozen endpoints, task metadata and half-open pixel hits.
 The snapshot tests run without changing shared UI globals and borrow source
 metadata only for the projection's scratch lifetime.
+`src/db_tags_test.odin` covers repository-owned tag/task transactions and their
+rollback, contention, target validation, boundary and cache-acknowledgement
+contracts. Shared-memory SQLite connections exercise independent writers without
+creating database files. Timestamp tests verify all persisted representations
+for normal insert/end updates, tag resizing and import insert/update statements.
+The tag UI smoke test also exercises retained-picker retry under a real writer
+lock; database failure must not be presented as an overlap conflict.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.

@@ -248,6 +248,13 @@ measurements; step 6 optimized only measured latest-row/task-neighbor queries.
 
 `src/db.odin` is a small synchronous SQLite repository.
 
+`src/db_tags.odin` owns tag/task business transactions; UI and task lifecycle code
+do not issue SQL, bind parameters or manage BEGIN/COMMIT/ROLLBACK. Timestamp writes
+share `db_bind_time` in `src/db_time.odin`, which binds local day/time, UTC time and
+UTC milliseconds from one instant. Explicit column mappings support normal
+insertion, end-only updates, tag resizing and guarded import insert/update layouts;
+every binding result is checked before stepping the statement.
+
 Failed opens close their handle and owned path before returning an empty DB.
 Cleanup is idempotent. The additive `(TimelineId, StartUtcMs, ActivityId)` index
 supports latest-row ordering and task-boundary seeks. Day overlap reads explicitly
@@ -266,6 +273,8 @@ Important functions:
 | `db_load_activities` | Load a day for timelines 1, 2 and 3 |
 | `db_load_tags` / `db_ensure_tag` | List tags / reuse or create a tag group |
 | `db_resize_tag` | Update both bounds and all timestamp fields of a tag |
+| `db_create_tag_block` / `db_start_task` | Atomically resolve tag identity/color and create a nonoverlapping block |
+| `db_extend_task_until_boundary` | Validate the task owner, find neighbors and resize within one transaction |
 | `db_ensure_group` | Lookup/insert group by `(timeline, key hash)` |
 | `db_usage_group` | Get the seeded Active/Away/etc. group id |
 | `db_import_group` | Resolve group by timeline/key; preserve existing metadata |
@@ -280,6 +289,24 @@ only after success. Day/tag list readers discard partial results on error.
 `load_day` replaces the cache only after a complete read; failed navigation keeps
 the previous loaded date and data. Automatic failed-read retries are limited to
 once per second.
+
+Tag/task repository operations return `DB_Tag_Result`: `Ok`, `Overlap`, `Invalid`,
+`Not_Found`, `Busy`, or `Failed`. A storage failure is not evidence of occupied
+time. Block creation acquires `BEGIN IMMEDIATE`, checks overlap, creates/reuses a
+case-insensitive tag name or validates a selected Tags group, reads its color,
+inserts and commits. Its returned ID/metadata are zero on failure. The picker
+retains its selection on storage failure; actual overlaps keep the prior
+dismiss/reload behavior.
+
+Task extension holds the same writer transaction for reading the saved task and
+nearest future tag, checking the resulting interval and resizing all timestamp
+fields. A stale start, non-Tag ID or request to overwrite a newer saved endpoint
+is rejected. Failed writes or COMMIT leave both task acknowledgement and cached
+endpoints unchanged. The lifecycle still handles monotonic throttling, clock
+jumps, metadata ownership and cache publication after the repository succeeds.
+Exact-boundary acknowledgement leaves the task active until a later request
+passes that boundary, preserving the existing behavior. No schema change or
+automatic edits to unrelated/imported overlaps are introduced.
 
 The GUI disables SQLite's busy sleep after DB startup; the CLI/import retains
 the startup timeout. All operations remain on the main thread. Live application

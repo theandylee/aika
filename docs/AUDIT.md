@@ -273,12 +273,19 @@ verified. References describe the source at audit time; line numbers may drift.
   Fixed: after shared tab/theme/Settings targets, non-Day views return no hit.
   Exhaustive sampled hit tests and native hidden-task checks cover placeholders.
 
-- [ ] **20. Persistence logic leaks into UI and task code.**
+- [x] **20. Persistence logic leaks into UI and task code.**
   References: `src/tags.odin:317–335`, `src/task.odin:9–48`.
   The picker manages transactions and task code contains raw SQL. Timestamp
   binding is duplicated across insertion, import, resizing, and endpoint updates.
   Add repository operations such as `create_tag_block`, `start_task`, and
   `extend_task_until_boundary`, backed by shared timestamp-binding helpers.
+  Fixed: `src/db_tags.odin` owns tag creation/task start/extension transactions,
+  typed overlap/storage outcomes, tag identity/color lookup and neighbor queries.
+  `src/tags.odin` and `src/task.odin` no longer contain SQL or transaction control.
+  `src/db_time.odin` binds all timestamp representations for insertion, end-only
+  updates, tag resizing and import writes. Acknowledgements/cache publication
+  remain gated on COMMIT. Storage failures retain the picker for retry rather
+  than being mislabeled as overlaps.
 
 - [x] **21. Database reads conflate empty, not found, and failed.**
   References: `src/db.odin:360–369`, `src/db.odin:437–459`,
@@ -460,6 +467,24 @@ verified. References describe the source at audit time; line numbers may drift.
 - Failure testing covers each acquired bootstrap stage and DC/bitmap/selection
   failures, not every possible system/heap OOM or all native API failure codes.
   No broader DPI/keyboard policy or new tracker/product features were added.
+
+## Follow-up verification — audit item 20
+
+- `odin check src -vet` and all 71 tests pass on
+  `dev-2026-11-nightly:10e57eb`. New repository tests cover creation/name reuse,
+  overlap/invalid/missing targets, ignored/aborted writes, deferred-constraint
+  COMMIT failures, real writer contention via independent shared-memory SQLite
+  connections, task/cache acknowledgement, midnight neighbors and timestamp
+  consistency across every SQL layout, including binding failures.
+- GUI/CLI alternate builds (`build/aika-audit20.exe`,
+  `build/aika-audit20-cli.exe`) succeeded. The user's running normal GUI was not
+  stopped or overwritten. CLI import integration and isolated tag/task/persistence
+  UI smoke tests passed. Tag smoke coverage now holds a real independent writer lock,
+  verifies the save-error message and retained picker, then retries successfully.
+- No live database, schema migration, interval-policy change or performance
+  optimization was part of this follow-up. Some older boolean convenience
+  repository wrappers remain for existing callers/tests; new transactions use
+  checked result APIs.
 
 ## Guardrails for follow-up work
 

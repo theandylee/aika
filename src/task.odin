@@ -19,43 +19,14 @@ task_clear :: proc(task: ^RunningTask) {
 
 task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
 	if app.task.id != 0 { return false }
-	if !db_exec(&app.db, "BEGIN IMMEDIATE") { return false }
-	if !db_tag_range_free(&app.db, start, start + 1) {
-		db_exec(&app.db, "ROLLBACK")
-		return false
-	}
-	tag_id := group_id
-	if tag_id == 0 { tag_id = db_ensure_tag(&app.db, name) }
-	if tag_id <= 0 {
-		db_exec(&app.db, "ROLLBACK")
-		return false
-	}
-	stmt, prepared := db_prepare(&app.db, `SELECT Color FROM "Group" WHERE GroupId=?1`)
-	if !prepared {
-		db_exec(&app.db, "ROLLBACK")
-		return false
-	}
-	bound := db_result(bind_i64(stmt, 1, tag_id))
-	color: u32
-	if bound == .Ok && sqlite3_step(stmt) == SQLITE_ROW {
-		color = u32(col_i64(stmt, 0))
-	} else {
-		sqlite3_finalize(stmt)
-		db_exec(&app.db, "ROLLBACK")
-		return false
-	}
-	sqlite3_finalize(stmt)
-	id, result := db_insert_activity(&app.db, TIMELINE_TAGS, name, tag_id, start, start + 1)
-	if result != .Ok || !db_exec(&app.db, "COMMIT") {
-		db_exec(&app.db, "ROLLBACK")
-		return false
-	}
+	block, result := db_start_task(&app.db, group_id, name, start)
+	if result != .Ok { return false }
 	mono := tracker_monotonic(app)
-	app.task = RunningTask{id = id, start_ms = start, end_ms = start + 1,
+	app.task = RunningTask{id = block.id, start_ms = start, end_ms = start + 1,
 		last_wall = start, last_mono = mono, save_mono = mono,
-		group_id = tag_id, name = strings.clone(name), color = color}
-	cache_activity_write(app, Pending_Activity{id = id, timeline = TIMELINE_TAGS,
-		group = tag_id, title = name, group_name = name, color = color, start_ms = start, end_ms = start + 1})
+		group_id = block.group_id, name = strings.clone(name), color = block.color}
+	cache_activity_write(app, Pending_Activity{id = block.id, timeline = TIMELINE_TAGS,
+		group = block.group_id, title = name, group_name = name, color = block.color, start_ms = start, end_ms = start + 1})
 	return true
 }
 
@@ -71,27 +42,14 @@ task_tick :: proc(app: ^App, now: i64, force: bool = false) -> bool {
 	}
 	task.last_wall, task.last_mono = now, mono
 	if now <= task.end_ms || (!force && mono - task.save_mono < 1000) { return true }
-	// Respect future/manual tags, including blocks outside the selected day.
-	stmt, ok := db_prepare(&app.db, `SELECT MIN(StartUtcMs) FROM Activity
-		WHERE TimelineId = 1 AND ActivityId <> ?1 AND StartUtcMs >= ?2 AND EndUtcMs > StartUtcMs`)
-	if !ok { return false }
-	bind_i64(stmt, 1, task.id)
-	bind_i64(stmt, 2, task.start_ms)
-	end := now
-	if sqlite3_step(stmt) != SQLITE_ROW {
-		sqlite3_finalize(stmt)
-		return false
-	}
-	boundary := col_i64(stmt, 0)
-	sqlite3_finalize(stmt)
-	if boundary > 0 { end = min(end, boundary) }
-	if !db_resize_tag(&app.db, task.id, task.start_ms, end) { return false }
+	end, stopped, result := db_extend_task_until_boundary(&app.db, task.id, task.start_ms, now)
+	if result != .Ok { return false }
 	task.end_ms = end
 	task.save_mono = mono
 	cache_activity_write(app, Pending_Activity{id = task.id, timeline = TIMELINE_TAGS,
 		group = task.group_id, title = task.name, group_name = task.name, color = task.color,
 		start_ms = task.start_ms, end_ms = end})
-	if end < now { task_clear(task) }
+	if stopped { task_clear(task) }
 	return true
 }
 

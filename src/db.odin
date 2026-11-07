@@ -331,11 +331,6 @@ db_ensure_group_id :: proc(db: ^DB, timeline_id: i64, key: string, display_name:
 
 db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, group_id: i64, start_ms, end_ms: i64) -> (i64, DB_Result) {
 	if end_ms < start_ms { return 0, .Failed }
-	start_local := unix_ms_to_local(start_ms)
-	start_utc := unix_ms_to_utc(start_ms)
-	end_local := unix_ms_to_local(end_ms)
-	end_utc := unix_ms_to_utc(end_ms)
-
 	stmt, ok := db_prepare(db, `
 		INSERT INTO Activity (
 			TimelineId, DisplayName, GroupId,
@@ -350,11 +345,11 @@ db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, grou
 	defer sqlite3_finalize(stmt)
 	bound := db_bind_result(
 		bind_i64(stmt, 1, timeline_id), bind_text(stmt, 2, display_name), bind_i64(stmt, 3, group_id),
-		bind_i64(stmt, 4, manic_date_from_date_int(date_int_from_systemtime(start_local))),
-		bind_text(stmt, 5, format_systemtime(start_local)), bind_text(stmt, 6, format_systemtime(start_utc)),
-		bind_i64(stmt, 7, manic_date_from_date_int(date_int_from_systemtime(end_local))),
-		bind_text(stmt, 8, format_systemtime(end_local)), bind_text(stmt, 9, format_systemtime(end_utc)),
-		bind_i64(stmt, 10, start_ms), bind_i64(stmt, 11, end_ms), bind_i64(stmt, 12, now_ms() / 1000))
+		bind_i64(stmt, 12, now_ms() / 1000))
+	if bound != .Ok { return 0, bound }
+	bound = db_bind_time(stmt, start_ms, DB_Time_Columns{4, 5, 6, 10})
+	if bound != .Ok { return 0, bound }
+	bound = db_bind_time(stmt, end_ms, DB_Time_Columns{7, 8, 9, 11})
 	if bound != .Ok { return 0, bound }
 	rc := sqlite3_step(stmt)
 	if rc != SQLITE_DONE {
@@ -369,8 +364,6 @@ db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) -> DB_Res
 	if activity_id <= 0 {
 		return .Not_Found
 	}
-	end_local := unix_ms_to_local(end_ms)
-	end_utc := unix_ms_to_utc(end_ms)
 	stmt, ok := db_prepare(db, `
 		UPDATE Activity SET
 			EndLocalDate = ?1, EndLocalTime = ?2, EndUtcTime = ?3, EndUtcMs = ?4, UpdatedTimestamp = ?5
@@ -381,9 +374,9 @@ db_update_activity_end :: proc(db: ^DB, activity_id: i64, end_ms: i64) -> DB_Res
 	}
 	defer sqlite3_finalize(stmt)
 	bound := db_bind_result(
-		bind_i64(stmt, 1, manic_date_from_date_int(date_int_from_systemtime(end_local))),
-		bind_text(stmt, 2, format_systemtime(end_local)), bind_text(stmt, 3, format_systemtime(end_utc)),
-		bind_i64(stmt, 4, end_ms), bind_i64(stmt, 5, now_ms() / 1000), bind_i64(stmt, 6, activity_id))
+		bind_i64(stmt, 5, now_ms() / 1000), bind_i64(stmt, 6, activity_id))
+	if bound != .Ok { return bound }
+	bound = db_bind_time(stmt, end_ms, DB_Time_Columns{1, 2, 3, 4})
 	if bound != .Ok { return bound }
 	rc := sqlite3_step(stmt)
 	if rc != SQLITE_DONE { return db_result(rc) }
@@ -442,55 +435,70 @@ free_tags :: proc(tags: []Tag) {
 
 // Reuse imported tags by name too, even if their original key differs.
 db_ensure_tag :: proc(db: ^DB, raw_name: string) -> i64 {
+	id, _ := db_ensure_tag_result(db, raw_name)
+	return id
+}
+
+db_ensure_tag_result :: proc(db: ^DB, raw_name: string) -> (i64, DB_Result) {
 	name := strings.trim_space(raw_name)
-	if name == "" { return 0 }
+	if name == "" { return 0, .Failed }
 	tags, result := db_load_tags(db)
-	if result != .Ok { return 0 }
+	if result != .Ok { return 0, result }
 	defer free_tags(tags)
 	lower := strings.to_lower(name, context.temp_allocator)
 	for tag in tags {
-		if strings.to_lower(tag.name, context.temp_allocator) == lower { return tag.id }
+		if strings.to_lower(tag.name, context.temp_allocator) == lower { return tag.id, .Ok }
 	}
-	return db_ensure_group_id(db, TIMELINE_TAGS, key_hash(name), name, "")
+	id, _, ensured := db_ensure_group(db, TIMELINE_TAGS, key_hash(name), name, "")
+	return id, ensured
 }
 
 // Half-open intervals allow blocks to share an edge, but not occupied time.
 // Call within the creation transaction so the check and insert stay together.
 db_tag_range_free :: proc(db: ^DB, start_ms, end_ms: i64) -> bool {
-	if end_ms <= start_ms { return false }
+	free, result := db_tag_range_check(db, start_ms, end_ms)
+	return result == .Ok && free
+}
+
+db_tag_range_check :: proc(db: ^DB, start_ms, end_ms: i64, except_id: i64 = 0) -> (bool, DB_Result) {
+	if end_ms <= start_ms { return false, .Failed }
 	stmt, ok := db_prepare(db, `SELECT NOT EXISTS (SELECT 1 FROM Activity
-		WHERE TimelineId = 1 AND StartUtcMs < ?2 AND EndUtcMs > ?1)`)
-	if !ok { return false }
+		WHERE TimelineId = 1 AND ActivityId<>?3 AND StartUtcMs < ?2 AND EndUtcMs > ?1)`)
+	if !ok { return false, db_failure(db) }
 	defer sqlite3_finalize(stmt)
-	bind_i64(stmt, 1, start_ms)
-	bind_i64(stmt, 2, end_ms)
-	return sqlite3_step(stmt) == SQLITE_ROW && col_i64(stmt, 0) == 1
+	bound := db_bind_result(bind_i64(stmt, 1, start_ms), bind_i64(stmt, 2, end_ms), bind_i64(stmt, 3, except_id))
+	if bound != .Ok { return false, bound }
+	rc := sqlite3_step(stmt)
+	if rc != SQLITE_ROW { return false, .Failed if rc == SQLITE_DONE else db_result(rc) }
+	return col_i64(stmt, 0) == 1, .Ok
 }
 
 // Only user-authored tags are editable here. Update all timestamp representations
 // together; tracking's incremental end-time updates remain separate.
 db_resize_tag :: proc(db: ^DB, id, start_ms, end_ms: i64) -> bool {
-	if id <= 0 || end_ms <= start_ms { return false }
+	return db_resize_tag_result(db, id, start_ms, end_ms) == .Ok
+}
+
+db_resize_tag_result :: proc(db: ^DB, id, start_ms, end_ms: i64) -> DB_Result {
+	if id <= 0 || end_ms <= start_ms { return .Failed }
 	stmt, ok := db_prepare(db, `UPDATE Activity SET
 		StartLocalDate = ?1, StartLocalTime = ?2, StartUtcTime = ?3, StartUtcMs = ?4,
 		EndLocalDate = ?5, EndLocalTime = ?6, EndUtcTime = ?7, EndUtcMs = ?8,
 		UpdatedTimestamp = ?9 WHERE ActivityId = ?10 AND TimelineId = 1
 		AND NOT EXISTS (SELECT 1 FROM Activity other WHERE other.TimelineId = 1
 			AND other.ActivityId <> ?10 AND other.StartUtcMs < ?8 AND other.EndUtcMs > ?4)`)
-	if !ok { return false }
+	if !ok { return db_failure(db) }
 	defer sqlite3_finalize(stmt)
-	s, e := unix_ms_to_local(start_ms), unix_ms_to_local(end_ms)
-	bind_i64(stmt, 1, manic_date_from_date_int(date_int_from_systemtime(s)))
-	bind_text(stmt, 2, format_systemtime(s))
-	bind_text(stmt, 3, format_systemtime(unix_ms_to_utc(start_ms)))
-	bind_i64(stmt, 4, start_ms)
-	bind_i64(stmt, 5, manic_date_from_date_int(date_int_from_systemtime(e)))
-	bind_text(stmt, 6, format_systemtime(e))
-	bind_text(stmt, 7, format_systemtime(unix_ms_to_utc(end_ms)))
-	bind_i64(stmt, 8, end_ms)
-	bind_i64(stmt, 9, now_ms() / 1000)
-	bind_i64(stmt, 10, id)
-	return sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db.handle) == 1
+	bound := db_bind_time(stmt, start_ms, DB_Time_Columns{1, 2, 3, 4})
+	if bound != .Ok { return bound }
+	bound = db_bind_time(stmt, end_ms, DB_Time_Columns{5, 6, 7, 8})
+	if bound != .Ok { return bound }
+	bound = db_bind_result(bind_i64(stmt, 9, now_ms() / 1000), bind_i64(stmt, 10, id))
+	if bound != .Ok { return bound }
+	rc := sqlite3_step(stmt)
+	if rc != SQLITE_DONE { return db_result(rc) }
+	if sqlite3_changes(db.handle) != 1 { return .Not_Found }
+	return .Ok
 }
 
 LastActivity :: struct {

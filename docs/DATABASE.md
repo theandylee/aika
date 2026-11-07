@@ -291,6 +291,23 @@ overlaps are not rewritten. Creating a tag and its initial block is one transact
 updates local dates/times, UTC times, UTC milliseconds and `UpdatedTimestamp`
 together, and is restricted to timeline 1. The existing schema is unchanged.
 
+`db_create_tag_block` and `db_start_task` own the creation transaction in
+`src/db_tags.odin`; callers receive IDs/group/color only after COMMIT. Selected
+groups must belong to Tags; creating by name retains case-insensitive/imported
+name reuse. Results distinguish overlap, invalid/missing targets, contention and
+storage errors. A failed group/activity insert or commit rolls back both records.
+
+`db_extend_task_until_boundary` checks the persisted task's identity/start and
+reads its nearest neighbor inside `BEGIN IMMEDIATE`, then applies the guarded
+resize before committing. It cannot extend another timeline or silently rewrite
+a stale/newer saved interval. Only a committed endpoint may update task/cache
+state. Existing touching-boundary and cross-midnight semantics are preserved.
+
+All activity insertion, endpoint updates, tag resizing and import writes share
+`db_bind_time` (`src/db_time.odin`) for local dates/times, UTC times and UTC
+milliseconds. Column mappings differ by statement; conversion and binding-error
+handling do not. This is a repository refactor, not a schema migration.
+
 ---
 
 ## 4. Example queries

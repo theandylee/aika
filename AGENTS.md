@@ -92,6 +92,9 @@ These have caused bugs before. Do not break them casually.
   acknowledgement/COMMIT. Database reads return saved endpoints, never `now`.
   Rendering uses one snapshot/time sample for bars, lists, totals and tooltips;
   keep full activity bounds separate from clipped displayed-day bounds.
+- Tag/task creation and task boundary extension own their transactions in the
+  repository, not UI/lifecycle code. Distinguish overlap from storage failure;
+  only publish IDs, task ownership and cached endpoints after successful COMMIT.
 
 ### ManicTime database semantics
 - `StartLocalDate` / `EndLocalDate` are **days since 2000-01-01**, not `yyyyMMdd`.
@@ -135,6 +138,8 @@ src/
   win32.odin      Win32 bindings, time/date helpers, version info, group identity
   db.odin         SQLite schema, repository, activity/group queries, import helpers
   db_import.odin  Import group resolution, guarded activity updates, provenance
+  db_tags.odin    Transactional tag creation and task start/boundary extension
+  db_time.odin    Shared local/UTC/date/millisecond timestamp binding
   sqlite.odin     SQLite C bindings
   winui.odin      Native window: WndProc, timer, GDI helpers, double buffer, hit tests
   ui.odin         ManicTime-style Day view drawn with GDI (lanes, list, totals, tooltip)
@@ -183,6 +188,7 @@ The detailed version is in `docs/ARCHITECTURE.md`.
 | Change poll rate, 5 s rule, idle threshold | `src/tracker.odin` |
 | Change Win32 calls / add process info | `src/win32.odin` |
 | Change schema, queries, date encoding | `src/db.odin` |
+| Change tag/task persistence | `src/db_tags.odin` (repository), `src/task.odin` (lifecycle) |
 | Change SQLite binding | `src/sqlite.odin` |
 | Change timeline rendering / layout | `src/ui.odin` (drawing), `src/winui.odin` (window, input, GDI helpers) |
 | Change live/day interval presentation | `src/activity_snapshot.odin` |

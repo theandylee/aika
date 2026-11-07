@@ -308,26 +308,14 @@ tag_picker_accept :: proc(create: bool) {
 		sync_date_picker(app)
 		return
 	}
-	if !db_exec(&app.db, "BEGIN IMMEDIATE") {
-		message_box("Could not save tag. Please try again.", "aika", 0x10)
-		return
-	}
-	if !db_tag_range_free(&app.db, tag_ui.start_ms, tag_ui.end_ms) {
-		db_exec(&app.db, "ROLLBACK")
+	_, result := db_create_tag_block(&app.db, id, name, tag_ui.start_ms, tag_ui.end_ms)
+	if result == .Overlap {
 		message_box("This time range is already tagged. Please select free time.", "aika", 0x10)
 		tag_picker_close()
 		load_day(app)
 		return
 	}
-	if create { id = db_ensure_tag(&app.db, name) }
-	ok := id > 0
-	if ok {
-		_, result := db_insert_activity(&app.db, TIMELINE_TAGS, name, id, tag_ui.start_ms, tag_ui.end_ms)
-		ok = result == .Ok
-	}
-	if ok { ok = db_exec(&app.db, "COMMIT") }
-	if !ok {
-		db_exec(&app.db, "ROLLBACK")
+	if result != .Ok {
 		message_box("Could not save tag. Please try again.", "aika", 0x10)
 		return
 	}

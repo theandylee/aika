@@ -101,16 +101,14 @@ db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, gro
 	stmt, ok := db_prepare(db, sql)
 	if !ok { return 0, db_failure(db) }
 	defer sqlite3_finalize(stmt)
-	s, e := unix_ms_to_local(activity.startUtcMs), unix_ms_to_local(activity.endUtcMs)
 	group_bound := bind_null(stmt, 3)
 	if group > 0 { group_bound = bind_i64(stmt, 3, group) }
 	bound := db_bind_result(bind_i64(stmt, 1, activity.timelineId), bind_text(stmt, 2, activity.displayName), group_bound,
-		bind_i64(stmt, 4, manic_date_from_date_int(date_int_from_systemtime(s))), bind_text(stmt, 5, format_systemtime(s)),
-		bind_text(stmt, 6, format_systemtime(unix_ms_to_utc(activity.startUtcMs))),
-		bind_i64(stmt, 7, manic_date_from_date_int(date_int_from_systemtime(e))), bind_text(stmt, 8, format_systemtime(e)),
-		bind_text(stmt, 9, format_systemtime(unix_ms_to_utc(activity.endUtcMs))),
-		bind_i64(stmt, 10, activity.startUtcMs), bind_i64(stmt, 11, activity.endUtcMs),
 		bind_text(stmt, 12, activity.textData), bind_i64(stmt, 13, now_ms() / 1000))
+	if bound != .Ok { return 0, bound }
+	bound = db_bind_time(stmt, activity.startUtcMs, DB_Time_Columns{4, 5, 6, 10})
+	if bound != .Ok { return 0, bound }
+	bound = db_bind_time(stmt, activity.endUtcMs, DB_Time_Columns{7, 8, 9, 11})
 	if bound != .Ok { return 0, bound }
 	if id > 0 {
 		bound = db_result(bind_i64(stmt, 14, id))

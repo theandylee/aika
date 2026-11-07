@@ -19,6 +19,7 @@ u.SendMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
 u.SendMessageW.restype = c.c_ssize_t
 u.GetDlgItem.argtypes = [w.HWND, c.c_int]
 u.GetDlgItem.restype = w.HWND
+u.GetWindowTextW.argtypes = [w.HWND, w.LPWSTR, c.c_int]
 u.GetWindowThreadProcessId.argtypes = [w.HWND, c.POINTER(w.DWORD)]
 u.WaitForInputIdle.argtypes = [w.HANDLE, w.DWORD]
 u.IsWindowEnabled.argtypes = [w.HWND]
@@ -197,15 +198,36 @@ with tempfile.TemporaryDirectory(prefix="aika-tags-", dir=root) as folder:
         popup = picker()
         text(u.GetDlgItem(popup, 101), "smoke")
         assert send(u.GetDlgItem(popup, 102), 0x018B) == 1
-        send(popup, 0x0010)
+        # Storage contention is not an overlap: keep the picker and selection
+        # alive, then retry successfully after releasing the independent writer.
+        with closing(sqlite3.connect(db, timeout=1)) as blocker:
+            blocker.execute("BEGIN IMMEDIATE")
+            u.PostMessageW(popup, 0x0111, 103, u.GetDlgItem(popup, 103))
+            wait_for(lambda: find_window(process.pid, "#32770"))
+            dialog = find_window(process.pid, "#32770")
+            message = c.create_unicode_buffer(512)
+            u.GetWindowTextW(u.GetDlgItem(dialog, 65535), message, len(message))
+            assert "Could not save tag" in message.value, message.value
+            u.PostMessageW(dialog, 0x0010, 0, 0)
+            wait_for(lambda: not find_window(process.pid, "#32770"))
+            assert picker() == popup, "A storage failure dismissed the tag picker"
+            assert rows() == remaining, "Failed save changed tag history"
+            blocker.rollback()
+        use_existing()
+        retried = rows()
+        assert len(retried) == len(remaining) + 1 and retried[:-1] == remaining
+        remaining = retried
 
         # Graceful exit flushes tracking and tags remain in the on-disk DB.
         send(hwnd, 0x0111, 1002)  # Tray Exit (WM_CLOSE now hides).
         process.wait(timeout=10)
         assert rows() == remaining
-        print("PASS: tagging, non-overlap, resize, double-click gap fill, delete, tag reuse, persistence")
+        print("PASS: tagging, non-overlap, resize, double-click gap fill, delete, tag reuse, storage retry, persistence")
     finally:
         if process.poll() is None:
+            dialog = find_window(process.pid, "#32770")
+            if dialog:
+                u.PostMessageW(dialog, 0x0010, 0, 0)
             popup = find_window(process.pid, "aika_tag_picker")
             if popup:
                 send(popup, 0x0010)
