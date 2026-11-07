@@ -17,8 +17,8 @@ settings_parse_minutes :: proc(text: string) -> (minutes: int, ok: bool) {
 
 settings_load_minutes :: proc(db_path: string) -> int {
 	if db_path == "" { return DEFAULT_IDLE_MINUTES }
-	data, read_ok := os.read_entire_file(fmt.tprintf("%s.settings", db_path), context.temp_allocator)
-	if read_ok {
+	data, err := os.read_entire_file(fmt.tprintf("%s.settings", db_path), context.temp_allocator)
+	if err == nil {
 		if minutes, ok := settings_parse_minutes(string(data)); ok { return minutes }
 	}
 	return DEFAULT_IDLE_MINUTES
@@ -27,7 +27,7 @@ settings_load_minutes :: proc(db_path: string) -> int {
 settings_save_minutes :: proc(db_path: string, minutes: int) -> bool {
 	if minutes < 1 || minutes > 500 { return false }
 	return os.write_entire_file(fmt.tprintf("%s.settings", db_path),
-		transmute([]u8)fmt.tprintf("%d\n", minutes))
+		transmute([]u8)fmt.tprintf("%d\n", minutes)) == nil
 }
 
 SettingsUi :: struct { hwnd, minutes: windows.HWND, control_failed: bool }
@@ -163,7 +163,7 @@ settings_open :: proc() {
 	settings_control("BUTTON", "OK", windows.WS_TABSTOP | 1, 334, 394, 96, 28, 1)
 	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP, 438, 394, 96, 28, 2)
 	if settings_ui.control_failed { settings_close(); return }
-	dark := windows.BOOL(1) if ui.dark else windows.BOOL(0)
+	dark := windows.BOOL(ui.dark)
 	DwmSetWindowAttribute(settings_ui.hwnd, 20, &dark, size_of(dark))
 	SetWindowTheme(settings_ui.minutes, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	windows.EnableWindow(ui.hwnd, windows.FALSE)

@@ -9,10 +9,10 @@ import rt "base:runtime"
 Scratch :: mem.Dynamic_Arena
 
 scratch_begin :: proc(s: ^Scratch) -> mem.Allocator {
-	// Dynamic_Arena uses its configured alignment, not each request's alignment.
-	// Snapshot maps require runtime cache-line alignment (not heap's default 16).
+	// Keep cache-line alignment as the minimum for snapshot map allocations.
+	// Dynamic_Arena also honors larger per-request alignments.
 	mem.dynamic_arena_init(s, block_size = 16 * 1024, out_band_size = 16 * 1024,
-		alignment = rt.MAP_CACHE_LINE_SIZE)
+		minimum_alignment = rt.MAP_CACHE_LINE_SIZE)
 	return mem.dynamic_arena_allocator(s)
 }
 

@@ -4,7 +4,7 @@
 
 | Tool | Tested version / path |
 |---|---|
-| Odin | `dev-2025-11-nightly:e5153a9` |
+| Odin | `dev-2026-11-nightly:10e57eb` |
 | GUI | native Win32/GDI via `core:sys/windows` (no external toolkit) |
 | SQLite | 3.54.1 amalgamation, statically linked |
 | C compiler for SQLite | MSVC 2022 (`cl.exe` 14.38) |
@@ -13,10 +13,18 @@
 Odin on this machine:
 
 ```
-C:\Users\<user>\AppData\Local\Microsoft\WinGet\Packages\odin-lang.Odin_...\odin.exe
+D:\Programs\odin\odin.exe
 ```
 
 The project does not require `ODIN_ROOT` to be set; `odin` on `PATH` is enough.
+After updating the user PATH, restart existing terminals/apps so they inherit
+the new location (the previous install used WinGet's package directory).
+
+The November 2026 toolchain requires explicit allocators for
+`os.read_entire_file` and `os.get_env`; file reads/writes return an error
+(`nil` on success), not a success boolean. `mem.dynamic_arena_init` now takes
+`minimum_alignment`, and Windows `BOOL` accepts boolean values rather than
+integer literals. See [`ODIN-PITFALLS.md`](ODIN-PITFALLS.md) for migration details.
 
 ---
 

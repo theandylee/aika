@@ -33,12 +33,12 @@ ImportFile :: struct {
 }
 
 import_manictime_json :: proc(db: ^DB, path: string, source_override: string = "") -> bool {
-	data, ok := os.read_entire_file(path)
-	if !ok {
+	data, err := os.read_entire_file(path, context.allocator)
+	defer delete(data)
+	if err != nil {
 		fmt.eprintln("cannot read import file:", path)
 		return false
 	}
-	defer delete(data)
 	return import_manictime_data(db, data, source_override)
 }
 

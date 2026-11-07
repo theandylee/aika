@@ -55,8 +55,8 @@ theme_set_palette :: proc(dark: bool) {
 }
 
 theme_load :: proc() {
-	data, ok := os.read_entire_file(theme_path(), context.temp_allocator)
-	theme_set_palette(ok && strings.trim_space(string(data)) == "dark")
+	data, err := os.read_entire_file(theme_path(), context.temp_allocator)
+	theme_set_palette(err == nil && strings.trim_space(string(data)) == "dark")
 }
 
 theme_control_colors :: proc(wp: windows.WPARAM) -> windows.LRESULT {
@@ -68,7 +68,7 @@ theme_control_colors :: proc(wp: windows.WPARAM) -> windows.LRESULT {
 }
 
 theme_apply_native :: proc() {
-	dark := windows.BOOL(1) if ui.dark else windows.BOOL(0)
+	dark := windows.BOOL(ui.dark)
 	// Supported on Windows 10 20H1+; older systems ignore this attribute.
 	DwmSetWindowAttribute(ui.hwnd, 20, &dark, size_of(dark))
 	if ui.date_picker != nil {
@@ -89,7 +89,7 @@ theme_date_calendar :: proc() {
 	// utf8_to_wstring("") returns nil, which RESETS styling instead of disabling
 	// it. Pass an actual non-null, NUL-terminated empty string to UxTheme.
 	empty: [1]u16
-	no_theme := transmute(cstring16)(&empty[0])
+	no_theme := cstring16(&empty[0])
 	calendar := ui.date_calendar
 	if calendar != nil {
 		SetWindowTheme(calendar, no_theme if ui.dark else nil, no_theme if ui.dark else nil)
@@ -107,7 +107,7 @@ theme_toggle :: proc() {
 	theme_set_palette(!ui.dark)
 	theme_apply_native()
 	value := "dark" if ui.dark else "light"
-	if !os.write_entire_file(theme_path(), transmute([]u8)value) {
+	if err := os.write_entire_file(theme_path(), transmute([]u8)value); err != nil {
 		message_box("Theme changed, but the preference could not be saved beside the database.", "aika", 0x30)
 	}
 }

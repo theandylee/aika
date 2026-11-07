@@ -40,7 +40,7 @@ db_hot_query_plans :: proc(t: ^testing.T) {
 // linked production SQLite on a synthetic in-memory history, never a live DB.
 @(test)
 db_representative_history_measurement :: proc(t: ^testing.T) {
-	benchmark := os.get_env("AIKA_BENCHMARK")
+	benchmark := os.get_env("AIKA_BENCHMARK", context.allocator)
 	defer delete(benchmark)
 	if benchmark != "1" { return }
 	scratch: Scratch

@@ -2,7 +2,8 @@
 
 Compiler errors we actually burned time on while writing `src/winui.odin` /
 `src/ui.odin`. Read this before touching the GDI UI; it is a memo of observed
-behavior on `dev-2025-11-nightly`, not general Odin documentation.
+behavior on `dev-2025-11-nightly`, not general Odin documentation. The migration
+notes below were verified on `dev-2026-11-nightly:10e57eb`.
 
 ## The error → fix table
 
@@ -37,9 +38,27 @@ scratch arena on return, including callbacks dispatched by modal loops. Do not
 clear a shared temp allocator in nested callbacks or free temp objects with the
 default allocator. Persistent metadata must not borrow callback scratch.
 
-`mem.Dynamic_Arena` ignores per-request alignment and uses its configured value.
-Scratch must use `runtime.MAP_CACHE_LINE_SIZE`, not the default 16-byte alignment:
-snapshot maps otherwise panic with `allocation not aligned to a cache line`.
+The old `mem.Dynamic_Arena` ignored per-request alignment and used its configured
+value. On the November 2026 toolchain it honors requested alignment and calls the
+configuration parameter `minimum_alignment` (formerly `alignment`). Scratch keeps
+`runtime.MAP_CACHE_LINE_SIZE` as its minimum; default 16-byte alignment caused
+snapshot maps to panic on the old toolchain.
+
+## November 2026 toolchain migration
+
+- `os.read_entire_file(path, allocator)` returns `(data, err)`; success is
+  `err == nil`, not a boolean. Supply `context.allocator` for owned import bytes
+  and free them even on read failure, which can return partial data. Preferences
+  continue using callback scratch and fall back to defaults on read errors.
+- `os.write_entire_file` returns an error too: compare with `nil` to retain the
+  existing settings/theme save-failure behavior.
+- `os.get_env` requires an explicit allocator; match it with the allocator used
+  by `delete`.
+- Use `windows.BOOL(ui.dark)` or `windows.TRUE` / `windows.FALSE`, not integer
+  casts. The binding is now a boolean type; its Win32 ABI remains 32 bits.
+- Vet rejects pointer-to-pointer `transmute` when a regular cast suffices:
+  use `cstring16(&buffer[0])`. Integer-to-pointer resource IDs still require
+  `transmute` (table entries #6 and #9).
 
 ## WndProc checklist (winui.odin)
 
