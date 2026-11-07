@@ -185,8 +185,17 @@ fmt_hms :: proc(ms: i64) -> string {
 
 // --- Top-level frame ---
 
+// True when the rectangle intersects what this paint must produce. An empty
+// ui.paint_rect means a full repaint (tests, resize, full invalidation).
+paint_needs :: proc(r: windows.RECT) -> bool {
+	p := ui.paint_rect
+	if rect_empty(p) { return true }
+	return r.left < p.right && r.right > p.left && r.top < p.bottom && r.bottom > p.top
+}
+
 draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	ui_sync_day_controls()
+	ui.hover_rect = {}
 	snapshot := build_day_snapshot(app, tracker_now(app), tracker_monotonic(app))
 	windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
 	if ui.scroll_date != app.date {
@@ -331,17 +340,21 @@ draw_button :: proc(dc: windows.HDC, r: windows.RECT, label: string, hit: Hit) {
 
 draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) {
 	lay := compute_layout(w, h)
-	draw_tabs(dc)
-	draw_toolbar(app, snapshot, dc, lay)
+	// Partial (hover) paints redraw only the parts their dirty rect touches.
+	if paint_needs(windows.RECT{0, 0, lay.w, dpi_px(TAB_H)}) { draw_tabs(dc) }
+	if paint_needs(windows.RECT{0, lay.toolbar_y, lay.w, lay.toolbar_y + dpi_px(TOOLBAR_H)}) {
+		draw_toolbar(app, snapshot, dc, lay)
+	}
 
 	day_start, day_end := snapshot.day_start, snapshot.day_end
 	view_start, view_end := zoom_bounds(day_start, day_end)
 
 	// Ruler
-	draw_toolbar_background_rect(dc, lay.chart_x, lay.ruler_y, lay.chart_w, dpi_px(RULER_H))
+	ruler_needed := paint_needs(windows.RECT{lay.chart_x, lay.ruler_y, lay.chart_x + lay.chart_w, lay.ruler_y + dpi_px(RULER_H)})
+	if ruler_needed { draw_toolbar_background_rect(dc, lay.chart_x, lay.ruler_y, lay.chart_w, dpi_px(RULER_H)) }
 	step := zoom_tick_step(view_start, view_end, lay.chart_w)
 	first_tick := day_start + ((view_start - day_start + step - 1) / step) * step
-	for tick := first_tick; tick <= view_end; tick += step {
+	for tick := first_tick; ruler_needed && tick <= view_end; tick += step {
 		x := x_for_ms(tick, view_start, view_end, lay.chart_x, lay.chart_w)
 		s := fmt_clock_hm(tick)
 		if tick >= day_end { s = "24:00" }
@@ -353,6 +366,7 @@ draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) 
 	// Lanes
 	for lane in Lane {
 		r := lane_rect(lay, lane)
+		if !paint_needs(r) { continue }
 		draw_lane(snapshot, dc, lay, lane, r.left, r.top, r.right - r.left, r.bottom - r.top, view_start, view_end)
 	}
 
@@ -364,9 +378,13 @@ draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) 
 	draw_cursor_line(dc, w, h)
 
 	// Details list + totals
-	draw_zoom_bar(snapshot, dc, lay, day_start, day_end)
-	draw_list(snapshot, dc, lay)
-	draw_totals(snapshot, dc, lay)
+	zbar, _, _, _ := zoom_rects(lay)
+	if paint_needs(windows.RECT{lay.chart_x, lay.zoom_y, lay.chart_x + lay.chart_w, zbar.bottom}) {
+		draw_zoom_bar(snapshot, dc, lay, day_start, day_end)
+	}
+	// Partial (hover) paints skip the row building/sorting of panes they cannot touch.
+	if paint_needs(list_pane_rect(lay)) { draw_list(snapshot, dc, lay) }
+	if paint_needs(totals_pane_rect(lay)) { draw_totals(snapshot, dc, lay) }
 	draw_pane_splitters(dc, lay)
 }
 
@@ -851,9 +869,10 @@ draw_tooltip_lines :: proc(dc: windows.HDC, w, h: i32, lines: []Tooltip_Line) {
 		extra := i32(40) if i == 2 && len(lines) > 1 else i32(0)
 		tw = max(tw, text_pixel_width(l.text, l.font) + extra)
 	}
-	tw += dpi_px(TOOLTIP_FOLLOW_W_PAD)
+	tw = min(tw + dpi_px(TOOLTIP_FOLLOW_W_PAD), dpi_px(TOOLTIP_MAX_W))
 	th := dpi_px(TOOLTIP_LINE_PITCH * i32(len(lines)) + TOOLTIP_BOX_PAD)
 	tx, ty := tooltip_follow_origin(ui.mouse.x, ui.mouse.y, tw, th, w, h)
+	ui.hover_rect = rect_union(ui.hover_rect, windows.RECT{tx, ty, tx + tw, ty + th})
 	fill_rect(dc, tx, ty, tw, th, C_TIP_BG)
 	fill_frame(dc, tx, ty, tw, th, C_TIP_BORDER)
 	for l, i in lines {
@@ -868,5 +887,6 @@ draw_tooltip_lines :: proc(dc: windows.HDC, w, h: i32, lines: []Tooltip_Line) {
 draw_cursor_line :: proc(dc: windows.HDC, w, h: i32) {
 	if _, ok := tooltip_lane(ui.mouse.x, ui.mouse.y, ui.mouse_valid, w, h); !ok { return }
 	lay := compute_layout(w, h)
+	ui.hover_rect = rect_union(ui.hover_rect, windows.RECT{ui.mouse.x, lay.ruler_y, ui.mouse.x + 1, lay.lanes_bottom})
 	line_v(dc, ui.mouse.x, lay.ruler_y, lay.lanes_bottom - lay.ruler_y, C_ACCENT)
 }

@@ -60,6 +60,42 @@ hover_signature_for_app :: proc(app: ^App, x, y, w, h: i32) -> Hover_Signature {
 	return hover_signature(snapshot, x, y, true, w, h)
 }
 
+// Repaint decision for a mouse move. Inside a lane the cursor line follows the
+// pointer, so hover_needs_repaint is true regardless of the hovered bar; the
+// (allocating, sorting) day snapshot would not change the answer, so skip it.
+hover_move_needs_repaint :: proc(painted: Hover_Signature, x, y, w, h: i32) -> bool {
+	return hover_needs_repaint(painted, hover_signature({}, x, y, true, w, h))
+}
+
+rect_empty :: proc(r: windows.RECT) -> bool { return r.right <= r.left || r.bottom <= r.top }
+
+rect_union :: proc(a, b: windows.RECT) -> windows.RECT {
+	if rect_empty(a) { return b }
+	if rect_empty(b) { return a }
+	return windows.RECT{min(a.left, b.left), min(a.top, b.top), max(a.right, b.right), max(a.bottom, b.bottom)}
+}
+
+// Region that can differ between the last painted hover frame and the one for
+// the cursor at (x, y): the previously drawn line/hint plus everything the new
+// line/hint can cover (hint width is capped at TOOLTIP_MAX_W, at most four rows).
+// partial = false means a non-lane hover visual changed: invalidate everything.
+hover_dirty_rect :: proc(painted: Hover_Signature, painted_rect: windows.RECT, x, y, w, h: i32) -> (r: windows.RECT, partial: bool) {
+	next := hover_signature({}, x, y, true, w, h)
+	if painted.targets != next.targets { return {}, false }
+	if painted.cursor && rect_empty(painted_rect) { return {}, false }
+	r = painted_rect
+	if next.cursor {
+		lay := compute_layout(w, h)
+		gap := dpi_px(TOOLTIP_FOLLOW_GAP) + 2
+		mw := dpi_px(TOOLTIP_MAX_W)
+		mh := dpi_px(TOOLTIP_LINE_PITCH * 4 + TOOLTIP_BOX_PAD)
+		bound := windows.RECT{max(0, x - gap - mw), max(0, y - gap - mh), min(w, x + gap + mw), min(h, y + gap + mh)}
+		column := windows.RECT{x, lay.ruler_y, x + 1, lay.lanes_bottom}
+		r = rect_union(r, rect_union(bound, column))
+	}
+	return r, !rect_empty(r)
+}
+
 // The timeline hint and the cursor line both follow the cursor, so every
 // move repaints while either is painted or about to be painted.
 hover_needs_repaint :: proc(painted, next: Hover_Signature) -> bool {

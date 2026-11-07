@@ -20,6 +20,8 @@ foreign aika_gdi {
 	GetCharacterPlacementW :: proc(dc: windows.HDC, text: windows.LPCWSTR, count, max_extent: i32, results: ^GCP_RESULTSW, flags: u32) -> u32 ---
 	GetGlyphIndicesW :: proc(dc: windows.HDC, text: windows.LPCWSTR, count: i32, glyphs: [^]u16, flags: u32) -> u32 ---
 	GetCharWidth32W :: proc(dc: windows.HDC, first, last: u32, widths: [^]i32) -> windows.BOOL ---
+	IntersectClipRect :: proc(dc: windows.HDC, left, top, right, bottom: i32) -> i32 ---
+	SelectClipRgn :: proc(dc: windows.HDC, rgn: windows.HRGN) -> i32 ---
 }
 
 ETO_CLIPPED :: 0x0004

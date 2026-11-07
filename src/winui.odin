@@ -65,6 +65,8 @@ UiState :: struct {
 	mouse_valid: bool,
 	mouse_tracking: bool,          // TME_LEAVE armed; cleared by WM_MOUSELEAVE
 	hover_painted: Hover_Signature, // what the last frame drew for the cursor
+	paint_rect:   windows.RECT,     // region the current WM_PAINT must produce; empty = everything
+	hover_rect:   windows.RECT,     // bounds of the cursor line + hint the last frame drew (empty = none)
 	grab_cursor: windows.HCURSOR,
 
 	filter:      string,
@@ -720,8 +722,13 @@ on_mouse_move :: proc(hwnd: windows.HWND, app: ^App, win_x, win_y: i32) {
 		ui.mouse_valid = true
 		// Repaint only if the frame drawn for this position would differ.
 		w, h := client_size(hwnd)
-		if hover_needs_repaint(ui.hover_painted, hover_signature_for_app(app, win_x, win_y, w, h)) {
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		if hover_move_needs_repaint(ui.hover_painted, win_x, win_y, w, h) {
+			dirty, partial := hover_dirty_rect(ui.hover_painted, ui.hover_rect, win_x, win_y, w, h)
+			if partial {
+				windows.InvalidateRect(hwnd, &dirty, windows.FALSE)
+			} else {
+				windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			}
 		}
 	}
 }
@@ -883,8 +890,16 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			// Keep the cursor position current even without mouse-move spam.
 			_update_mouse_client()
 			dc_buffer := ui.mem_dc
+			// Partial invalidations (hover) only redraw/blit the dirty rect.
+			rc := ps.rcPaint
+			if rc.right <= rc.left || rc.bottom <= rc.top { rc = windows.RECT{0, 0, w, h} }
+			IntersectClipRect(dc_buffer, rc.left, rc.top, rc.right, rc.bottom)
+			ui.paint_rect = rc
+			if rc.left <= 0 && rc.top <= 0 && rc.right >= w && rc.bottom >= h { ui.paint_rect = {} }
 			draw_frame(app, dc_buffer, w, h)
-			windows.BitBlt(dc, 0, 0, w, h, dc_buffer, 0, 0, windows.SRCCOPY)
+			ui.paint_rect = {}
+			SelectClipRgn(dc_buffer, nil)
+			windows.BitBlt(dc, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top, dc_buffer, rc.left, rc.top, windows.SRCCOPY)
 		} else {
 			fill_rect(dc, 0, 0, w, h, C_BG)
 			draw_string(dc, "Unable to allocate drawing buffer. Resize to retry.", 16, 40, ui.font_normal, C_TXT)
