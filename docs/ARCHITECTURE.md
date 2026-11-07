@@ -395,7 +395,13 @@ Layout constants (`TAB_H`, `TOOLBAR_H`, `LANE_*`, `LIST_*`, ...) live at the top
 of `src/ui.odin`; `compute_layout()` derives every rect from the client size, so
 the window resizes correctly. Repaints are on-demand: the timer invalidates
 every 500 ms (which also drives the 1 Hz tracker sampling inside
-`tracker_tick`), and mouse movement/hover invalidates too. Palette values
+`tracker_tick`). Mouse movement invalidates only when the frame would change
+(`src/hover.odin`): each paint records a `Hover_Signature` (bitmask of the
+hover-drawn rectangles under the cursor plus the bar-tooltip row), and
+`WM_MOUSEMOVE` repaints when the signature at the new position differs, or on
+every move while the cursor-following bar tooltip is painted or about to be.
+Drags invalidate on their own paths. `TrackMouseEvent` delivers
+`WM_MOUSELEAVE`, which clears hover visuals. Palette values
 are `COLORREF` literals (`0x00BBGGRR`). `src/theme.odin` switches the mutable
 UI palette between light and dark via the top-right toggle, saving the choice
 beside the selected database as `<database path>.theme`. Dark buttons and tabs

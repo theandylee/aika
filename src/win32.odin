@@ -15,6 +15,27 @@ foreign import aika_gdi "system:gdi32.lib"
 @(default_calling_convention = "system")
 foreign aika_gdi {
 	GetPixel :: proc(dc: windows.HDC, x, y: i32) -> windows.COLORREF ---
+	ExtTextOutW :: proc(dc: windows.HDC, x, y: i32, options: u32, rect: ^windows.RECT, text: windows.LPCWSTR, count: u32, dx: [^]i32) -> windows.BOOL ---
+	// Returns MAKELONG(width, height), or 0 on failure.
+	GetCharacterPlacementW :: proc(dc: windows.HDC, text: windows.LPCWSTR, count, max_extent: i32, results: ^GCP_RESULTSW, flags: u32) -> u32 ---
+	GetGlyphIndicesW :: proc(dc: windows.HDC, text: windows.LPCWSTR, count: i32, glyphs: [^]u16, flags: u32) -> u32 ---
+	GetCharWidth32W :: proc(dc: windows.HDC, first, last: u32, widths: [^]i32) -> windows.BOOL ---
+}
+
+ETO_CLIPPED :: 0x0004
+GCP_USEKERNING :: 0x0008
+GGI_MARK_NONEXISTING_GLYPHS :: 0x0001
+
+GCP_RESULTSW :: struct {
+	size:       u32,
+	out_string: [^]u16,
+	order:      [^]u32,
+	dx:         [^]i32,
+	caret_pos:  [^]i32,
+	class:      [^]u8,
+	glyphs:     [^]u16,
+	n_glyphs:   u32, // in: capacity of the arrays above
+	max_fit:    i32,
 }
 
 @(default_calling_convention = "system")

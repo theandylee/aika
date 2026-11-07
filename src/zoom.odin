@@ -120,6 +120,7 @@ draw_zoom_bar :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, day_
 	selection := rgb(90, 65, 32) if ui.dark else rgb(255, 221, 168)
 	fill_rect(dc, left, bar.top + 1, max(1, right - left), 24, selection)
 	// A thin activity strip makes the overview useful when zoomed far in.
+	run := Bar_Run{dc = dc, y = bar.bottom - 5, h = 4}
 	for row in snapshot.rows {
 		a := row.activity
 		if a.timeline_id != TIMELINE_APPS { continue }
@@ -127,8 +128,9 @@ draw_zoom_bar :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, day_
 		if e <= s { continue }
 		x1 := x_for_ms(s, day_start, day_end, bar.left, width)
 		x2 := x_for_ms(e, day_start, day_end, bar.left, width)
-		fill_rect(dc, x1, bar.bottom - 5, max(1, x2 - x1), 4, activity_colorref(a))
+		bar_run_add(&run, x1, max(1, x2 - x1), activity_colorref(a))
 	}
+	bar_run_flush(&run)
 	for tick := day_start; tick <= day_end; tick += 2 * 3600_000 {
 		x := x_for_ms(tick, day_start, day_end, bar.left, width)
 		line_v(dc, x, bar.top + 2, 3, C_DIM)

@@ -229,12 +229,18 @@ verified. References describe the source at audit time; line numbers may drift.
   allowing the new index doubled their cost. General day-overlap scalability
   remains open; see measurements below.
 
-- [ ] **15. Derived view data is rebuilt on every repaint.**
+- [x] **15. Derived view data is rebuilt on every repaint.**
   References: `src/ui.odin:537–710`, `src/totals_tree.odin:21–74`.
   Mouse-move repaints rebuild rows, aggregate/sort totals, and potentially rebuild
   the hierarchy. Filtering heap-allocates lowercase candidate names.
   Cache derived data by data revision, date, lane, filter, and tree state; update
   live durations separately. Measure before adding complex rendering machinery.
+  Resolved by measurement: on a 900-row day the whole derivation costs ~0.2 ms
+  (~0.6 ms with a filter) of a ~9 ms frame, so caching was not added. The frame
+  cost was GDI: `DrawTextW` and per-measurement `GetDC`. Text that fits now uses
+  clipped `ExtTextOutW`, measurements use the backbuffer DC, and fully
+  overpainted/contiguous same-colour bars coalesce with pixel parity. Filter
+  lowering uses paint scratch instead of the heap. See the follow-up below.
 
 - [x] **16. SQLite busy waits block tracking and UI.**
   References: `src/db.odin:137`, `src/winui.odin:285–295`.
@@ -517,6 +523,143 @@ verified. References describe the source at audit time; line numbers may drift.
 - Metadata refresh may lag external resource/group edits by up to 60 seconds.
   Statement/derived-view caching and broader polling/performance work remain
   separate audit items; this change preserves group keys and lifecycle policy.
+
+## Follow-up verification — audit item 15
+
+- Opt-in `view_paint_measurement` (`AIKA_VIEW_BENCHMARK=1`, `-o:speed`, one test
+  thread, testing allocator on): synthetic day with 900 app rows/60 groups, 24
+  hierarchical tags and 2 usage rows, painted offscreen at 1320x860. Baseline was
+  measured in a temporary HEAD worktree with the same benchmark, alternating
+  three rounds with the new build in one session:
+
+  | Median per repaint | HEAD `2dec7cc` | After |
+  |---|---:|---:|
+  | Derived data only (snapshot, rows, totals, bar hit) | ~0.19 ms | ~0.19 ms |
+  | Full frame, rows spread over 24 h | 8.6–9.6 ms | 5.7 ms |
+  | Full frame, rows clustered 09:00–18:00 | 8.5–8.8 ms | 4.4–5.0 ms |
+  | Details list / totals panel | 1.77 / 0.99 ms | 0.58 / 0.29 ms |
+
+  GDI primitives on the backbuffer: `DrawTextW` 15–56 µs per call, clipped
+  `ExtTextOutW` 3–7 µs, `GetDC`-based measurement 8.9 µs vs 0.7 µs on the
+  backbuffer DC, `FillRect` ~1.4 µs. With the spread synthetic data, bars rarely
+  share pixels, so coalescing gives no gain there. With the clustered data it took
+  the frame from 5.6 to 4.4 ms (same-session toggle).
+- Rendering contract: text that fits is drawn by `ExtTextOutW` at the same origin
+  and clip rectangle; overflow still uses `DrawTextW` end ellipsis. Tests show the
+  result is pixel-identical to `DrawTextW` for space-free text (times, durations)
+  and identical to an independent clipped `ExtTextOutW` reference for all fitting
+  text. Strings containing spaces can differ from `DrawTextW` by up to 1 px in
+  glyph placement after a space. That placement now matches
+  `GetTextExtentPoint32W`, which layout already used for alignment. Bar
+  coalescing is pixel-identical to one `FillRect` per bar over 200 randomized
+  dense/sparse sequences.
+- `odin check src -vet` and all 83 tests passed. Alternate builds
+  (`build/aika-perf.exe`, `build/aika-perf-cli.exe`) passed; the running normal GUI
+  was not touched. Isolated tags, task, totals-tree, theme/date, panes,
+  persistence, import and 2,000-modal-paint resource soak scripts passed (handles
+  stayed at 177, GDI 22, USER 20).
+- Not done: DIB-based bar rendering. This is a measured opportunity, not a defect.
+  Repaint frequency (every mouse move repainted the full frame) is addressed by
+  the mouse-move follow-up below; the `DrawTextW` cost for overflowing
+  tag/title labels is addressed by the ellipsized-text follow-up (most
+  ellipsized text now skips `DrawTextW`; complex scripts still use it).
+  Correction: the ≤1 px placement difference above comes from `DrawTextW`'s pair
+  kerning ("Wo", "Te", "AV", ...), not from spaces.
+
+## Follow-up - mouse-move repaints
+
+- `WM_MOUSEMOVE` used to invalidate the full frame on every position change.
+  Now `draw_frame` records a `Hover_Signature` for the position it painted:
+  a bit for each rectangle whose drawing reads `ui.mouse` (3 tabs, theme and
+  settings switches and their tooltips, prev/next/Today/task, zoom -/+/Full
+  day, totals-mode button and its tooltip, both pane splitters), plus the bar
+  tooltip's snapshot row. A move repaints when the signature at the new
+  position differs, or whenever a bar tooltip is painted or would be. That box
+  follows the cursor. `draw_tooltip` and the signature share
+  `tooltip_lane`/`tooltip_bar_hit`, including the drag/popup/menu suppression
+  and the filter check. The snapshot is built on a move only when the cursor is
+  over a lane's bar rectangle. Pane, tag and zoom drags still invalidate on
+  their own paths. The 500 ms timer repaint is unchanged.
+- Existing gap, fixed: `WM_MOUSELEAVE` was handled, but `TrackMouseEvent` was
+  never called, so it never arrived. Hover/tooltips lingered after the cursor
+  left, until the next timer paint (up to 500 ms). Leave tracking is now armed
+  on mouse move, and leave repaints if the last frame drew hover state. This is
+  the only intended visible difference: the hover clears sooner.
+- `hover_repaint_behavior` (serialized in `zoom_behavior`) covers these cases:
+  empty-area moves, entering/leaving/moving within a button, a distinct bit per
+  hover rectangle, placeholder tabs, moves inside one tooltip bar, moves
+  between bars and lanes, suppression during drags or the menu, filter-hidden
+  bars, the lazy window-side variant matching the pure one, and `draw_tooltip`
+  painting a box exactly when the signature reports a bar.
+  `odin check src -vet` and all 83 tests passed. Alternate builds
+  (`build/aika-mouse.exe`, `build/aika-mouse-cli.exe`) passed. Isolated theme,
+  tags, task, totals-tree, panes, persistence, resources, settings and tray
+  scripts passed.
+- Scripted sweep: 400 synthetic `WM_MOUSEMOVE`s, each followed by
+  `UpdateWindow`, isolated DB. Target-process CPU, two runs each:
+
+  | Sweep | Before | After |
+  |---|---:|---:|
+  | Details list (empty area) | 766-969 ms | 0-16 ms |
+  | Empty Tags lane | 875-1031 ms | 0 ms |
+
+  Synthetic moves over the tab strip still repaint often (500-625 ms). Paint
+  reads the real cursor via `GetCursorPos`, which sat outside the window, so
+  every paint recorded "no hover". With real input this only happens on tab
+  crossings. A cross-process `GetUpdateRect` count was not reliable on the
+  baseline and is not quoted.
+
+## Follow-up — ellipsized text
+
+- `draw_string` overflow no longer calls `DrawTextW` for simple text.
+  `end_ellipsis_layout` (`src/winui.odin`) reproduces `DT_END_ELLIPSIS` with
+  `GetCharacterPlacementW(GCP_USEKERNING)`, then draws one clipped `ExtTextOutW`
+  with those advances. Rule, derived from per-width `DT_MODIFYSTRING` tables:
+  if the kerned line fits, draw it whole. Otherwise keep the longest prefix
+  whose own kerned width (the line's kerned advances before the last kept unit,
+  plus that unit's `GetCharWidth32W` advance) plus the width of `"..."` fits.
+  Keep at least one unit, clipped when even that is too wide, as `DrawTextW`
+  does at 1 px. Then draw prefix + `"..."` kerned together. The ellipsis is
+  three periods. Skipping labels at tiny widths was rejected because `DrawTextW`
+  still draws a clipped first glyph there.
+- Falls back to `DrawTextW` unless every UTF-16 unit is in a simple BMP
+  whitelist, the font maps each one to its own glyph (`GetGlyphIndicesW`, so no
+  font linking), and placement is one glyph per unit (no ligatures). Probes showed
+  `GetCharacterPlacementW` failing or mis-measuring otherwise: CJK in Segoe UI,
+  surrogate pairs, combining marks, Yu Gothic's "fi" ligature. Fallback covers
+  surrogates/emoji, combining marks, RTL, joiners and invalid UTF-16, so a
+  surrogate pair is never split by this code. `GCP_MAXEXTENT` was tried and
+  rejected (inconsistent fit and advances).
+- Parity (`gdi_ellipsis_matches_drawtext`): every width from 1 px to past the
+  extent, 20 strings, 8 fonts (stock, Segoe UI 12/12 bold/11/20 bold,
+  Segoe UI Symbol, Yu Gothic UI, Malgun Gothic). 12,131 overflow renderings are
+  pixel-identical to `DrawTextW(DT_END_ELLIPSIS)`. The 6,760 that took the new
+  path also kept exactly the prefix `DT_MODIFYSTRING` reports. The other 5,371
+  are `DrawTextW` itself. 628 fitting renderings still match the clipped
+  `ExtTextOutW` contract. Exact parity, no accepted differences, for
+  overflowing text on this machine's fonts.
+- Measured with `view_paint_measurement`, 3 alternating rounds against an
+  exported `HEAD` copy with the same benchmark, medians. Absolute numbers run
+  ~1.7x the item-15 session's because of concurrent machine load, so compare
+  within a column pair only.
+
+  | Median | Before | After |
+  |---|---:|---:|
+  | Tag label, bold, 60 px (`Draw_String_Tag_Label`) | 66.1 µs | 26.7 µs |
+  | 47-char title, 120 px (`Draw_String_Clipped`) | 85.6 µs | 32.8 µs |
+  | Tag label, 5 px (`Draw_String_Tag_Tiny`) | 32.8 µs | 21.8 µs |
+  | `DrawTextW` end ellipsis (reference) | 61.9 µs | 62.7 µs |
+  | `Ruler_Lanes` component | 4.90 ms | 3.56 ms |
+  | List / Totals components | 1.23 / 0.54 ms | 1.13 / 0.48 ms |
+
+  Whole-frame medians stayed within this session's noise (for example `Frame`
+  9.5 vs 10.2 ms, `Frame_Clustered` 8.4 vs 7.8 ms, overlapping ranges).
+  Remaining cost per ellipsized draw: two `GetCharacterPlacementW` calls
+  (~2.6 µs + ~0.25 µs per unit each), `GetGlyphIndicesW`, and `ExtTextOutW`.
+- `odin check src -vet` and all 84 tests passed. Alternate builds
+  `build/aika-tags.exe` and `build/aika-tags-cli.exe` passed. Isolated tags,
+  task, totals-tree, theme, panes and resource-soak UI scripts passed against
+  the GUI build.
 
 ## Guardrails for follow-up work
 

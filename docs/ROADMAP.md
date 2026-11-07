@@ -105,6 +105,30 @@ DPI/keyboard policy and new tracker features were not part of this step.
   roughly 53 to 3 microseconds, a small absolute saving; no multi-process cache,
   long-lived handles, title caching or lifecycle/key changes were introduced.
 
+- [x] **A10. Day-view paint cost (audit #15)** (`src/winui.odin`, `src/ui.odin`).
+  Measured before changing anything: derived rows/totals cost ~0.2 ms of a ~9 ms
+  900-row frame, so no derived-view cache was added. GDI text was the cost. Fitting
+  text now uses clipped `ExtTextOutW` (overflow keeps `DrawTextW` ellipsis),
+  measurement reuses the backbuffer DC, and overpainted bars coalesce. Frames
+  dropped to ~5.7 ms (spread day) and ~4.4–5.0 ms (clustered day). Pixel-parity
+  tests cover bars and space-free text; text containing spaces may shift ≤1 px.
+  Repaint frequency on mouse move is a separate, unaddressed lever.
+
+- [x] **A11. Mouse-move repaints** (`src/hover.odin`, `src/winui.odin`).
+  `WM_MOUSEMOVE` no longer invalidates the whole frame on every position
+  change. Each paint records a hover signature (hover-sensitive rectangles
+  plus the bar-tooltip row, sharing hit helpers with `draw_tooltip`); a move
+  repaints only when the signature would change or a cursor-following tooltip
+  is involved. Scripted 400-move sweeps over empty areas dropped from ~0.8–1 s
+  of app CPU to ~0–16 ms. Also fixed `TrackMouseEvent` never being called, so
+  `WM_MOUSELEAVE` now clears hover promptly.
+- [x] **A12. Ellipsized labels (audit #15 follow-up)** (`src/winui.odin`).
+  Overflowing text reproduces `DT_END_ELLIPSIS` with kerned advances from
+  `GetCharacterPlacementW` and one clipped `ExtTextOutW`, falling back to
+  `DrawTextW` for complex scripts/font linking/ligatures. Pixel-identical to
+  `DrawTextW` over 12,131 overflowing renderings (20 strings, 8 fonts, every
+  width). Tag labels ~2.5x cheaper; `Ruler_Lanes` 4.90 → 3.56 ms.
+
 ---
 
 ## P0 — finish the tracker core
@@ -340,7 +364,7 @@ Document the trade-off clearly before implementing.
 
 | Item | Notes |
 |---|---|
-| Automated reliability coverage | 64 Odin tests plus isolated native UI/import scripts; extend with each change |
+| Automated reliability coverage | 84 Odin tests plus isolated native UI/import scripts; extend with each change |
 | Hardcoded timing constants | Move to `Settings` |
 | Hardcoded group colors | ManicTime-like palette is fine, but make it configurable |
 | Additive schema migrations | Schema version 1 with import provenance; targeted indexes created idempotently |

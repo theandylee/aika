@@ -379,8 +379,9 @@ prepare/step/finalize, before/after the timeline/start index and with/without th
 day-query date-index hint. No speed thresholds are enforced in correctness tests.
 `python tools/benchmark-history.py` provides a disk-backed Python-SQLite query-plan
 proxy; its SQLite version differs, so do not label it an Odin runtime benchmark.
-Neither benchmark reads a user's database. Executable metadata, statement reuse,
-derived-view caching, and broader day-overlap indexing remain deferred.
+Neither benchmark reads a user's database. Statement reuse and broader
+day-overlap indexing remain deferred; derived-view caching was measured and
+rejected (see the Day-view paint benchmark below).
 `python tools/test-import.py build/aika-cli.exe` tests the sample and renamed
 reimports, source isolation, guarded updates, failure exit codes, and version-0
 schema upgrades, using only temporary databases. `src/importer_test.odin` adds
@@ -422,6 +423,22 @@ validated cache, using a fixed injected window sample and the running test EXE.
 This excludes common foreground/title Win32 calls and normal activity writes;
 the measured executable has no version resources. It is not a full GUI CPU
 benchmark, and results include the test runner's allocator tracking overhead.
+
+Opt-in Day-view paint benchmark (mutates shared UI globals, so run it alone):
+
+```powershell
+$env:AIKA_VIEW_BENCHMARK = '1'
+odin test src -vet -o:speed -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_NAMES=main.view_paint_measurement
+Remove-Item Env:AIKA_VIEW_BENCHMARK
+```
+
+It seeds a synthetic in-memory day (900 app rows over 60 groups, 24 hierarchical
+tags, 2 usage rows), paints into an offscreen 1320x860 backbuffer with the app's
+fonts, and prints per-call GDI primitive costs, a per-component frame breakdown,
+derived-data-only timings (snapshot/rows/totals/tree) and full-frame medians,
+including a day clustered into 09:00-18:00. No database or window is involved.
+`src/text_test.odin` and `src/bar_run_test.odin` are the pixel-parity regression
+tests for the text fast path and bar coalescing.
 `python tools/test-settings-ui.py build/aika.exe` checks Tracking settings in light
 and dark modes: validation, save/cancel/close, restart persistence, invalid-file
 fallback and continued activity tracking while open, using an isolated database.

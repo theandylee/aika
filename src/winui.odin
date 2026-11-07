@@ -57,6 +57,8 @@ UiState :: struct {
 
 	mouse:       windows.POINT, // client coords, refreshed each paint
 	mouse_valid: bool,
+	mouse_tracking: bool,          // TME_LEAVE armed; cleared by WM_MOUSELEAVE
+	hover_painted: Hover_Signature, // what the last frame drew for the cursor
 	grab_cursor: windows.HCURSOR,
 
 	filter:      string,
@@ -240,6 +242,9 @@ line_h :: proc(dc: windows.HDC, x, y, w: i32, color: windows.COLORREF) {
 }
 
 _measure_text :: proc(s: string, font: windows.HFONT) -> (size: windows.SIZE) {
+	// The backbuffer is screen-compatible, so its metrics match the window's.
+	// Acquiring a window DC per measurement cost ~12x the measurement itself.
+	if ui.mem_valid && ui.mem_dc != nil { return measure_text_dc(ui.mem_dc, s, font) }
 	dc := windows.GetDC(ui.hwnd)
 	defer windows.ReleaseDC(ui.hwnd, dc)
 	return measure_text_dc(dc, s, font)
@@ -260,8 +265,8 @@ text_size :: proc(s: string, font: windows.HFONT) -> windows.SIZE {
 	return _measure_text(s, font)
 }
 
-// Draw a single line of UTF-8 text, truncated preferentially at word
-// boundaries (like DrawText) when narrower than max_w.
+// Draw a single line of UTF-8 text, truncated with an end ellipsis exactly
+// like DrawTextW(DT_END_ELLIPSIS) when it does not fit in max_w.
 draw_string :: proc(dc: windows.HDC, s: string, x, y: i32, font: windows.HFONT, color: windows.COLORREF, max_w: i32 = 1_000_000) {
 	if len(s) == 0 || max_w <= 0 {
 		return
@@ -271,11 +276,125 @@ draw_string :: proc(dc: windows.HDC, s: string, x, y: i32, font: windows.HFONT, 
 	windows.SetTextColor(dc, color)
 	dc_font := windows.SelectObject(dc, windows.HGDIOBJ(font))
 	defer windows.SelectObject(dc, dc_font)
+	// Fast path (measured ~3-7 us vs 15-55 us per call): text that fits is drawn
+	// by ExtTextOutW at the same top-left with the same clip rectangle. Glyph
+	// placement follows GetTextExtentPoint32W, which layout already uses; DrawTextW
+	// applies pair kerning and can place glyphs after a kerned pair 1 px further
+	// left. Overflowing text reproduces DrawTextW's kerned end ellipsis exactly
+	// (end_ellipsis_layout) or falls back to DrawTextW itself.
 	r := windows.RECT{x, y - 2, x + max_w, y + 32}
+	size: windows.SIZE
+	if windows.GetTextExtentPoint32W(dc, windows.LPCWSTR(raw_data(text)), i32(len(text)), &size) &&
+	   size.cy <= r.bottom - r.top {
+		if size.cx <= max_w {
+			if ExtTextOutW(dc, x, y - 2, ETO_CLIPPED, &r, windows.LPCWSTR(raw_data(text)), u32(len(text)), nil) { return }
+		} else if out, dx, ok := end_ellipsis_layout(dc, text, max_w); ok {
+			if ExtTextOutW(dc, x, y - 2, ETO_CLIPPED, &r, windows.LPCWSTR(raw_data(out)), u32(len(out)), raw_data(dx)) { return }
+		}
+	}
 	flags := windows.DrawTextFormat.DT_SINGLELINE |
 		windows.DrawTextFormat.DT_NOPREFIX |
 		windows.DrawTextFormat.DT_END_ELLIPSIS
 	windows.DrawTextW(dc, windows.LPCWSTR(raw_data(text)), i32(len(text)), &r, flags)
+}
+
+// DrawTextW (DT_SINGLELINE | DT_END_ELLIPSIS) lays text out with pair kerning.
+// If that does not fit it keeps the longest prefix whose own kerned width plus
+// the width of "..." fits, and never less than the first character (clipped
+// when even that is too wide). This reproduces it with GetCharacterPlacementW,
+// whose kerned advances drawn by ExtTextOutW are pixel-identical to DrawTextW,
+// but only when every code unit is a simple BMP character that the selected
+// font maps to its own glyph, one glyph per unit: GetCharacterPlacementW does
+// not follow font linking, mis-measures surrogate pairs and reports ligature
+// advances per glyph. Measured ~2.5x cheaper than DrawTextW for tag labels and
+// list titles (two GetCharacterPlacementW calls). Returns the units to draw
+// with their advances in scratch memory, or ok=false when the caller must
+// fall back to DrawTextW.
+end_ellipsis_layout :: proc(dc: windows.HDC, text: []u16, max_w: i32) -> (out: []u16, dx: []i32, ok: bool) {
+	n := len(text)
+	if n == 0 || max_w <= 0 { return }
+	for u in text {
+		if !end_ellipsis_simple(u) { return }
+	}
+	glyphs := make([]u16, n, context.temp_allocator)
+	if GetGlyphIndicesW(dc, windows.LPCWSTR(raw_data(text)), i32(n), raw_data(glyphs), GGI_MARK_NONEXISTING_GLYPHS) != u32(n) {
+		return
+	}
+	for g in glyphs {
+		if g == 0xFFFF { return } // drawn from a linked fallback font
+	}
+	// Kerned advances, one per unit. A ligature or other substitution makes
+	// them per glyph, so require exactly one glyph per unit.
+	place :: proc(dc: windows.HDC, units: []u16, dx: []i32, glyphs: []u16) -> (w: i32, ok: bool) {
+		res := GCP_RESULTSW{size = size_of(GCP_RESULTSW), dx = raw_data(dx), glyphs = raw_data(glyphs), n_glyphs = u32(len(units))}
+		packed := GetCharacterPlacementW(dc, windows.LPCWSTR(raw_data(units)), i32(len(units)), 0, &res, GCP_USEKERNING)
+		if packed == 0 || res.n_glyphs != u32(len(units)) { return }
+		for d in dx[:len(units)] { w += d }
+		// The advances must add up to the reported extent (low word).
+		return w, w & 0xFFFF == i32(packed & 0xFFFF)
+	}
+	buf := make([]u16, n + 3, context.temp_allocator)
+	cur := make([]i32, n + 3, context.temp_allocator)
+	placed := make([]u16, n + 3, context.temp_allocator)
+	copy(buf, text)
+	full := place(dc, buf[:n], cur, placed) or_return
+	for g, i in glyphs {
+		if placed[i] != g { return } // substituted glyph (ligature)
+	}
+	if full <= max_w { return text, cur[:n], true }
+
+	// DrawTextW keeps the longest prefix (at least one unit) whose kerned width
+	// laid out on its own, plus the width of "...", fits. Kerning is per pair,
+	// so that width is the line's kerned advances before the last kept unit
+	// plus that unit's own advance. Then prefix + "..." is laid out kerned
+	// together, as DrawTextW draws it.
+	dots_size: windows.SIZE
+	dots := [3]u16{'.', '.', '.'}
+	if !windows.GetTextExtentPoint32W(dc, windows.LPCWSTR(&dots[0]), 3, &dots_size) { return }
+	avail := max_w - dots_size.cx
+	pos := make([]i32, n + 1, context.temp_allocator) // kerned advance of text[:i]
+	for d, i in cur[:n] { pos[i + 1] = pos[i] + d }
+	own_width :: proc(dc: windows.HDC, text: []u16, pos: []i32, k: int) -> (w: i32, ok: bool) {
+		own: i32
+		if !GetCharWidth32W(dc, u32(text[k - 1]), u32(text[k - 1]), &own) { return }
+		return pos[k - 1] + own, true
+	}
+	// Estimate with the kerning across the cut, then settle on exact widths.
+	k := 1
+	for k + 1 < n && pos[k + 1] <= avail { k += 1 }
+	w := own_width(dc, text, pos, k) or_return
+	if w > avail {
+		for k > 1 && w > avail {
+			k -= 1
+			w = own_width(dc, text, pos, k) or_return
+		}
+	} else {
+		for k + 1 < n {
+			nw := own_width(dc, text, pos, k + 1) or_return
+			if nw > avail { break }
+			k += 1
+		}
+	}
+	copy(buf[k:k + 3], dots[:])
+	place(dc, buf[:k + 3], cur, placed) or_return
+	return buf[:k + 3], cur[:k + 3], true
+}
+
+// One glyph per BMP code unit, left to right, with no combining, joining,
+// variation, format or surrogate units: kerned GDI placement matches DrawTextW.
+end_ellipsis_simple :: proc(u: u16) -> bool {
+	switch u {
+	case 0x20 ..= 0x7E, 0xA0 ..= 0xAC, 0xAE ..= 0x2FF, // Latin (no soft hyphen; combining marks start at U+0300)
+	     0x370 ..= 0x482, 0x48A ..= 0x52F, // Greek, Cyrillic without combining marks
+	     0x1E00 ..= 0x1FFF, // Latin/Greek extended
+	     0x2000 ..= 0x200A, 0x2010 ..= 0x2027, 0x202F ..= 0x205F, 0x2070 ..= 0x20CF, // spaces, punctuation, currency
+	     0x2100 ..= 0x2BFF, // letterlike, arrows, math, shapes, symbols
+	     0x2E80 ..= 0x3029, 0x3030 ..= 0x3098, 0x309B ..= 0x30FF, // CJK radicals, punctuation, kana
+	     0x3400 ..= 0x4DBF, 0x4E00 ..= 0x9FFF, 0xAC00 ..= 0xD7A3, 0xF900 ..= 0xFAFF, // ideographs, Hangul
+	     0xFF01 ..= 0xFFEF: // half/full width forms
+		return true
+	}
+	return false
 }
 
 // Button captions use the actual font metrics rather than a fixed baseline.
@@ -548,6 +667,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		} else {
 			fill_rect(dc, 0, 0, w, h, C_BG)
 			draw_string(dc, "Unable to allocate drawing buffer. Resize to retry.", 16, 40, ui.font_normal, C_TXT)
+			ui.hover_painted = {} // nothing hover-dependent is drawn
 		}
 		return 0
 	case windows.WM_TIMER:
@@ -580,15 +700,22 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 			zoom_pointer_move(win_x, compute_layout(w, h))
 			windows.InvalidateRect(hwnd, nil, windows.FALSE)
 		}
-		if ui.mouse.x != win_x || ui.mouse.y != win_y {
+		hover_track_leave(hwnd)
+		if ui.mouse.x != win_x || ui.mouse.y != win_y || !ui.mouse_valid {
 			ui.mouse.x = win_x
 			ui.mouse.y = win_y
 			ui.mouse_valid = true
-			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			// Repaint only if the frame drawn for this position would differ.
+			w, h := client_size(hwnd)
+			if hover_needs_repaint(ui.hover_painted, hover_signature_for_app(app, win_x, win_y, w, h)) {
+				windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			}
 		}
 		return 0
 	case windows.WM_MOUSELEAVE:
+		ui.mouse_tracking = false
 		ui.mouse_valid = false
+		if ui.hover_painted != {} { windows.InvalidateRect(hwnd, nil, windows.FALSE) }
 		return 0
 	case windows.WM_SETCURSOR:
 		if ui.tab == 0 && (u32(lparam) & 0xFFFF) == 1 { // HTCLIENT

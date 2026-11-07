@@ -14,6 +14,7 @@ zoom_behavior :: proc(t: ^testing.T) {
 	pane_resize_behavior(t)
 	tag_drag_behavior(t)
 	totals_tree_behavior(t)
+	hover_repaint_behavior(t)
 	ui_visibility_and_cancellation(t)
 	ui_startup_unwinds_every_stage(t)
 }
