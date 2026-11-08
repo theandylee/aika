@@ -1,10 +1,9 @@
 # aika
 
 A small Windows activity tracker and timeline viewer built with **Odin + native Win32/GDI**.
+*Aika* is the Finnish word for "time".
 
 ![aika day view, light and dark themes](docs/screenshots/aika-split.png)
-
-<sub>Light and dark themes (toggle with `F12`), shown with generated sample data.</sub>
 
 It follows the same core design as ManicTime:
 
@@ -17,10 +16,7 @@ It follows the same core design as ManicTime:
 - Import existing ManicTime history from its SQL Server Compact `.sdf` database.
 
 The app is pure Odin at runtime. ManicTime's proprietary `.sdf` file is read by a
-built-in, read-only reader: no PowerShell, no ManicTime DLLs.
-
-> **Working on the code?** Start with [`AGENTS.md`](AGENTS.md), then read the
-> focused docs in [`docs/`](docs/).
+built-in, read-only reader that needs no ManicTime libraries or other tools.
 
 Tracking uses a monotonic clock for scheduling. Large system-clock adjustments
 split tracking intervals rather than filling the clock jump; a running task stops
@@ -174,9 +170,8 @@ build\aika-cli.exe --db data\aika.db --import-manictime [path\to\ManicTime.sdf]
 
 The path is optional and defaults to the local ManicTime database.
 
-The older PowerShell exporter (`tools\export-manictime.ps1`) and JSON import
-(`--import <file.json>`, with `--import-source <id>` for legacy files) still work
-and share the same source ID, but they are no longer needed.
+Importing from a JSON export is also supported for scripting:
+`--import <file.json>`, with `--import-source <id>` for files that carry no source ID.
 
 Imports allocate local IDs, resolve groups by `(TimelineId, Key)`, and preserve
 existing group names/colors. Reimporting the same source does not duplicate rows;
