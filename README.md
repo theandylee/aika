@@ -92,11 +92,17 @@ everything with `--db <path>` (the folder option is then disabled).
 ## Keyboard
 
 The main canvas (timeline lanes) is mouse-driven; everything else is reachable from
-the keyboard. Key hints are shown on the buttons themselves.
+the keyboard. Key hints are shown on the buttons themselves. `Q`, `E`, `T`, `-` and `+`
+only act when the main window itself has focus, so typing in the filter box is unaffected.
 
 | Where | Key | Action |
 |---|---|---|
 | Main window | `/` | Jump to the filter box |
+| Main window | `Q` / `E` | Previous / next day |
+| Main window | `T` | Jump to today |
+| Main window | `-` / `+` | Zoom the Day timeline out / in (numpad works too) |
+| Main window | `Ctrl+,` | Open Settings (also works from the filter box) |
+| Main window | `F12` | Toggle light / dark theme |
 | Main window | `Tab` / `Shift+Tab` | Move between filter, date button and scrollbars |
 | Main window | `Ctrl+Enter` | Start / stop the task (Day view) |
 | Main window | `Alt+Enter` | Maximize / restore |
