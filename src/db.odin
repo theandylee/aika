@@ -546,9 +546,19 @@ db_delete_tag_block :: proc(db: ^DB, id: i64) -> bool {
 	return sqlite3_step(stmt) == SQLITE_DONE && sqlite3_changes(db.handle) == 1
 }
 
+// Most recently used first (latest end of any block carrying the tag, counting
+// tag lists as well as a block's first tag); never-used tags follow by name.
 db_load_tags :: proc(db: ^DB) -> ([]Tag, DB_Result) {
-	stmt, ok := db_prepare(db, `SELECT GroupId, DisplayName FROM "Group"
-		WHERE TimelineId = 1 AND COALESCE(DisplayName, '') <> '' ORDER BY DisplayName COLLATE NOCASE`)
+	stmt, ok := db_prepare(db, `SELECT g.GroupId, g.DisplayName FROM "Group" g
+		LEFT JOIN (
+			SELECT GroupId, MAX(EndUtcMs) AS LastUsed FROM (
+				SELECT GroupId, EndUtcMs FROM Activity WHERE TimelineId = 1
+				UNION ALL
+				SELECT li.GroupId, a.EndUtcMs FROM Activity a
+					JOIN GroupListItem li ON li.GroupListId = a.GroupListId WHERE a.TimelineId = 1)
+			GROUP BY GroupId) u ON u.GroupId = g.GroupId
+		WHERE g.TimelineId = 1 AND COALESCE(g.DisplayName, '') <> ''
+		ORDER BY u.LastUsed IS NULL, u.LastUsed DESC, g.DisplayName COLLATE NOCASE`)
 	if !ok { return nil, db_failure(db) }
 	defer sqlite3_finalize(stmt)
 	tags := make([dynamic]Tag)

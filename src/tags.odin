@@ -305,6 +305,16 @@ tag_picker_filter :: proc() {
 	// Creating is offered whenever the typed name is new; in multi mode it adds to the ticked tags.
 	// The Start task picker's Create also accepts an existing name (it just adds that tag).
 	windows.EnableWindow(tag_ui.create, windows.TRUE if query != "" && (!exact || tag_ui.task_picker) else windows.FALSE)
+	if tag_ui.task_picker { tag_task_update_start() }
+}
+
+// Start is available with chosen tags, or else with a highlighted list row,
+// which Ctrl+Enter then starts as the single tag.
+tag_task_update_start :: proc() {
+	if tag_ui.popup == nil { return }
+	can := len(tag_ui.task_picks) > 0 || (tag_ui.list != nil && len(tag_ui.visible) > 0 &&
+		windows.SendMessageW(tag_ui.list, LB_GETCURSEL, 0, 0) >= 0)
+	windows.EnableWindow(windows.GetDlgItem(tag_ui.popup, i32(TAG_ID_START)), windows.TRUE if can else windows.FALSE)
 }
 
 // --- Start task picker: chosen-tag list ---
@@ -377,9 +387,7 @@ tag_draw_chips :: proc(dc: windows.HDC, client_w: i32) {
 tag_task_refresh :: proc() {
 	if tag_ui.popup == nil { return }
 	tag_picker_layout(tag_ui.popup)
-	windows.EnableWindow(windows.GetDlgItem(tag_ui.popup, i32(TAG_ID_START)),
-		windows.TRUE if len(tag_ui.task_picks) > 0 else windows.FALSE)
-	if tag_ui.list != nil { tag_picker_filter() }
+	if tag_ui.list != nil { tag_picker_filter() } // also refreshes the Start button
 	windows.InvalidateRect(tag_ui.popup, nil, true)
 }
 
@@ -472,7 +480,13 @@ tag_pomo_commit :: proc() {
 
 // Ctrl+Enter: the only way to start the task.
 tag_task_start :: proc() {
-	if len(tag_ui.task_picks) == 0 { return }
+	if len(tag_ui.task_picks) == 0 {
+		// Nothing added yet: start with the highlighted tag, if any.
+		index := int(windows.SendMessageW(tag_ui.list, LB_GETCURSEL, 0, 0))
+		if index < 0 || index >= len(tag_ui.visible) { return }
+		tag := tag_ui.tags[tag_ui.visible[index]]
+		append(&tag_ui.task_picks, Tag_Pick{tag.id, strings.clone(tag.name)})
+	}
 	app := global_app
 	tag_pomo_commit()
 	pomo_ms := i64(pomodoro_minutes) * MS_PER_MINUTE if pomodoro_on else 0

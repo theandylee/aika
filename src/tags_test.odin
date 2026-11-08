@@ -145,6 +145,28 @@ tag_persistence :: proc(t: ^testing.T) {
 }
 
 @(test)
+tags_load_most_recently_used_first :: proc(t: ^testing.T) {
+	db, ok := db_open(":memory:")
+	testing.expect(t, ok)
+	if !ok { return }
+	defer db_close(&db)
+	alpha, beta, gamma, delta := db_ensure_tag(&db, "Alpha"), db_ensure_tag(&db, "Beta"), db_ensure_tag(&db, "Gamma"), db_ensure_tag(&db, "Delta")
+	ds, _ := day_bounds_ms(20261106)
+	// Beta used earliest, Alpha later; Gamma only as the second tag of a later multi-tag block.
+	_, r1 := db_create_tag_block_multi(&db, []Tag_Pick{{beta, "Beta"}}, ds + 1000, ds + 2000)
+	_, r2 := db_create_tag_block_multi(&db, []Tag_Pick{{alpha, "Alpha"}}, ds + 3000, ds + 4000)
+	_, r3 := db_create_tag_block_multi(&db, []Tag_Pick{{alpha, "Alpha"}, {gamma, "Gamma"}}, ds + 5000, ds + 6000)
+	_, r4 := db_create_tag_block_multi(&db, []Tag_Pick{{beta, "Beta"}}, ds + 7000, ds + 8000)
+	testing.expect(t, r1 == .Ok && r2 == .Ok && r3 == .Ok && r4 == .Ok)
+	tags, result := db_load_tags(&db)
+	defer free_tags(tags)
+	testing.expect(t, result == .Ok && len(tags) == 4)
+	if len(tags) != 4 { return }
+	// Beta (latest), then Alpha and Gamma (same last block, name order), then never-used Delta.
+	testing.expect(t, tags[0].id == beta && tags[1].id == alpha && tags[2].id == gamma && tags[3].id == delta)
+}
+
+@(test)
 tag_selection_avoids_occupied_time :: proc(t: ^testing.T) {
 	// Unsorted input, and an application which must not block tagging.
 	activities := [3]Activity{
