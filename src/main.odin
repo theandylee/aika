@@ -208,6 +208,8 @@ run_gui :: proc(db: DB, db_path: string) -> bool {
 	update_set_policy(loaded.updates_on_start, loaded.updates_periodic)
 	tag_picker_size = {i32(loaded.picker_w), i32(loaded.picker_h)}
 	pomodoro_on, pomodoro_minutes = loaded.pomodoro_on, loaded.pomodoro_minutes
+	ui.pane_lane_frac, ui.pane_totals_frac = f32(loaded.lane_permille) / 1000, f32(loaded.totals_permille) / 1000
+	ui.maximized = loaded.maximized
 	load_day(&app)
 
 	app_identity_register() // notification header reads "aika", not "aika.exe"

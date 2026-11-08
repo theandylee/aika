@@ -77,7 +77,8 @@ UiState :: struct {
 	totals_expanded: map[string]bool,
 	scroll_date: int,
 	zoom_start, zoom_end: f64,
-	pane_lane_frac, pane_totals_frac: f32, // fraction of available span; zero = default; retained for this session
+	pane_lane_frac, pane_totals_frac: f32, // fraction of available span; zero = default; saved to settings
+	maximized: bool, // main window is maximized; saved to settings, restored at startup
 }
 
 ui: UiState
@@ -856,6 +857,7 @@ on_lbutton_up :: proc(hwnd: windows.HWND, app: ^App, x, y: i32, w, h: i32) {
 		interaction_end() // before ReleaseCapture: it re-enters via WM_CAPTURECHANGED
 		windows.ReleaseCapture()
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		settings_save_layout()
 		return
 	}
 	if tag_drag() != .None {
@@ -955,6 +957,13 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		h := i32((u32l >> 16) & 0xFFFF)
 		recreate_backbuffer(w, h)
 		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		if wparam == windows.SIZE_MAXIMIZED || wparam == windows.SIZE_RESTORED {
+			maximized := wparam == windows.SIZE_MAXIMIZED
+			if maximized != ui.maximized {
+				ui.maximized = maximized
+				if global_app != nil { settings_save_layout() }
+			}
+		}
 		return 0
 	case windows.WM_MOUSEMOVE:
 		win_x, win_y := mouse_point(lparam)
@@ -1427,7 +1436,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	if start_hidden && ui_add_tray() {
 		windows.ShowWindow(ui.hwnd, windows.SW_HIDE)
 	} else {
-		windows.ShowWindow(ui.hwnd, windows.SW_SHOW)
+		windows.ShowWindow(ui.hwnd, windows.SW_SHOWMAXIMIZED if ui.maximized else windows.SW_SHOW)
 	}
 	ready = true
 	return true

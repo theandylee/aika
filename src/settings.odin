@@ -40,6 +40,11 @@ settings_parse_minutes :: proc(text: string) -> (minutes: int, ok: bool) {
 //   width = 420
 //   height = 350
 //
+//   [layout]          # written once a pane was dragged or the window maximized
+//   timeline_height = 0   # 1/1000 of the span; 0 = default
+//   totals_width = 0
+//   maximized = false
+//
 //   [pomodoro]        # Start task window: mode toggle and duration
 //   enabled = false
 //   minutes = 25
@@ -58,6 +63,9 @@ Settings :: struct {
 	picker_h:         int,
 	pomodoro_on:      bool,
 	pomodoro_minutes: int, // POMODORO_MIN_MINUTES..POMODORO_MAX_MINUTES
+	lane_permille:    int, // timeline height as 1/1000 of the span; 0 = default
+	totals_permille:  int, // totals panel width as 1/1000 of the chart width; 0 = default
+	maximized:        bool,
 }
 
 SETTINGS_DEFAULT :: Settings{idle_minutes = DEFAULT_IDLE_MINUTES, updates_on_start = true, updates_periodic = true,
@@ -104,6 +112,15 @@ settings_parse_toml :: proc(text: string) -> (s: Settings) {
 				case "height": s.picker_h = n
 				}
 			}
+		case "layout":
+			switch key {
+			case "timeline_height":
+				if n, ok := strconv.parse_int(value); ok && n > 0 && n <= 1000 { s.lane_permille = n }
+			case "totals_width":
+				if n, ok := strconv.parse_int(value); ok && n > 0 && n <= 1000 { s.totals_permille = n }
+			case "maximized":
+				if value == "true" || value == "false" { s.maximized = value == "true" }
+			}
 		case "pomodoro":
 			switch key {
 			case "enabled":
@@ -123,6 +140,10 @@ settings_format_toml :: proc(s: Settings) -> string {
 		s.idle_minutes, s.updates_on_start, s.updates_periodic, "dark" if s.dark else "light")
 	if s.picker_w > 0 && s.picker_h > 0 {
 		text = fmt.tprintf("%s\n[tag_picker]\nwidth = %d\nheight = %d\n", text, s.picker_w, s.picker_h)
+	}
+	if s.lane_permille > 0 || s.totals_permille > 0 || s.maximized {
+		text = fmt.tprintf("%s\n[layout]\ntimeline_height = %d\ntotals_width = %d\nmaximized = %v\n",
+			text, s.lane_permille, s.totals_permille, s.maximized)
 	}
 	if s.pomodoro_minutes >= POMODORO_MIN_MINUTES && s.pomodoro_minutes <= POMODORO_MAX_MINUTES {
 		text = fmt.tprintf("%s\n[pomodoro]\nenabled = %v\nminutes = %d\n", text, s.pomodoro_on, s.pomodoro_minutes)
@@ -177,7 +198,15 @@ settings_save_current :: proc(db_path: string, minutes: int) -> bool {
 	on_start, periodic := update_policy()
 	return settings_save(db_path, Settings{idle_minutes = minutes, updates_on_start = on_start,
 		updates_periodic = periodic, dark = ui.dark, picker_w = int(tag_picker_size.x), picker_h = int(tag_picker_size.y),
-		pomodoro_on = pomodoro_on, pomodoro_minutes = pomodoro_minutes})
+		pomodoro_on = pomodoro_on, pomodoro_minutes = pomodoro_minutes,
+		lane_permille = int(ui.pane_lane_frac * 1000 + 0.5), totals_permille = int(ui.pane_totals_frac * 1000 + 0.5),
+		maximized = ui.maximized})
+}
+
+// Persists pane proportions / maximize state, keeping the other saved values.
+settings_save_layout :: proc() {
+	if global_app == nil { return }
+	settings_save_current(global_app.db_path, settings_load(global_app.db_path).idle_minutes)
 }
 
 SettingsUi :: struct {
