@@ -1166,6 +1166,13 @@ task_button_activate :: proc(app: ^App) {
 	load_day(app)
 }
 
+// Previous/next day (toolbar buttons and the Q/E keys).
+shift_day :: proc(app: ^App, delta: int) {
+	app.date = add_days(app.date, delta)
+	load_day(app)
+	sync_date_picker(app)
+}
+
 handle_click :: proc(app: ^App, x, y: i32) {
 	w, h := client_size(ui.hwnd)
 	id := hit_test(x, y, w, h)
@@ -1191,13 +1198,9 @@ handle_click :: proc(app: ^App, x, y: i32) {
 	case .Zoom_Reset:
 		ui.zoom_start, ui.zoom_end = 0, 1
 	case .Btn_Prev:
-		app.date = add_days(app.date, -1)
-		load_day(app)
-		sync_date_picker(app)
+		shift_day(app, -1)
 	case .Btn_Next:
-		app.date = add_days(app.date, 1)
-		load_day(app)
-		sync_date_picker(app)
+		shift_day(app, 1)
 	case .Btn_Today:
 		app.date = today_date_int()
 		load_day(app)

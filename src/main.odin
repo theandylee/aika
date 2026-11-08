@@ -278,6 +278,52 @@ dispatch_app_message :: proc(msg: ^windows.MSG) {
 			windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
 			return
 		}
+		// Ctrl+, opens Settings from anywhere in the main window (including the filter box).
+		if msg.message == windows.WM_KEYDOWN && msg.wParam == windows.VK_OEM_COMMA &&
+		   windows.GetKeyState(windows.VK_CONTROL) < 0 && windows.GetKeyState(windows.VK_SHIFT) >= 0 &&
+		   windows.GetKeyState(windows.VK_MENU) >= 0 &&
+		   (msg.hwnd == ui.hwnd || windows.IsChild(ui.hwnd, msg.hwnd)) {
+			settings_open()
+			return
+		}
+		// F12 toggles the light/dark theme from anywhere in the main window.
+		if msg.message == windows.WM_KEYDOWN && msg.wParam == windows.VK_F12 &&
+		   windows.GetKeyState(windows.VK_CONTROL) >= 0 && windows.GetKeyState(windows.VK_SHIFT) >= 0 &&
+		   windows.GetKeyState(windows.VK_MENU) >= 0 &&
+		   (msg.hwnd == ui.hwnd || windows.IsChild(ui.hwnd, msg.hwnd)) {
+			theme_toggle()
+			windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+			return
+		}
+		// - / + zoom the Day timeline (main window focused; "+" is Shift+"=" so Shift is allowed).
+		if msg.message == windows.WM_KEYDOWN && ui.tab == .Day && msg.hwnd == ui.hwnd && !interaction_active() &&
+		   (msg.wParam == windows.VK_OEM_MINUS || msg.wParam == windows.VK_SUBTRACT ||
+		    msg.wParam == windows.VK_OEM_PLUS || msg.wParam == windows.VK_ADD) &&
+		   windows.GetKeyState(windows.VK_CONTROL) >= 0 && windows.GetKeyState(windows.VK_MENU) >= 0 {
+			if msg.wParam == windows.VK_OEM_MINUS || msg.wParam == windows.VK_SUBTRACT {
+				zoom_scale(1.5, 0.5)
+			} else {
+				zoom_scale(1.0 / 1.5, 0.5)
+			}
+			windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+			return
+		}
+		// Q / E / T = previous / next day / today (only with the main window itself
+		// focused, so typing in the filter box is unaffected).
+		if msg.message == windows.WM_KEYDOWN && (msg.wParam == 'Q' || msg.wParam == 'E' || msg.wParam == 'T') &&
+		   msg.hwnd == ui.hwnd && global_app != nil &&
+		   windows.GetKeyState(windows.VK_SHIFT) >= 0 && windows.GetKeyState(windows.VK_CONTROL) >= 0 &&
+		   windows.GetKeyState(windows.VK_MENU) >= 0 {
+			if msg.wParam == 'T' {
+				global_app.date = today_date_int()
+				load_day(global_app)
+				sync_date_picker(global_app)
+			} else {
+				shift_day(global_app, -1 if msg.wParam == 'Q' else 1)
+			}
+			windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+			return
+		}
 		// Native Tab order for the main window (filter EDIT <-> date picker
 		// button <-> scrollbars). Custom canvas controls stay mouse-only.
 		if ui.hwnd != nil && bool(windows.IsDialogMessageW(ui.hwnd, msg)) {

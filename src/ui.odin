@@ -114,11 +114,11 @@ compute_layout :: proc(w, h: i32) -> Layout {
 
 	btn_h := dpi_px(TOOLBAR_BTN_H)
 	btn_y := lay.toolbar_y + dpi_px(12)
-	lay.btn_prev = windows.RECT{left = dpi_px(MARGIN), top = btn_y, right = dpi_px(MARGIN) + dpi_px(26), bottom = btn_y + btn_h}
-	lay.btn_today = windows.RECT{left = dpi_px(MARGIN) + dpi_px(30), top = btn_y, right = dpi_px(MARGIN) + dpi_px(98), bottom = btn_y + btn_h}
-	lay.btn_next = windows.RECT{left = dpi_px(MARGIN) + dpi_px(102), top = btn_y, right = dpi_px(MARGIN) + dpi_px(128), bottom = btn_y + btn_h}
-	lay.date_pick = windows.RECT{left = dpi_px(MARGIN) + dpi_px(140), top = btn_y, right = dpi_px(MARGIN) + dpi_px(140) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
-	lay.btn_track = windows.RECT{left = dpi_px(MARGIN) + dpi_px(148) + dpi_px(DATE_PICK_W), top = btn_y, right = dpi_px(MARGIN) + dpi_px(148) + dpi_px(TRACK_BTN_W) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
+	lay.btn_prev = windows.RECT{left = dpi_px(MARGIN), top = btn_y, right = dpi_px(MARGIN) + dpi_px(56), bottom = btn_y + btn_h}
+	lay.btn_today = windows.RECT{left = dpi_px(MARGIN) + dpi_px(60), top = btn_y, right = dpi_px(MARGIN) + dpi_px(144), bottom = btn_y + btn_h}
+	lay.btn_next = windows.RECT{left = dpi_px(MARGIN) + dpi_px(148), top = btn_y, right = dpi_px(MARGIN) + dpi_px(204), bottom = btn_y + btn_h}
+	lay.date_pick = windows.RECT{left = dpi_px(MARGIN) + dpi_px(216), top = btn_y, right = dpi_px(MARGIN) + dpi_px(216) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
+	lay.btn_track = windows.RECT{left = dpi_px(MARGIN) + dpi_px(224) + dpi_px(DATE_PICK_W), top = btn_y, right = dpi_px(MARGIN) + dpi_px(224) + dpi_px(TRACK_BTN_W) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
 
 	// Day start / day end / duration boxes anchored to the right.
 	day_box_w := min(dpi_px(108), (w - lay.btn_track.right - dpi_px(24)) / 3 - dpi_px(4))
@@ -287,9 +287,9 @@ draw_tabs :: proc(dc: windows.HDC) {
 
 draw_toolbar :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	draw_toolbar_background_rect(dc, 0, lay.toolbar_y, lay.w, dpi_px(TOOLBAR_H))
-	draw_button(dc, lay.btn_prev, "<", .Btn_Prev)
-	draw_button(dc, lay.btn_next, ">", .Btn_Next)
-	draw_button(dc, lay.btn_today, "Today", .Btn_Today)
+	draw_button(dc, lay.btn_prev, "◀ [Q]", .Btn_Prev)
+	draw_button(dc, lay.btn_next, "[E] ▶", .Btn_Next)
+	draw_button(dc, lay.btn_today, "Today [T]", .Btn_Today)
 
 	label := "Start task [Ctrl+Enter]"
 	if app.task.id != 0 {
