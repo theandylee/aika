@@ -202,7 +202,7 @@ src/
   filter_edit.odin  Native filter EDIT control behavior
   date_picker.odin  Native owner-drawn date button and calendar popup
   theme.odin      Light/dark toggle, palette/native control colors
-  settings.odin   Native Tracking settings window and .settings file
+  settings.odin   Native Settings window; aika-settings.toml (idle, updates, theme) read/write + legacy migration
   datadir.odin    Default/custom data folder, pointer file, live move/switch, folder picker
   tags.odin       Time-range dragging, native searchable tag picker, tag resizing
   task.odin       Running-task lifecycle (tick/stop/flush, clock jumps)

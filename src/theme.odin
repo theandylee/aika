@@ -1,14 +1,6 @@
 package main
 
-import "core:fmt"
-import "core:os"
-import "core:strings"
 import "core:sys/windows"
-
-// Keep preferences beside the selected database, including isolated test DBs.
-theme_path :: proc() -> string {
-	return fmt.tprintf("%s.theme", global_app.db_path)
-}
 
 theme_switch_rect :: proc(w: i32) -> windows.RECT {
 	return windows.RECT{w - dpi_px(36), dpi_px(2), w - dpi_px(8), dpi_px(TAB_H) - dpi_px(2)}
@@ -40,8 +32,7 @@ theme_set_palette :: proc(dark: bool) {
 }
 
 theme_load :: proc() {
-	data, err := os.read_entire_file(theme_path(), context.temp_allocator)
-	theme_set_palette(err == nil && strings.trim_space(string(data)) == "dark")
+	theme_set_palette(settings_load(global_app.db_path).dark)
 }
 
 theme_control_colors :: proc(wp: windows.WPARAM) -> windows.LRESULT {
@@ -91,8 +82,8 @@ theme_date_calendar :: proc() {
 theme_toggle :: proc() {
 	theme_set_palette(!ui.dark)
 	theme_apply_native()
-	value := "dark" if ui.dark else "light"
-	if err := os.write_entire_file(theme_path(), transmute([]u8)value); err != nil {
+	minutes := int(global_app.tracker.idle_threshold_ms / MS_PER_MINUTE)
+	if !settings_save_current(global_app.db_path, minutes) {
 		message_box("Theme changed, but the preference could not be saved beside the database.", "aika", windows.MB_ICONWARNING)
 	}
 }

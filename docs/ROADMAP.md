@@ -194,7 +194,7 @@ lock/power event sources and their `SessionLocked`/`PowerOff` rows.
 ### 2. Settings
 
 Tracking settings already expose an idle timeout (default 1 minute, range 1–500)
-through a native window and a database-adjacent `.settings` file. Remaining policy
+through a native window and a database-adjacent `aika-settings.toml` file. Remaining policy
 constants are currently fixed:
 
 - poll interval = 1 second

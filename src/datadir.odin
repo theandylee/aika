@@ -6,8 +6,8 @@ import "core:path/filepath"
 import "core:strings"
 import "core:sys/windows"
 
-// Where aika keeps its database and the sidecar files beside it (.settings,
-// .theme). The default is %LOCALAPPDATA%\aika. A custom folder is remembered in
+// Where aika keeps its database and the files beside it (aika-settings.toml).
+// The default is %LOCALAPPDATA%\aika. A custom folder is remembered in
 // a one-line pointer file that always lives in the default folder, because the
 // custom folder cannot say where it is itself. `--db` overrides everything.
 
@@ -41,7 +41,19 @@ DATA_POINTER_NAME :: "data-folder.txt"
 
 // Files that belong to one database; "-wal"/"-shm" only exist after an unclean
 // close, but a WAL carries committed rows, so it travels with the database.
-DATA_SUFFIXES :: [5]string{"", "-wal", "-shm", ".settings", ".theme"}
+// The settings file (aika-settings.toml) is not a suffix of the database name:
+// see datadir_files.
+DATA_SUFFIXES :: [3]string{"", "-wal", "-shm"}
+DATA_FILE_COUNT :: len(DATA_SUFFIXES) + 1
+
+// Every file that moves with the database at `db_path`, in a fixed order.
+datadir_files :: proc(db_path: string) -> [DATA_FILE_COUNT]string {
+	files: [DATA_FILE_COUNT]string
+	suffixes := DATA_SUFFIXES
+	for suffix, i in suffixes { files[i] = fmt.tprintf("%s%s", db_path, suffix) }
+	files[DATA_FILE_COUNT - 1] = settings_path(db_path)
+	return files
+}
 
 // Set by --db: the data folder is then fixed for this run.
 db_path_overridden := false
@@ -175,19 +187,18 @@ datadir_switch :: proc(app: ^App, new_dir: string, move: bool, remember := true)
 	db_exec(&app.db, "PRAGMA wal_checkpoint(TRUNCATE)")
 	db_close(&app.db)
 
-	suffixes := DATA_SUFFIXES
-	copied: [len(DATA_SUFFIXES)]bool
-	drop_copies :: proc(path: string, copied: [len(DATA_SUFFIXES)]bool) {
-		suffixes := DATA_SUFFIXES
-		for suffix, i in suffixes {
-			if copied[i] { windows.DeleteFileW(wtext(fmt.tprintf("%s%s", path, suffix))) }
+	copied: [DATA_FILE_COUNT]bool
+	drop_copies :: proc(path: string, copied: [DATA_FILE_COUNT]bool) {
+		files := datadir_files(path)
+		for file, i in files {
+			if copied[i] { windows.DeleteFileW(wtext(file)) }
 		}
 	}
 	if move {
-		for suffix, i in suffixes {
-			src := fmt.tprintf("%s%s", old_path, suffix)
+		old_files, new_files := datadir_files(old_path), datadir_files(new_path)
+		for src, i in old_files {
 			if !datadir_exists(src) { continue }
-			if windows.CopyFileW(wtext(src), wtext(fmt.tprintf("%s%s", new_path, suffix)), windows.TRUE) == windows.FALSE {
+			if windows.CopyFileW(wtext(src), wtext(new_files[i]), windows.TRUE) == windows.FALSE {
 				drop_copies(new_path, copied)
 				datadir_reopen(app, old_path)
 				datadir_restart_tracking(app)
@@ -205,6 +216,7 @@ datadir_switch :: proc(app: ^App, new_dir: string, move: bool, remember := true)
 	switched = true
 	delete(app.db_path)
 	app.db_path = strings.clone(new_path)
+	settings_migrate_legacy(new_path) // a folder that still has pre-TOML files
 	if move { drop_copies(old_path, copied) }
 	datadir_restart_tracking(app)
 	return .Ok

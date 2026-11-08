@@ -102,7 +102,7 @@ before touching it:
   These remain custom hit targets, not native keyboard-accessible controls.
 - The top-right **moon / sun** icon button switches immediately (moon for dark,
   sun for light), with a hover tooltip describing the action. It
-  saves the choice in `<database path>.theme`. Missing/invalid preferences use
+  saves the choice in `aika-settings.toml` (`[appearance] theme`). Missing/invalid preferences use
   light mode. `src/theme.odin` manages the palette and native control colors;
   dark buttons/tabs use the GDI fallback rather than light UxTheme rendering.
   Activity/tag colors are preserved, with contrasting text on tag blocks.

@@ -41,9 +41,10 @@ Updater :: struct {
 	asset_size: i64,
 	next_check_ms: i64,
 	started:   bool,
+	on_start, periodic: bool, // set from settings (update_set_policy)
 }
 
-updater: Updater
+updater := Updater{on_start = true, periodic = true}
 
 Release_Asset :: struct {
 	name:                 string,
@@ -154,21 +155,50 @@ http_get :: proc(url: string, out: ^[dynamic]u8, file: windows.HANDLE, limit: in
 
 // --- Check ---
 
-update_enabled :: proc() -> bool { return AIKA_VERSION != "dev" }
+UPDATE_NEVER :: max(i64) // next_check_ms value meaning "nothing scheduled"
+
+// Settings: check once shortly after launch, and/or re-check every
+// UPDATE_INTERVAL_MS. Dev builds never check regardless.
+update_policy :: proc() -> (on_start, periodic: bool) {
+	sync.mutex_lock(&updater.mu)
+	defer sync.mutex_unlock(&updater.mu)
+	return updater.on_start, updater.periodic
+}
+
+// Changing the policy while running: switching periodic checks on schedules one
+// right away, switching them off cancels the pending one. (on_start only matters
+// at the next launch.)
+update_set_policy :: proc(on_start, periodic: bool) {
+	sync.mutex_lock(&updater.mu)
+	defer sync.mutex_unlock(&updater.mu)
+	if updater.started && periodic != updater.periodic {
+		updater.next_check_ms = monotonic_ms() if periodic else UPDATE_NEVER
+	}
+	updater.on_start, updater.periodic = on_start, periodic
+}
+
+// Next check after one at `now`: only when periodic checks are on. Caller holds the mutex.
+update_next_after :: proc(now: i64, delay: i64) -> i64 {
+	return now + delay if updater.periodic else UPDATE_NEVER
+}
 
 // Called from the UI timer: starts a background check when one is due.
 update_tick :: proc() {
-	if !update_enabled() { return }
+	if AIKA_VERSION == "dev" { return }
 	now := monotonic_ms()
 	sync.mutex_lock(&updater.mu)
 	defer sync.mutex_unlock(&updater.mu)
 	if !updater.started {
 		updater.started = true
-		updater.next_check_ms = now + UPDATE_FIRST_CHECK_MS
+		if updater.on_start {
+			updater.next_check_ms = now + UPDATE_FIRST_CHECK_MS
+		} else {
+			updater.next_check_ms = update_next_after(now, UPDATE_INTERVAL_MS)
+		}
 	}
 	if updater.state != .Idle || now < updater.next_check_ms { return }
 	updater.state = .Checking
-	updater.next_check_ms = now + UPDATE_INTERVAL_MS
+	updater.next_check_ms = update_next_after(now, UPDATE_INTERVAL_MS)
 	thread.create_and_start(update_check_worker, self_cleanup = true)
 }
 
@@ -188,7 +218,7 @@ update_check_worker :: proc() {
 		updater.state = .Idle
 	case .Failed:
 		updater.state = .Idle
-		updater.next_check_ms = monotonic_ms() + UPDATE_RETRY_MS
+		updater.next_check_ms = update_next_after(monotonic_ms(), UPDATE_RETRY_MS)
 	}
 	sync.mutex_unlock(&updater.mu)
 	if hwnd != nil { windows.PostMessageW(hwnd, UPDATE_CHECKED, 0, 0) }

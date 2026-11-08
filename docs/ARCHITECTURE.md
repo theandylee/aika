@@ -89,7 +89,7 @@ desired := .Away if idle >= idle_threshold_ms else .Active
 tick-count wrap. The default idle threshold is 60 seconds without keyboard or mouse
 input. `src/settings.odin` provides a native Settings window (top-right button or
 tray menu) with a Tracking page and a validated 1–500 minute timeout. OK saves the
-integer minute value in `<database path>.settings` and applies it on the next
+integer minute value in `aika-settings.toml` (beside the database; see below) and applies it on the next
 tracker tick; Cancel, Escape and window close discard edits. Missing or invalid
 preferences fall back to one minute. The owner is disabled while settings is open,
 but its timer continues tracking. Tab, Enter and Escape are handled through the
@@ -442,8 +442,8 @@ different purpose have their own names (`splitter_hot`, `tag_preview`,
 `section_head` all equal `button_hover` today), and `zoom_selection` is themed.
 Adding a color means one struct field, one value per palette, one `C_*` variable and
 one line in `palette_apply`; `palette_is_applied` (tested) catches a forgotten
-assignment. The toggle is saved beside the selected database as
-`<database path>.theme`. Dark buttons and tabs use GDI rather than light UxTheme
+assignment. The toggle is saved in `[appearance] theme` of `aika-settings.toml`
+beside the selected database. Dark buttons and tabs use GDI rather than light UxTheme
 drawing; stored activity colors are unchanged.
 
 Two color types meet in `src/colors.odin`: `Colorref` (= `windows.COLORREF`,

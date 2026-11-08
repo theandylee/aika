@@ -202,7 +202,10 @@ run_gui :: proc(db: DB, db_path: string) -> bool {
 	// This date identifies the write-through cache even if the first read fails.
 	// load_result still reports that the historical baseline could not be loaded.
 	app.loaded_date = app.date
+	settings_migrate_legacy(app.db_path) // before anything reads settings or theme
 	tracker_init(&app)
+	loaded := settings_load(app.db_path)
+	update_set_policy(loaded.updates_on_start, loaded.updates_periodic)
 	load_day(&app)
 
 	if !ui_bootstrap() {

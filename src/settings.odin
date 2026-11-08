@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:os"
+import "core:path/filepath"
 import "core:strconv"
 import "core:strings"
 import "core:sys/windows"
@@ -15,24 +16,128 @@ settings_parse_minutes :: proc(text: string) -> (minutes: int, ok: bool) {
 	return
 }
 
-settings_load_minutes :: proc(db_path: string) -> int {
-	if db_path == "" { return DEFAULT_IDLE_MINUTES }
-	data, err := os.read_entire_file(fmt.tprintf("%s.settings", db_path), context.temp_allocator)
-	if err == nil {
-		if minutes, ok := settings_parse_minutes(string(data)); ok { return minutes }
-	}
-	return DEFAULT_IDLE_MINUTES
+// aika-settings.toml lives in the data folder, beside the database:
+//
+//   [tracking]
+//   idle_minutes = 1
+//
+//   [updates]
+//   on_start = true
+//   periodic = true
+//
+//   [appearance]
+//   theme = "light"   # or "dark"
+//
+// Missing or invalid keys keep their defaults. Older versions kept `<db>.settings`
+// (first a bare number, later TOML) and `<db>.theme`; settings_migrate_legacy
+// folds those into this file once and deletes them.
+SETTINGS_FILE_NAME :: "aika-settings.toml"
+
+Settings :: struct {
+	idle_minutes:     int,
+	updates_on_start: bool,
+	updates_periodic: bool,
+	dark:             bool,
 }
 
-settings_save_minutes :: proc(db_path: string, minutes: int) -> bool {
-	if minutes < 1 || minutes > 500 { return false }
-	return os.write_entire_file(fmt.tprintf("%s.settings", db_path),
-		transmute([]u8)fmt.tprintf("%d\n", minutes)) == nil
+SETTINGS_DEFAULT :: Settings{idle_minutes = DEFAULT_IDLE_MINUTES, updates_on_start = true, updates_periodic = true}
+
+// Parses the small TOML subset above: [tables], `key = value` with integers and
+// booleans, and # comments. Anything else is ignored.
+settings_parse_toml :: proc(text: string) -> (s: Settings) {
+	s = SETTINGS_DEFAULT
+	if minutes, ok := settings_parse_minutes(text); ok { // legacy: just the number
+		s.idle_minutes = minutes
+		return
+	}
+	section := ""
+	it := text
+	for raw in strings.split_lines_iterator(&it) {
+		line, _, _ := strings.partition(raw, "#")
+		line = strings.trim_space(line)
+		if len(line) == 0 { continue }
+		if line[0] == '[' {
+			section = strings.trim_space(strings.trim_suffix(line[1:], "]"))
+			continue
+		}
+		key, _, value := strings.partition(line, "=")
+		key, value = strings.trim_space(key), strings.trim_space(value)
+		switch section {
+		case "tracking":
+			if key == "idle_minutes" {
+				if minutes, ok := settings_parse_minutes(value); ok { s.idle_minutes = minutes }
+			}
+		case "updates":
+			if value == "true" || value == "false" {
+				switch key {
+				case "on_start": s.updates_on_start = value == "true"
+				case "periodic": s.updates_periodic = value == "true"
+				}
+			}
+		case "appearance":
+			if key == "theme" { s.dark = strings.trim(value, "\"") == "dark" }
+		}
+	}
+	return
+}
+
+settings_format_toml :: proc(s: Settings) -> string {
+	return fmt.tprintf("[tracking]\nidle_minutes = %d\n\n[updates]\non_start = %v\nperiodic = %v\n\n[appearance]\ntheme = \"%s\"\n",
+		s.idle_minutes, s.updates_on_start, s.updates_periodic, "dark" if s.dark else "light")
+}
+
+// The settings file for a database: in the same folder, so a custom data folder
+// (or --db) keeps its own preferences.
+settings_path :: proc(db_path: string) -> string {
+	context.allocator = context.temp_allocator // filepath.dir allocates
+	dir := filepath.dir(db_path)
+	if dir == "" || dir == "." { return SETTINGS_FILE_NAME }
+	return fmt.tprintf("%s\\%s", dir, SETTINGS_FILE_NAME)
+}
+
+// One-time upgrade from `<db>.settings` + `<db>.theme`; no-op once the new file exists.
+settings_migrate_legacy :: proc(db_path: string) {
+	if db_path == "" || datadir_exists(settings_path(db_path)) { return }
+	legacy_settings, legacy_theme := fmt.tprintf("%s.settings", db_path), fmt.tprintf("%s.theme", db_path)
+	have_settings, have_theme := datadir_exists(legacy_settings), datadir_exists(legacy_theme)
+	if !have_settings && !have_theme { return }
+	s := SETTINGS_DEFAULT
+	if data, err := os.read_entire_file(legacy_settings, context.temp_allocator); err == nil {
+		s = settings_parse_toml(string(data))
+	}
+	if data, err := os.read_entire_file(legacy_theme, context.temp_allocator); err == nil {
+		s.dark = strings.trim_space(string(data)) == "dark"
+	}
+	if settings_save(db_path, s) {
+		os.remove(legacy_settings)
+		os.remove(legacy_theme)
+	}
+}
+
+settings_load :: proc(db_path: string) -> Settings {
+	if db_path == "" { return SETTINGS_DEFAULT }
+	data, err := os.read_entire_file(settings_path(db_path), context.temp_allocator)
+	if err != nil { return SETTINGS_DEFAULT }
+	return settings_parse_toml(string(data))
+}
+
+settings_save :: proc(db_path: string, s: Settings) -> bool {
+	if s.idle_minutes < 1 || s.idle_minutes > 500 { return false }
+	return os.write_entire_file(settings_path(db_path), transmute([]u8)settings_format_toml(s)) == nil
+}
+
+settings_load_minutes :: proc(db_path: string) -> int { return settings_load(db_path).idle_minutes }
+
+// Saves everything: the given idle minutes plus the update policy and theme in effect.
+settings_save_current :: proc(db_path: string, minutes: int) -> bool {
+	on_start, periodic := update_policy()
+	return settings_save(db_path, Settings{idle_minutes = minutes, updates_on_start = on_start,
+		updates_periodic = periodic, dark = ui.dark})
 }
 
 SettingsUi :: struct {
-	hwnd, minutes, autostart, import_manictime: windows.HWND,
-	folder, folder_browse, folder_default: windows.HWND,
+	hwnd, minutes, autostart, updates_start, updates_periodic, import_manictime: windows.HWND,
+	folder, folder_browse, folder_default, folder_open: windows.HWND,
 	tracking_labels: [2]windows.HWND, // static labels beside the minutes box
 	page: int,                        // index into SETTINGS_PAGES
 	control_failed: bool,
@@ -60,9 +165,12 @@ settings_show_page :: proc(page: int) {
 	}
 	general := windows.SW_SHOW if page == SETTINGS_PAGE_GENERAL else windows.SW_HIDE
 	windows.ShowWindow(settings_ui.autostart, general)
+	windows.ShowWindow(settings_ui.updates_start, general)
+	windows.ShowWindow(settings_ui.updates_periodic, general)
 	windows.ShowWindow(settings_ui.folder, general)
 	windows.ShowWindow(settings_ui.folder_browse, general)
 	windows.ShowWindow(settings_ui.folder_default, general)
+	windows.ShowWindow(settings_ui.folder_open, general)
 	windows.ShowWindow(settings_ui.import_manictime, windows.SW_SHOW if page == SETTINGS_PAGE_IMPORT else windows.SW_HIDE)
 	windows.InvalidateRect(settings_ui.hwnd, nil, windows.TRUE)
 }
@@ -193,7 +301,12 @@ settings_accept :: proc() {
 		windows.MessageBoxW(settings_ui.hwnd, wtext("Could not change the Windows startup entry. No changes were applied."), wtext("Settings"), windows.MB_ICONERROR)
 		return
 	}
-	if !settings_save_minutes(global_app.db_path, minutes) {
+	was_start, was_periodic := update_policy()
+	want_start := windows.SendMessageW(settings_ui.updates_start, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
+	want_periodic := windows.SendMessageW(settings_ui.updates_periodic, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
+	update_set_policy(want_start, want_periodic) // settings_save_current writes the policy in effect
+	if !settings_save_current(global_app.db_path, minutes) {
+		update_set_policy(was_start, was_periodic)
 		if want_autostart != was_autostart { autostart_set(was_autostart, global_app.db_path) }
 		windows.MessageBoxW(settings_ui.hwnd, wtext("Could not save settings beside the database. No changes were applied."), wtext("Settings"), windows.MB_ICONERROR)
 		return
@@ -231,7 +344,7 @@ settings_change_folder :: proc(new_dir: string, minutes: int) -> bool {
 	switch result {
 	case .Ok:
 		// Settings and the startup entry follow the database.
-		settings_save_minutes(global_app.db_path, minutes)
+		settings_save_current(global_app.db_path, minutes)
 		global_app.tracker.idle_threshold_ms = i64(minutes) * MS_PER_MINUTE
 		if was_autostart { autostart_set(true, global_app.db_path) }
 		windows.InvalidateRect(ui.hwnd, nil, windows.TRUE)
@@ -307,6 +420,10 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 			draw_string(dc, "Data folder", 176, 118, ui.font_normal, C_TXT)
 			note := "Set by --db for this run; it cannot be changed here." if db_path_overridden else "Your database and settings are kept here."
 			draw_string(dc, note, 176, 214, ui.font_normal, C_DIM)
+			fill_frame(dc, 164, 262, 370, 108, C_BORDER)
+			fill_rect(dc, 172, 254, 70, 18, C_BG)
+			draw_string(dc, "Updates", 176, 256, ui.font_normal, C_TXT)
+			draw_string(dc, "Asks GitHub for the latest release; nothing else is sent.", 176, 342, ui.font_normal, C_DIM)
 		} else if settings_ui.page == SETTINGS_PAGE_IMPORT {
 			fill_frame(dc, 164, 22, 370, 110, C_BORDER)
 			fill_rect(dc, 172, 14, 90, 18, C_BG)
@@ -327,7 +444,7 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		item := transmute(^Draw_Item)(lp)
 		if item != nil && (item.CtlID == SETTINGS_ID_OK || item.CtlID == SETTINGS_ID_CANCEL ||
 		   item.CtlID == SETTINGS_ID_IMPORT_MANICTIME || item.CtlID == SETTINGS_ID_FOLDER_BROWSE ||
-		   item.CtlID == SETTINGS_ID_FOLDER_DEFAULT) {
+		   item.CtlID == SETTINGS_ID_FOLDER_DEFAULT || item.CtlID == SETTINGS_ID_FOLDER_OPEN) {
 			draw_settings_button(item)
 			return 1
 		}
@@ -352,6 +469,9 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		case SETTINGS_ID_FOLDER_BROWSE: settings_folder_browse()
 		case SETTINGS_ID_FOLDER_DEFAULT:
 			windows.SetWindowTextW(settings_ui.folder, wtext(datadir_default()))
+		case SETTINGS_ID_FOLDER_OPEN:
+			// The folder in use now, not whatever is typed in the box.
+			ShellExecuteW(settings_ui.hwnd, wtext("open"), wtext(datadir_current(global_app)), nil, nil, windows.SW_SHOWNORMAL)
 		}
 		return 0
 	}
@@ -401,6 +521,17 @@ settings_open :: proc() {
 	if settings_ui.autostart != nil && autostart_enabled() {
 		windows.SendMessageW(settings_ui.autostart, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
 	}
+	on_start, periodic := update_policy()
+	settings_ui.updates_start = settings_control("BUTTON", "Check for updates on start",
+		windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 176, 284, 340, 24, SETTINGS_ID_UPDATES_START)
+	settings_ui.updates_periodic = settings_control("BUTTON", "Check for updates every 6 hours while running",
+		windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 176, 312, 340, 24, SETTINGS_ID_UPDATES_PERIODIC)
+	if settings_ui.updates_start != nil && on_start {
+		windows.SendMessageW(settings_ui.updates_start, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
+	}
+	if settings_ui.updates_periodic != nil && periodic {
+		windows.SendMessageW(settings_ui.updates_periodic, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
+	}
 	settings_ui.import_manictime = settings_control("BUTTON", "Import data from ManicTime",
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 176, 44, 220, 28, SETTINGS_ID_IMPORT_MANICTIME)
 	settings_ui.folder = settings_control("EDIT", datadir_current(global_app),
@@ -409,6 +540,8 @@ settings_open :: proc() {
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 176, 180, 96, 28, SETTINGS_ID_FOLDER_BROWSE)
 	settings_ui.folder_default = settings_control("BUTTON", "Use default",
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 280, 180, 110, 28, SETTINGS_ID_FOLDER_DEFAULT)
+	settings_ui.folder_open = settings_control("BUTTON", "Open folder",
+		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 398, 180, 110, 28, SETTINGS_ID_FOLDER_OPEN)
 	if db_path_overridden {
 		windows.EnableWindow(settings_ui.folder, windows.FALSE)
 		windows.EnableWindow(settings_ui.folder_browse, windows.FALSE)
@@ -421,6 +554,8 @@ settings_open :: proc() {
 	DwmSetWindowAttribute(settings_ui.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, size_of(dark))
 	SetWindowTheme(settings_ui.minutes, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	SetWindowTheme(settings_ui.autostart, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
+	SetWindowTheme(settings_ui.updates_start, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
+	SetWindowTheme(settings_ui.updates_periodic, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	SetWindowTheme(settings_ui.folder, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	windows.EnableWindow(ui.hwnd, windows.FALSE)
 	settings_show_page(SETTINGS_PAGE_GENERAL)

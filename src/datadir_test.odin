@@ -14,8 +14,8 @@ datadir_test_root :: proc(name: string) -> string {
 
 datadir_test_clear :: proc(root: string) {
 	for dir in ([2]string{"old", "new"}) {
-		for suffix in DATA_SUFFIXES {
-			os.remove(fmt.tprintf("%s\\%s\\%s%s", root, dir, DATA_DB_NAME, suffix))
+		for file in datadir_files(fmt.tprintf("%s\\%s\\%s", root, dir, DATA_DB_NAME)) {
+			os.remove(file)
 		}
 		os.remove(fmt.tprintf("%s\\%s", root, dir))
 	}
@@ -39,7 +39,7 @@ datadir_switch_moves_database_and_settings :: proc(t: ^testing.T) {
 	app.db = db
 	app.db_path = fmt.aprintf("%s", old_path)
 	defer { db_close(&app.db); tracker_release(&app.tracker); free_activities(app.activities); delete(app.db_path) }
-	testing.expect(t, settings_save_minutes(old_path, 7))
+	testing.expect(t, settings_save_current(old_path, 7))
 	tracker_init(&app)
 	testing.expect(t, app.tracker.idle_threshold_ms == 7 * MS_PER_MINUTE)
 
@@ -55,8 +55,8 @@ datadir_switch_moves_database_and_settings :: proc(t: ^testing.T) {
 	testing.expect_value(t, result, Data_Switch_Result.Ok)
 	testing.expect(t, app.db_path == new_path)
 	testing.expect(t, app.db.handle != nil)
-	testing.expect(t, datadir_exists(new_path) && datadir_exists(fmt.tprintf("%s.settings", new_path)))
-	testing.expect(t, !datadir_exists(old_path) && !datadir_exists(fmt.tprintf("%s.settings", old_path)),
+	testing.expect(t, datadir_exists(new_path) && datadir_exists(settings_path(new_path)))
+	testing.expect(t, !datadir_exists(old_path) && !datadir_exists(settings_path(old_path)),
 		"A successful move removes the originals")
 	testing.expect(t, app.tracker.idle_threshold_ms == 7 * MS_PER_MINUTE, "Settings travel with the database")
 	testing.expect(t, app.tracker.enabled, "Tracking resumes on the new database")

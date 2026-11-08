@@ -1,5 +1,6 @@
 package main
 
+import "core:sync"
 import "core:testing"
 
 @(test)
@@ -26,4 +27,23 @@ update_label_is_hidden_without_update :: proc(t: ^testing.T) {
 	testing.expect(t, state == .Idle)
 	testing.expect(t, rect_empty(update_rect(1320, 860)))
 	testing.expect(t, !update_clickable())
+}
+
+@(test)
+update_policy_scheduling :: proc(t: ^testing.T) {
+	saved := updater
+	defer { updater.on_start, updater.periodic, updater.started, updater.next_check_ms = saved.on_start, saved.periodic, saved.started, saved.next_check_ms }
+	updater.started = true
+	updater.next_check_ms = 12345
+	update_set_policy(true, true) // unchanged periodic: schedule untouched
+	testing.expect(t, updater.next_check_ms == 12345)
+	update_set_policy(true, false) // periodic off: nothing scheduled
+	testing.expect(t, updater.next_check_ms == UPDATE_NEVER)
+	update_set_policy(false, true) // periodic on again: due right away
+	testing.expect(t, updater.next_check_ms < UPDATE_NEVER && updater.next_check_ms <= monotonic_ms())
+	sync.mutex_lock(&updater.mu)
+	testing.expect(t, update_next_after(1000, 50) == 1050)
+	updater.periodic = false
+	testing.expect(t, update_next_after(1000, 50) == UPDATE_NEVER)
+	sync.mutex_unlock(&updater.mu)
 }
