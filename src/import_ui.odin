@@ -39,20 +39,24 @@ import_progress_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WP
 	case windows.WM_PAINT:
 		ps: windows.PAINTSTRUCT
 		dc := windows.BeginPaint(hwnd, &ps)
-		w, _ := client_size(hwnd)
-		fill_rect(dc, 0, 0, w, 118, C_BG)
+		w, h := client_size(hwnd)
+		fill_rect(dc, 0, 0, w, h, C_BG)
 		windows.SetBkMode(dc, windows.BKMODE.TRANSPARENT)
 		p := import_progress_ui
 		title := "Reading ManicTime database…" if p.stage == .Reading else "Writing activities…"
 		if p.cancelled { title = "Cancelling…" }
-		draw_string(dc, title, 16, 14, ui.font_normal, C_TXT)
+		margin, bar_y, bar_h := dpi_px(16), dpi_px(40), dpi_px(18)
+		draw_string(dc, title, margin, dpi_px(14), ui.font_normal, C_TXT)
 		f := import_progress_fraction()
-		fill_rect(dc, 16, 40, w - 32, 18, C_PANEL)
-		fill_frame(dc, 16, 40, w - 32, 18, C_BORDER)
-		fill_rect(dc, 17, 41, i32(f * f64(w - 34)), 16, C_ACCENT)
-		draw_string(dc, fmt.tprintf("%d%%", int(f * 100)), 16, 64, ui.font_normal, C_DIM)
+		bar_w := w - 2 * margin
+		fill_rect(dc, margin, bar_y, bar_w, bar_h, C_PANEL)
+		fill_frame(dc, margin, bar_y, bar_w, bar_h, C_BORDER)
+		fill_rect(dc, margin + 1, bar_y + 1, i32(f * f64(bar_w - 2)), bar_h - 2, C_ACCENT)
+		percent := fmt.tprintf("%d%%", int(f * 100))
+		draw_string(dc, percent, margin, dpi_px(64), ui.font_normal, C_DIM)
 		if p.total > 0 {
-			draw_string(dc, fmt.tprintf("%d of %d activities", min(p.done, p.total), p.total), 70, 64, ui.font_normal, C_DIM)
+			x := margin + text_pixel_width(percent, ui.font_normal) + dpi_px(14)
+			draw_string(dc, fmt.tprintf("%d of %d activities", min(p.done, p.total), p.total), x, dpi_px(64), ui.font_normal, C_DIM)
 		}
 		windows.EndPaint(hwnd, &ps)
 		return 0
@@ -79,8 +83,9 @@ import_progress_open :: proc() -> bool {
 		hInstance = hi, hCursor = system_cursor(IDC_ARROW), lpszClassName = wtext("aika_import_progress")}
 	windows.RegisterClassExW(&wc)
 	style := u32(windows.WS_CAPTION | windows.WS_SYSMENU | windows.WS_CLIPCHILDREN)
-	r := windows.RECT{0, 0, IMPORT_PROGRESS_W, IMPORT_PROGRESS_H}
-	windows.AdjustWindowRectEx(&r, style, windows.FALSE, 0)
+	client_w, client_h := dpi_px(IMPORT_PROGRESS_W), dpi_px(IMPORT_PROGRESS_H)
+	r := windows.RECT{0, 0, client_w, client_h}
+	windows.AdjustWindowRectExForDpi(&r, style, windows.FALSE, 0, dpi_current())
 	parent: windows.RECT
 	windows.GetWindowRect(settings_ui.hwnd, &parent)
 	width, height := r.right - r.left, r.bottom - r.top
@@ -93,7 +98,7 @@ import_progress_open :: proc() -> bool {
 	import_progress_ui.hwnd = hwnd
 	windows.CreateWindowExW(0, wtext("BUTTON"), wtext("Cancel"),
 		windows.WS_CHILD | windows.WS_VISIBLE | windows.WS_TABSTOP | windows.BS_OWNERDRAW,
-		IMPORT_PROGRESS_W - 106, 80, 90, 28, hwnd, windows.HMENU(uintptr(windows.IDCANCEL)), hi, nil)
+		client_w - dpi_px(106), dpi_px(80), dpi_px(90), dpi_px(28), hwnd, windows.HMENU(uintptr(windows.IDCANCEL)), hi, nil)
 	dark := windows.BOOL(ui.dark)
 	DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, size_of(dark))
 	windows.EnableWindow(settings_ui.hwnd, windows.FALSE)
