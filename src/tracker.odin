@@ -71,6 +71,7 @@ App :: struct {
 	db:             DB,
 	tracker:        Tracker,
 	task:           RunningTask,
+	pomo_done:      Pomodoro_Done, // completed pomodoro awaiting its notification
 	date:           int,
 	activities:     []Activity,
 	loaded_date:    int,

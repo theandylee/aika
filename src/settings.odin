@@ -10,6 +10,14 @@ import rt "base:runtime"
 
 DEFAULT_IDLE_MINUTES :: 1
 
+POMODORO_DEFAULT_MINUTES :: 25
+POMODORO_MIN_MINUTES     :: 1
+POMODORO_MAX_MINUTES     :: 180
+
+// Pomodoro choices in effect (loaded at startup, written by settings_save_current).
+pomodoro_on: bool
+pomodoro_minutes: int = POMODORO_DEFAULT_MINUTES
+
 settings_parse_minutes :: proc(text: string) -> (minutes: int, ok: bool) {
 	minutes, ok = strconv.parse_int(strings.trim_space(text))
 	ok = ok && minutes >= 1 && minutes <= 500
@@ -32,6 +40,10 @@ settings_parse_minutes :: proc(text: string) -> (minutes: int, ok: bool) {
 //   width = 420
 //   height = 350
 //
+//   [pomodoro]        # Start task window: mode toggle and duration
+//   enabled = false
+//   minutes = 25
+//
 // Missing or invalid keys keep their defaults. Older versions kept `<db>.settings`
 // (first a bare number, later TOML) and `<db>.theme`; settings_migrate_legacy
 // folds those into this file once and deletes them.
@@ -44,9 +56,12 @@ Settings :: struct {
 	dark:             bool,
 	picker_w:         int, // tag picker outer size in pixels; 0 = default
 	picker_h:         int,
+	pomodoro_on:      bool,
+	pomodoro_minutes: int, // POMODORO_MIN_MINUTES..POMODORO_MAX_MINUTES
 }
 
-SETTINGS_DEFAULT :: Settings{idle_minutes = DEFAULT_IDLE_MINUTES, updates_on_start = true, updates_periodic = true}
+SETTINGS_DEFAULT :: Settings{idle_minutes = DEFAULT_IDLE_MINUTES, updates_on_start = true, updates_periodic = true,
+	pomodoro_minutes = POMODORO_DEFAULT_MINUTES}
 
 // Parses the small TOML subset above: [tables], `key = value` with integers and
 // booleans, and # comments. Anything else is ignored.
@@ -89,6 +104,15 @@ settings_parse_toml :: proc(text: string) -> (s: Settings) {
 				case "height": s.picker_h = n
 				}
 			}
+		case "pomodoro":
+			switch key {
+			case "enabled":
+				if value == "true" || value == "false" { s.pomodoro_on = value == "true" }
+			case "minutes":
+				if n, ok := strconv.parse_int(value); ok && n >= POMODORO_MIN_MINUTES && n <= POMODORO_MAX_MINUTES {
+					s.pomodoro_minutes = n
+				}
+			}
 		}
 	}
 	return
@@ -99,6 +123,9 @@ settings_format_toml :: proc(s: Settings) -> string {
 		s.idle_minutes, s.updates_on_start, s.updates_periodic, "dark" if s.dark else "light")
 	if s.picker_w > 0 && s.picker_h > 0 {
 		text = fmt.tprintf("%s\n[tag_picker]\nwidth = %d\nheight = %d\n", text, s.picker_w, s.picker_h)
+	}
+	if s.pomodoro_minutes >= POMODORO_MIN_MINUTES && s.pomodoro_minutes <= POMODORO_MAX_MINUTES {
+		text = fmt.tprintf("%s\n[pomodoro]\nenabled = %v\nminutes = %d\n", text, s.pomodoro_on, s.pomodoro_minutes)
 	}
 	return text
 }
@@ -149,7 +176,8 @@ settings_load_minutes :: proc(db_path: string) -> int { return settings_load(db_
 settings_save_current :: proc(db_path: string, minutes: int) -> bool {
 	on_start, periodic := update_policy()
 	return settings_save(db_path, Settings{idle_minutes = minutes, updates_on_start = on_start,
-		updates_periodic = periodic, dark = ui.dark, picker_w = int(tag_picker_size.x), picker_h = int(tag_picker_size.y)})
+		updates_periodic = periodic, dark = ui.dark, picker_w = int(tag_picker_size.x), picker_h = int(tag_picker_size.y),
+		pomodoro_on = pomodoro_on, pomodoro_minutes = pomodoro_minutes})
 }
 
 SettingsUi :: struct {

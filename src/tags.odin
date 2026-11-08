@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:strconv"
 import "core:strings"
 import "core:sys/windows"
 import rt "base:runtime"
@@ -17,6 +18,7 @@ TagUi :: struct {
 	down_x: i32,
 	view_start, view_end: i64,
 	popup, search, list, create: windows.HWND,
+	pomo_check, pomo_edit, pomo_spin, pomo_unit: windows.HWND, // Start task picker only
 	tags: []Tag,
 	visible: [dynamic]int,
 	menu_open: bool,
@@ -422,11 +424,59 @@ tag_task_free_picks :: proc() {
 	tag_ui.task_picks = nil
 }
 
+// --- Start task picker: pomodoro mode ---
+
+// Applies the checkbox to the visible controls, remembers it and saves the settings.
+tag_pomo_sync :: proc() {
+	if tag_ui.pomo_check == nil { return }
+	on := windows.SendMessageW(tag_ui.pomo_check, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
+	cmd := windows.SW_SHOW if on else windows.SW_HIDE
+	for ctl in ([]windows.HWND{tag_ui.pomo_edit, tag_ui.pomo_spin, tag_ui.pomo_unit}) {
+		if ctl != nil { windows.ShowWindow(ctl, cmd) }
+	}
+	if on != pomodoro_on {
+		pomodoro_on = on
+		settings_save_current(global_app.db_path, settings_load(global_app.db_path).idle_minutes)
+	}
+}
+
+// Ctrl+P: flips the checkbox; switching on moves focus to the duration.
+tag_pomo_toggle :: proc() {
+	if tag_ui.pomo_check == nil { return }
+	on := windows.SendMessageW(tag_ui.pomo_check, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
+	windows.SendMessageW(tag_ui.pomo_check, windows.BM_SETCHECK, windows.WPARAM(windows.BST_UNCHECKED if on else windows.BST_CHECKED), 0)
+	tag_pomo_sync()
+	if !on && tag_ui.pomo_edit != nil {
+		windows.SetFocus(tag_ui.pomo_edit)
+		windows.SendMessageW(tag_ui.pomo_edit, EM_SETSEL, 0, -1)
+	}
+}
+
+// Reads the duration field (invalid text keeps the saved value), clamps it into
+// range, shows the clamped number and, if it changed, saves it to the settings file.
+tag_pomo_commit :: proc() {
+	if tag_ui.pomo_edit == nil { return }
+	buf: [16]u16
+	n := int(windows.GetWindowTextW(tag_ui.pomo_edit, &buf[0], len(buf)))
+	minutes := pomodoro_minutes
+	if text, err := windows.utf16_to_utf8(buf[:n], context.temp_allocator); err == nil {
+		if parsed, ok := strconv.parse_int(strings.trim_space(text)); ok { minutes = parsed }
+	}
+	minutes = clamp(minutes, POMODORO_MIN_MINUTES, POMODORO_MAX_MINUTES)
+	windows.SetWindowTextW(tag_ui.pomo_edit, wtext(fmt.tprintf("%d", minutes)))
+	if minutes != pomodoro_minutes {
+		pomodoro_minutes = minutes
+		settings_save_current(global_app.db_path, settings_load(global_app.db_path).idle_minutes)
+	}
+}
+
 // Ctrl+Enter: the only way to start the task.
 tag_task_start :: proc() {
 	if len(tag_ui.task_picks) == 0 { return }
 	app := global_app
-	if !task_start_picks(app, tag_ui.task_picks[:], now_ms()) {
+	tag_pomo_commit()
+	pomo_ms := i64(pomodoro_minutes) * MS_PER_MINUTE if pomodoro_on else 0
+	if !task_start_picks(app, tag_ui.task_picks[:], now_ms(), pomo_ms) {
 		message_box("Could not start task. The current time may already be tagged. Please select free time or try again.", "aika", windows.MB_ICONERROR)
 		return
 	}
@@ -441,9 +491,11 @@ tag_task_start :: proc() {
 tag_picker_icon: windows.HICON // title-bar icon of the Start task picker
 
 tag_picker_close :: proc() {
+	tag_pomo_commit() // keeps a changed duration even when the picker is cancelled
 	hwnd := tag_ui.popup
 	tag_ui.popup = nil
 	tag_ui.search, tag_ui.list, tag_ui.create = nil, nil, nil
+	tag_ui.pomo_check, tag_ui.pomo_edit, tag_ui.pomo_spin, tag_ui.pomo_unit = nil, nil, nil, nil
 	tag_ui.task_picker = false
 	tag_ui.multi = false
 	delete(tag_ui.selected)
@@ -606,8 +658,20 @@ tag_picker_layout :: proc(hwnd: windows.HWND) {
 	place(hwnd, TAG_ID_HINT, 12, 36, inner, 20)
 	place(hwnd, TAG_ID_SEARCH, TAG_SEARCH_X, sy + (TAG_SEARCH_H - TAG_EDIT_H) / 2,
 		inner - (TAG_SEARCH_X - 12) - TAG_SEARCH_PAD, TAG_EDIT_H)
-	place(hwnd, TAG_ID_LIST, 12, list_y, inner, h - list_y - 52)
+	list_bottom := i32(52)
+	if tag_ui.task_picker { list_bottom += 32 } // pomodoro row above the buttons
+	place(hwnd, TAG_ID_LIST, 12, list_y, inner, h - list_y - list_bottom)
 	if tag_ui.task_picker {
+		// Pomodoro row: [x] Pomodoro mode [Ctrl+P]   [ 25 ^v] min
+		row_y := h - 76
+		check_w := text_size(TAG_LABEL_POMO, ui.font_normal).cx + 28
+		place(hwnd, TAG_ID_POMO, 12, row_y, check_w, 24)
+		ex := 12 + check_w + 12
+		place(hwnd, TAG_ID_POMO_MIN, ex, row_y, 64, 24)
+		if tag_ui.pomo_spin != nil && tag_ui.pomo_edit != nil { // re-attach so the arrows follow the moved EDIT
+			windows.SendMessageW(tag_ui.pomo_spin, windows.UDM_SETBUDDY, windows.WPARAM(uintptr(tag_ui.pomo_edit)), 0)
+		}
+		place(hwnd, TAG_ID_POMO_UNIT, ex + 64 + 6, row_y + 4, 40, 20)
 		// Buttons sized to their "Title [Keys]" labels: Add/Create left, Start/Cancel right.
 		bw :: proc(label: string) -> i32 { return text_size(label, ui.font_normal).cx + 28 }
 		aw, nw, sw, cw := bw(TAG_LABEL_ADD), bw(TAG_LABEL_CREATE), bw(TAG_LABEL_START), bw(TAG_LABEL_CANCEL)
@@ -627,6 +691,7 @@ TAG_LABEL_ADD    :: "Add tag [Enter]"
 TAG_LABEL_CREATE :: "Create tag [Shift+Enter]"
 TAG_LABEL_START  :: "Start task [Ctrl+Enter]"
 TAG_LABEL_CANCEL :: "Cancel [Esc]"
+TAG_LABEL_POMO   :: "Pomodoro mode [Ctrl+P]"
 
 tag_picker_min_size :: proc() -> (w, h: i32) {
 	if tag_ui.task_picker { return TAG_TASK_POPUP_W, TAG_TASK_POPUP_H }
@@ -687,6 +752,7 @@ tag_picker_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM,
 		if tag_ui.task_picker {
 			if id == TAG_ID_LIST && code == LBN_DBLCLK { tag_task_add_selected() }
 			switch id {
+			case TAG_ID_POMO:   if code == windows.BN_CLICKED { tag_pomo_sync() }
 			case TAG_ID_USE:    tag_task_add_selected()
 			case TAG_ID_CREATE: tag_task_create()
 			case TAG_ID_START:  tag_task_start()
@@ -765,6 +831,22 @@ tag_picker_open :: proc() {
 		tag_ui.create = tag_picker_control("BUTTON", TAG_LABEL_CREATE, windows.WS_TABSTOP, 0, 0, 100, 28, TAG_ID_CREATE)
 		tag_picker_control("BUTTON", TAG_LABEL_START, windows.WS_TABSTOP | windows.WS_DISABLED, 0, 0, 100, 28, TAG_ID_START)
 		tag_picker_control("BUTTON", TAG_LABEL_CANCEL, windows.WS_TABSTOP, 0, 0, 100, 28, TAG_ID_CANCEL)
+		tag_ui.pomo_check = tag_picker_control("BUTTON", TAG_LABEL_POMO, windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 0, 0, 200, 24, TAG_ID_POMO)
+		tag_ui.pomo_edit = tag_picker_control("EDIT", fmt.tprintf("%d", pomodoro_minutes),
+			windows.WS_TABSTOP | windows.WS_BORDER | windows.ES_NUMBER | windows.ES_AUTOHSCROLL, 0, 0, 64, 24, TAG_ID_POMO_MIN)
+		tag_ui.pomo_spin = tag_picker_control(windows.UPDOWN_CLASS, "",
+			windows.UDS_SETBUDDYINT | windows.UDS_ALIGNRIGHT | windows.UDS_ARROWKEYS | windows.UDS_NOTHOUSANDS,
+			0, 0, 16, 24, TAG_ID_POMO_SPIN)
+		tag_ui.pomo_unit = tag_picker_control("STATIC", "min", 0, 0, 0, 40, 20, TAG_ID_POMO_UNIT)
+		if tag_ui.pomo_edit != nil && tag_ui.pomo_spin != nil {
+			windows.SendMessageW(tag_ui.pomo_edit, EM_LIMITTEXT, 3, 0)
+			windows.SendMessageW(tag_ui.pomo_spin, windows.UDM_SETBUDDY, windows.WPARAM(uintptr(tag_ui.pomo_edit)), 0)
+			windows.SendMessageW(tag_ui.pomo_spin, windows.UDM_SETRANGE32, POMODORO_MIN_MINUTES, POMODORO_MAX_MINUTES)
+			windows.SendMessageW(tag_ui.pomo_spin, windows.UDM_SETPOS32, 0, windows.LPARAM(pomodoro_minutes))
+		}
+		if tag_ui.pomo_check != nil && pomodoro_on {
+			windows.SendMessageW(tag_ui.pomo_check, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
+		}
 	} else {
 		tag_picker_control("BUTTON", "Use tags" if tag_ui.multi else "Use tag", windows.WS_TABSTOP | windows.BS_DEFPUSHBUTTON, 0, 0, 100, 28, TAG_ID_USE)
 		tag_ui.create = tag_picker_control("BUTTON", "Add new tag" if tag_ui.multi else "Create tag", windows.WS_TABSTOP, 0, 0, 140, 28, TAG_ID_CREATE)
@@ -772,6 +854,7 @@ tag_picker_open :: proc() {
 	}
 	if tag_ui.control_failed { tag_picker_close(); return }
 	tag_picker_layout(tag_ui.popup)
+	tag_pomo_sync() // show or hide the duration for the remembered state
 	tags, result := db_load_tags(&global_app.db)
 	if result != .Ok {
 		tag_picker_close()
@@ -784,7 +867,7 @@ tag_picker_open :: proc() {
 	DwmSetWindowAttribute(tag_ui.popup, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, size_of(dark))
 	for ctl in ([]windows.HWND{tag_ui.search, tag_ui.list, tag_ui.create,
 		windows.GetDlgItem(tag_ui.popup, i32(TAG_ID_USE)), windows.GetDlgItem(tag_ui.popup, i32(TAG_ID_START)),
-		windows.GetDlgItem(tag_ui.popup, i32(TAG_ID_CANCEL))}) {
+		windows.GetDlgItem(tag_ui.popup, i32(TAG_ID_CANCEL)), tag_ui.pomo_check, tag_ui.pomo_edit, tag_ui.pomo_spin}) {
 		if ctl != nil { SetWindowTheme(ctl, wtext("DarkMode_Explorer") if ui.dark else nil, nil) }
 	}
 	windows.EnableWindow(ui.hwnd, windows.FALSE)
@@ -812,12 +895,39 @@ tag_picker_key :: proc(msg: ^windows.MSG) -> bool {
 			msg.hwnd = tag_ui.search
 		}
 	}
+	if msg.message == windows.WM_KEYDOWN && tag_ui.pomo_edit != nil && windows.GetFocus() == tag_ui.pomo_edit && tag_ui.search != nil {
+		// The duration only takes digits, and its ES_NUMBER EDIT would flash a
+		// warning balloon on anything else. Letters, punctuation and Space instead
+		// silently continue in the search field.
+		vk := u32(msg.wParam)
+		ctrl := windows.GetKeyState(windows.VK_CONTROL) < 0
+		alt := windows.GetKeyState(windows.VK_MENU) < 0
+		non_digit := (vk >= 0x41 && vk <= 0x5A) || (vk >= 0x6A && vk <= 0x6F) || (vk >= 0xBA && vk <= 0xE2) ||
+			vk == u32(windows.VK_SPACE)
+		if non_digit && !ctrl && !alt {
+			tag_pomo_commit() // the duration is done; clamp and save what was typed
+			windows.SetFocus(tag_ui.search)
+			end := windows.GetWindowTextLengthW(tag_ui.search)
+			windows.SendMessageW(tag_ui.search, EM_SETSEL, windows.WPARAM(end), windows.LPARAM(end))
+			msg.hwnd = tag_ui.search
+		}
+	}
 	if msg.message == windows.WM_KEYDOWN {
+		if tag_ui.task_picker && msg.wParam == 'P' && windows.GetKeyState(windows.VK_CONTROL) < 0 &&
+		   windows.GetKeyState(windows.VK_MENU) >= 0 {
+			tag_pomo_toggle()
+			return true
+		}
 		switch msg.wParam {
 		case windows.VK_ESCAPE: tag_picker_close(); return true
 		case windows.VK_RETURN:
 			if tag_ui.task_picker {
 				focus := windows.GetFocus()
+				if focus == tag_ui.pomo_edit && windows.GetKeyState(windows.VK_CONTROL) >= 0 {
+					tag_pomo_commit() // Enter in the duration just accepts it
+					windows.SetFocus(tag_ui.search)
+					return true
+				}
 				if windows.GetKeyState(windows.VK_CONTROL) < 0 { tag_task_start(); return true }
 				if windows.GetKeyState(windows.VK_SHIFT) < 0 { tag_task_create(); return true }
 				if focus == tag_ui.search || focus == tag_ui.list { tag_task_add_selected(); return true }

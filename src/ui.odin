@@ -25,7 +25,7 @@ LIST_ROW  :: 20
 FILTER_H  :: 30
 STATUS_H  :: 22
 FILTER_LABEL_W :: 80 // "Filter [/]" label, then the EDIT starts
-TRACK_BTN_W    :: 240 // Start/Stop task button; fits "Stop task  00:00:00 [Ctrl+Enter]"
+TRACK_BTN_W    :: 280 // Start/Stop task button; fits "Stop task  0:00:00 left [Ctrl+Enter]"
 SIDEBAR_W :: 320
 MARGIN    :: 8
 SPLITTER_W :: 8
@@ -191,6 +191,13 @@ fmt_hms :: proc(ms: i64) -> string {
 	return fmt.tprintf("%d:%02d:%02d", v / 3_600_000, (v / 60_000) % 60, (v / 1000) % 60)
 }
 
+// Countdown text, rounded up so a fresh 25 minute pomodoro reads "25:00".
+fmt_countdown :: proc(ms: i64) -> string {
+	secs := (max(0, ms) + 999) / 1000
+	if secs >= 3600 { return fmt.tprintf("%d:%02d:%02d", secs / 3600, (secs / 60) % 60, secs % 60) }
+	return fmt.tprintf("%d:%02d", secs / 60, secs % 60)
+}
+
 // --- Top-level frame ---
 
 // True when the rectangle intersects what this paint must produce. An empty
@@ -285,7 +292,13 @@ draw_toolbar :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, lay: La
 	draw_button(dc, lay.btn_today, "Today", .Btn_Today)
 
 	label := "Start task [Ctrl+Enter]"
-	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s [Ctrl+Enter]", fmt_hms(app.task.end_ms - app.task.start_ms)) }
+	if app.task.id != 0 {
+		if left := task_pomodoro_remaining(app, tracker_monotonic(app)); left >= 0 {
+			label = fmt.tprintf("Stop task  %s left [Ctrl+Enter]", fmt_countdown(left))
+		} else {
+			label = fmt.tprintf("Stop task  %s [Ctrl+Enter]", fmt_hms(app.task.end_ms - app.task.start_ms))
+		}
+	}
 	draw_button(dc, lay.btn_track, label, .Btn_Task)
 
 	// Day start / day end / duration, ManicTime-style.

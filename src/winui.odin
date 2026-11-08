@@ -165,6 +165,22 @@ ui_add_tray :: proc() -> bool {
 	return ui.tray_added
 }
 
+NIIF_INFO :: 0x00000001
+
+// Standard Windows notification (balloon/toast) from the tray icon. Silently does
+// nothing without a tray icon: a modal box here would block the message loop.
+ui_notify :: proc(title, text: string) {
+	if !ui.tray_added { return }
+	data := windows.NOTIFYICONDATAW{
+		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.tray_hwnd, uID = TRAY_ICON_ID,
+		uFlags = windows.NIF_INFO, dwInfoFlags = NIIF_INFO,
+	}
+	// Leave room for the terminating zero in the fixed buffers.
+	copy(data.szInfoTitle[:len(data.szInfoTitle) - 1], windows.utf8_to_utf16(title, context.temp_allocator))
+	copy(data.szInfo[:len(data.szInfo) - 1], windows.utf8_to_utf16(text, context.temp_allocator))
+	windows.Shell_NotifyIconW(windows.NIM_MODIFY, &data)
+}
+
 ui_remove_tray :: proc() {
 	if !ui.tray_added { return }
 	data := windows.NOTIFYICONDATAW{
@@ -465,6 +481,11 @@ app_tick :: proc(app: ^App) {
 	if !task_tick(app, now) {
 		task_clear(&app.task)
 		message_box("Task tracking stopped because its tag block could not be updated. The last saved time is preserved.", "aika", windows.MB_ICONERROR)
+	}
+	if name, minutes, ok := task_pomodoro_take(app); ok {
+		defer delete(name)
+		load_day(app) // the stopped block now has its final length
+		ui_notify("Pomodoro finished", fmt.tprintf("%s - %d min. Task tracking stopped.", name, minutes))
 	}
 	mono := monotonic_ms()
 	if (app.date != app.loaded_date || app.load_result != .Ok || mono - app.last_load_ms >= DAY_RELOAD_INTERVAL_MS) &&
@@ -1290,10 +1311,10 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	if ui.font_normal == nil || ui.font_bold == nil || ui.font_small == nil || ui.font_title == nil || ui.font_icons == nil { return false }
 	if checkpoint != nil && !checkpoint(.Fonts) { return false }
 
-	// Common controls (ICC_DATE_CLASSES) for the native month calendar.
+	// Common controls for the native month calendar and the up-down spinner.
 	icc := windows.INITCOMMONCONTROLSEX{
 		dwSize = windows.DWORD(size_of(windows.INITCOMMONCONTROLSEX)),
-		dwICC  = windows.ICC_DATE_CLASSES,
+		dwICC  = windows.ICC_DATE_CLASSES | windows.ICC_UPDOWN_CLASS, // calendar, pomodoro duration spinner
 	}
 	if !windows.InitCommonControlsEx(&icc) { return false }
 

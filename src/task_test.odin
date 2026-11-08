@@ -39,6 +39,63 @@ task_lifecycle :: proc(t: ^testing.T) {
 }
 
 @(test)
+task_pomodoro_stops_at_deadline :: proc(t: ^testing.T) {
+	db, ok := db_open(":memory:")
+	testing.expect(t, ok)
+	if !ok { return }
+	app := App{db = db}
+	defer db_close(&app.db)
+	start, _ := day_bounds_ms(20261106)
+	start += 3_600_000
+	input := Tracker_Test_Input{now = start}
+	app.tracker.io = Tracker_IO{data = &input, monotonic = tracker_test_now}
+	pomo := 25 * MS_PER_MINUTE
+	testing.expect(t, task_start(&app, 0, "Focus", start, pomo))
+	id := app.task.id
+	testing.expect(t, id > 0 && app.task.pomo_ms == pomo)
+	testing.expect(t, task_pomodoro_remaining(&app, input.now) == pomo)
+
+	// Before the deadline it just runs and counts down.
+	input.now = start + 10 * MS_PER_MINUTE
+	testing.expect(t, task_tick(&app, input.now))
+	testing.expect(t, app.task.id == id && !app.pomo_done.pending)
+	testing.expect(t, task_pomodoro_remaining(&app, input.now) == 15 * MS_PER_MINUTE)
+
+	// A late tick still saves exactly start + duration, stops, and queues one notification.
+	input.now = start + pomo + 900
+	testing.expect(t, task_tick(&app, input.now))
+	testing.expect(t, app.task.id == 0 && app.pomo_done.pending)
+	last, found := db_last_activity(&app.db, TIMELINE_TAGS)
+	testing.expect(t, found == .Ok && last.id == id && last.end_ms == start + pomo)
+	delete(last.display_name)
+	name, minutes, taken := task_pomodoro_take(&app)
+	testing.expect(t, taken && name == "Focus" && minutes == 25)
+	delete(name)
+	_, _, again := task_pomodoro_take(&app)
+	testing.expect(t, !again, "the notification is delivered once")
+	testing.expect(t, task_pomodoro_remaining(&app, input.now) == -1)
+}
+
+@(test)
+task_without_pomodoro_never_due :: proc(t: ^testing.T) {
+	db, ok := db_open(":memory:")
+	testing.expect(t, ok)
+	if !ok { return }
+	app := App{db = db}
+	defer db_close(&app.db)
+	start, _ := day_bounds_ms(20261106)
+	start += 3_600_000
+	input := Tracker_Test_Input{now = start}
+	app.tracker.io = Tracker_IO{data = &input, monotonic = tracker_test_now}
+	testing.expect(t, task_start(&app, 0, "Plain", start))
+	defer task_clear(&app.task)
+	input.now = start + 3_600_000 // an hour in: no deadline, so never "due"
+	testing.expect(t, task_tick(&app, input.now))
+	testing.expect(t, app.task.id != 0 && !app.pomo_done.pending)
+	testing.expect(t, task_pomodoro_remaining(&app, input.now) == -1)
+}
+
+@(test)
 task_stops_at_neighbor :: proc(t: ^testing.T) {
 	db, ok := db_open(":memory:")
 	testing.expect(t, ok)

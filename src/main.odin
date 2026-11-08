@@ -207,8 +207,10 @@ run_gui :: proc(db: DB, db_path: string) -> bool {
 	loaded := settings_load(app.db_path)
 	update_set_policy(loaded.updates_on_start, loaded.updates_periodic)
 	tag_picker_size = {i32(loaded.picker_w), i32(loaded.picker_h)}
+	pomodoro_on, pomodoro_minutes = loaded.pomodoro_on, loaded.pomodoro_minutes
 	load_day(&app)
 
+	app_identity_register() // notification header reads "aika", not "aika.exe"
 	if !ui_bootstrap() {
 		message_box("Could not initialize the native window. aika will exit.", "aika", windows.MB_ICONERROR)
 		tracker_shutdown(&app)

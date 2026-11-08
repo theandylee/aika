@@ -112,8 +112,12 @@ TAG_ID_CANCEL :: 105
 TAG_ID_DESC   :: 106
 TAG_ID_HINT   :: 107
 TAG_ID_START  :: 108
+TAG_ID_POMO       :: 109 // Pomodoro mode checkbox (Start task picker)
+TAG_ID_POMO_MIN   :: 110 // duration EDIT, buddy of the up-down control
+TAG_ID_POMO_SPIN  :: 111
+TAG_ID_POMO_UNIT  :: 112 // "min" caption
 TAG_TASK_POPUP_W :: 580 // the Start task picker is wider: four buttons with key hints
-TAG_TASK_POPUP_H :: 440
+TAG_TASK_POPUP_H :: 480
 TAG_POPUP_W   :: 420
 TAG_POPUP_H   :: 350
 
@@ -127,6 +131,7 @@ ODS_FOCUS    :: 0x10
 
 EM_GETSEL     :: 0xB0
 EM_SETSEL     :: 0xB1
+EM_LIMITTEXT  :: 0xC5
 EM_REPLACESEL :: 0xC2
 
 CHAR_DELETE :: 0x7F // DEL char; WM_CHAR reports Ctrl+Backspace in an EDIT as this
