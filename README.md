@@ -2,6 +2,10 @@
 
 A small Windows activity tracker and timeline viewer built with **Odin + native Win32/GDI**.
 
+![aika day view, light and dark themes](docs/screenshots/aika-split.png)
+
+<sub>Light and dark themes (toggle with `F12`), shown with generated sample data.</sub>
+
 It follows the same core design as ManicTime:
 
 - Poll `GetForegroundWindow()` once per second.

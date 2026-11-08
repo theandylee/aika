@@ -250,6 +250,21 @@ so do not use the mouse while it runs (about 4 minutes); capture baseline and
 candidate on the same calendar day (the date label is "yesterday"); delete the
 alternate exes and `git worktree remove --force` the baseline when done.
 
+### README screenshots
+
+`tools/screenshots.py` rebuilds (`build.bat`, skip with `--no-build`), seeds a temp
+database with a deterministic fake workday on *yesterday*, and launches the exe once
+per theme on its own copy (own `aika-settings.toml`, update checks off). It writes
+`docs/screenshots/aika-light.png`, `aika-dark.png` and `aika-split.png` (light/dark
+split along a diagonal; slant is `SPLIT_SLANT`). The timeline is zoomed to `VIEW`
+(by dragging the overview bar's handles) so the blocks fill most of the width, and
+the fake day has a midday gap centred in that view for the split line to pass
+through; change `VIEW`, the plans and `SPLIT_SLANT` together. Options: `--out`, `--size WxH`
+(client pixels; the app is DPI-aware, so a scaled display shows less), `--exe`.
+Exit any running aika first: the GUI is single-instance and the script refuses to
+start otherwise. It parks the mouse over the window, so leave the mouse alone for
+the ~15 s it takes.
+
 ### Console output
 
 The GUI build is `-subsystem:windows`, so `fmt.println` may not appear when
