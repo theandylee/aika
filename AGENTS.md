@@ -39,7 +39,20 @@ Build outputs:
 Default database: `data\aika.db` (relative to the working directory).
 Override with `--db <path>`.
 
-Import ManicTime history:
+Import ManicTime history directly from its database (no PowerShell, no ManicTime
+DLLs; also available as Settings > Import in the GUI):
+
+```bat
+build\aika-cli.exe --db data\aika.db --import-manictime [path\to\ManicTime.sdf]
+```
+
+The `.sdf` reader (`src/sdf.odin`) handles unencrypted SQL CE 4.0 only. Logical->
+physical pages come from Map A/B; Map A slot `k` covers logical ids `1027 + 1527*k`
+(the reference reader this was derived from is wrong for slot >= 1). The space map also
+lists non-data pages, so skip pages whose type is not `0x40`. ManicTime keeps the file
+open and uses shadow pages; closing it first gives the most consistent import.
+
+Legacy path via the PowerShell exporter (still works, same source id `manictime-local`):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 7 -SourceId home-manictime-1
@@ -184,7 +197,10 @@ src/
   task.odin       Running-task lifecycle (tick/stop/flush, clock jumps)
   totals_tree.odin  Hierarchical totals from slash-separated names
   scratch.odin    Scoped reentrancy-safe scratch arenas for native callbacks
-  importer.odin   JSON import command
+  importer.odin   JSON import command; import_apply validates/writes any parsed export
+  sdf.odin        Native read-only SQL Server Compact (.sdf) reader; no ManicTime DLLs
+  import_sdf.odin ManicTime Group/Activity -> import_apply (--import-manictime, Settings > Import)
+  import_ui.odin  Settings "Import data from ManicTime" button handler
   ui_test_harness.odin  Shared-test guard: ui/tag_ui/palette snapshot + test mutex
 tools/
   export-manictime.ps1   Read ManicTime.sdf and write JSON

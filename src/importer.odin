@@ -25,6 +25,11 @@ ImportActivity :: struct {
 	textData:    string `json:"textData"`,
 }
 
+Import_Stage :: enum { Reading, Writing }
+
+// Called periodically with a running count; return false to cancel.
+Import_Progress_Proc :: proc(stage: Import_Stage, done, total: int, data: rawptr) -> bool
+
 ImportFile :: struct {
 	source:     string          `json:"source"`,
 	sourceId:   string          `json:"sourceId"`,
@@ -70,11 +75,19 @@ import_manictime_data :: proc(db: ^DB, data: []byte, source_override: string = "
 		fmt.eprintln("json parse error:", err)
 		return false
 	}
+	return import_apply(db, &imp, source_override)
+}
+
+// Validates and writes one parsed export in a single transaction. The caller
+// owns imp and sets context.allocator / context.temp_allocator to arenas:
+// temp memory is freed after every row.
+import_apply :: proc(db: ^DB, imp: ^ImportFile, source_override: string = "",
+	progress: Import_Progress_Proc = nil, progress_data: rawptr = nil, cancelled: ^bool = nil) -> bool {
 	if imp.source != "" && imp.source != "ManicTime" {
 		fmt.eprintln("unsupported import source:", imp.source)
 		return false
 	}
-	source, identified := import_source_id(&imp, source_override)
+	source, identified := import_source_id(imp, source_override)
 	if !identified {
 		fmt.eprintln("import requires a stable sourceId (legacy exports: --import-source <database-id>); IDs must agree and contain no surrounding whitespace")
 		return false
@@ -126,7 +139,11 @@ import_manictime_data :: proc(db: ^DB, data: []byte, source_override: string = "
 	}
 
 	counts: [Import_Action]int
-	for a in imp.activities {
+	for a, n in imp.activities {
+		if progress != nil && n % 1024 == 0 && !progress(.Writing, n, len(imp.activities), progress_data) {
+			if cancelled != nil { cancelled^ = true }
+			return false // deferred ROLLBACK discards everything
+		}
 		group: i64
 		if a.groupId > 0 { group = local_groups[groups[a.groupId]] }
 		action, result := db_import_activity(db, source, a, group)

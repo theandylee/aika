@@ -44,6 +44,8 @@ main :: proc() {
 	db_path := "data/aika.db"
 	import_path := ""
 	import_source := ""
+	import_manictime := false
+	manictime_path := ""
 	quiet := false
 
 	i := 1
@@ -67,6 +69,12 @@ main :: proc() {
 			}
 			i += 1
 			import_path = args[i]
+		case "--import-manictime":
+			import_manictime = true
+			if i + 1 < len(args) && !strings.has_prefix(args[i + 1], "--") && args[i + 1] != "" {
+				i += 1
+				manictime_path = args[i]
+			}
 		case "--import-source":
 			if i + 1 >= len(args) || strings.has_prefix(args[i + 1], "--") || strings.trim_space(args[i + 1]) == "" {
 				fmt.eprintln("--import-source requires a stable source database identifier")
@@ -75,7 +83,7 @@ main :: proc() {
 			i += 1
 			import_source = args[i]
 		case "--help", "-h":
-			msg := "aika - a ManicTime-style activity tracker\nusage: aika [--db path] [--import export.json [--import-source database-id]] [--quiet] [--hidden]"
+			msg := "aika - a ManicTime-style activity tracker\nusage: aika [--db path] [--import export.json [--import-source database-id]] [--import-manictime [ManicTime.sdf]] [--quiet] [--hidden]"
 			fmt.println(msg)
 			if !quiet { message_box(msg, "aika") }
 			return
@@ -91,7 +99,11 @@ main :: proc() {
 	}
 
 	// Only the GUI is single-instance; CLI imports may run alongside it.
-	if import_path == "" && !acquire_single_instance() {
+	if import_manictime && import_path != "" {
+		fmt.eprintln("--import and --import-manictime are mutually exclusive")
+		os.exit(2)
+	}
+	if import_path == "" && !import_manictime && !acquire_single_instance() {
 		activate_existing_instance()
 		return
 	}
@@ -109,6 +121,29 @@ main :: proc() {
 		if !quiet { message_box(msg, "aika", windows.MB_ICONERROR) }
 		db_close(&db)
 		os.exit(1)
+	}
+
+	if import_manictime {
+		path := manictime_path
+		if path == "" {
+			found: bool
+			path, found = manictime_sdf_path()
+			if !found {
+				db_close(&db)
+				fmt.eprintln(import_sdf_message(.Not_Found, path))
+				os.exit(1)
+			}
+		}
+		result := import_manictime_sdf(&db, path)
+		db_close(&db)
+		msg := import_sdf_message(result, path)
+		if result == .Ok {
+			fmt.println(msg)
+		} else {
+			fmt.eprintln(msg)
+			os.exit(1)
+		}
+		return
 	}
 
 	if import_path != "" {

@@ -31,16 +31,17 @@ settings_save_minutes :: proc(db_path: string, minutes: int) -> bool {
 }
 
 SettingsUi :: struct {
-	hwnd, minutes, autostart: windows.HWND,
+	hwnd, minutes, autostart, import_manictime: windows.HWND,
 	tracking_labels: [2]windows.HWND, // static labels beside the minutes box
 	page: int,                        // index into SETTINGS_PAGES
 	control_failed: bool,
 }
 settings_ui: SettingsUi
 
-SETTINGS_PAGES :: [2]string{"General", "Tracking"}
+SETTINGS_PAGES :: [3]string{"General", "Tracking", "Import"}
 SETTINGS_PAGE_GENERAL  :: 0
 SETTINGS_PAGE_TRACKING :: 1
+SETTINGS_PAGE_IMPORT   :: 2
 
 settings_page_rect :: proc(i: int) -> windows.RECT {
 	y := i32(12 + 28 * i)
@@ -56,7 +57,8 @@ settings_show_page :: proc(page: int) {
 	for label in settings_ui.tracking_labels {
 		windows.ShowWindow(label, windows.SW_SHOW if tracking else windows.SW_HIDE)
 	}
-	windows.ShowWindow(settings_ui.autostart, windows.SW_HIDE if tracking else windows.SW_SHOW)
+	windows.ShowWindow(settings_ui.autostart, windows.SW_SHOW if page == SETTINGS_PAGE_GENERAL else windows.SW_HIDE)
+	windows.ShowWindow(settings_ui.import_manictime, windows.SW_SHOW if page == SETTINGS_PAGE_IMPORT else windows.SW_HIDE)
 	windows.InvalidateRect(settings_ui.hwnd, nil, windows.TRUE)
 }
 
@@ -64,6 +66,8 @@ settings_focus_page :: proc() {
 	if settings_ui.page == SETTINGS_PAGE_TRACKING {
 		windows.SetFocus(settings_ui.minutes)
 		windows.SendMessageW(settings_ui.minutes, windows.EM_SETSEL, 0, -1)
+	} else if settings_ui.page == SETTINGS_PAGE_IMPORT {
+		windows.SetFocus(settings_ui.import_manictime)
 	} else {
 		windows.SetFocus(settings_ui.autostart)
 	}
@@ -178,6 +182,12 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 			fill_rect(dc, 172, 14, 62, 18, C_BG)
 			draw_string(dc, "Startup", 176, 16, ui.font_normal, C_TXT)
 			draw_string(dc, "Runs from this folder; toggle again if you move aika.", 176, 76, ui.font_normal, C_DIM)
+		} else if settings_ui.page == SETTINGS_PAGE_IMPORT {
+			fill_frame(dc, 164, 22, 370, 110, C_BORDER)
+			fill_rect(dc, 172, 14, 90, 18, C_BG)
+			draw_string(dc, "ManicTime", 176, 16, ui.font_normal, C_TXT)
+			draw_string(dc, "Imports all history from the ManicTime on this PC.", 176, 84, ui.font_normal, C_DIM)
+			draw_string(dc, "Safe to repeat; existing entries are updated.", 176, 102, ui.font_normal, C_DIM)
 		} else {
 			fill_frame(dc, 164, 22, 370, 100, C_BORDER)
 			fill_rect(dc, 172, 14, 180, 18, C_BG)
@@ -190,7 +200,8 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		return theme_control_colors(wp)
 	case windows.WM_DRAWITEM:
 		item := transmute(^Draw_Item)(lp)
-		if item != nil && (item.CtlID == SETTINGS_ID_OK || item.CtlID == SETTINGS_ID_CANCEL) {
+		if item != nil && (item.CtlID == SETTINGS_ID_OK || item.CtlID == SETTINGS_ID_CANCEL ||
+		   item.CtlID == SETTINGS_ID_IMPORT_MANICTIME) {
 			draw_settings_button(item)
 			return 1
 		}
@@ -211,6 +222,7 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		switch u32(wp) & 0xFFFF {
 		case SETTINGS_ID_OK: settings_accept()
 		case SETTINGS_ID_CANCEL: settings_close()
+		case SETTINGS_ID_IMPORT_MANICTIME: settings_import_manictime()
 		}
 		return 0
 	}
@@ -256,6 +268,8 @@ settings_open :: proc() {
 	if settings_ui.autostart != nil && autostart_enabled() {
 		windows.SendMessageW(settings_ui.autostart, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
 	}
+	settings_ui.import_manictime = settings_control("BUTTON", "Import data from ManicTime",
+		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 176, 44, 220, 28, SETTINGS_ID_IMPORT_MANICTIME)
 	settings_control("BUTTON", "OK", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 334, 394, 96, 28, SETTINGS_ID_OK)
 	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 438, 394, 96, 28, SETTINGS_ID_CANCEL)
 	if settings_ui.control_failed { settings_close(); return }

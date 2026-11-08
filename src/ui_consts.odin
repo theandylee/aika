@@ -43,6 +43,7 @@ SPLITTER_GRIP_LEN :: i32(40) // length of the centered grip line on a pane split
 // --- System cursor / icon ids (MAKEINTRESOURCE values; windows.IDC_* are cstring) ---
 
 IDC_ARROW   :: u64(32512)
+IDC_WAIT    :: u64(32514)
 IDC_SIZEWE  :: u64(32644)
 IDC_SIZENS  :: u64(32645)
 IDC_SIZEALL :: u64(32646)
@@ -76,6 +77,7 @@ DWMWA_USE_IMMERSIVE_DARK_MODE :: 20
 
 SETTINGS_ID_MINUTES :: 101
 SETTINGS_ID_AUTOSTART :: 102
+SETTINGS_ID_IMPORT_MANICTIME :: 103
 SETTINGS_ID_OK      :: windows.IDOK
 SETTINGS_ID_CANCEL  :: windows.IDCANCEL
 
