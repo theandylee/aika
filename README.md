@@ -12,8 +12,8 @@ It follows the same core design as ManicTime:
   and `Activity` tables.
 - Import existing ManicTime history from its SQL Server Compact `.sdf` database.
 
-The app is pure Odin at runtime. The only external piece is the one-way
-PowerShell exporter used to read ManicTime's proprietary `.sdf` file.
+The app is pure Odin at runtime. ManicTime's proprietary `.sdf` file is read by a
+built-in, read-only reader: no PowerShell, no ManicTime DLLs.
 
 > **Working on the code?** Start with [`AGENTS.md`](AGENTS.md), then read the
 > focused docs in [`docs/`](docs/).
@@ -43,9 +43,11 @@ Working MVP:
 - Per-application totals with color chips and a grand total
 - Filter box wired to the lists
 - Date navigation
+- Running tasks (multi-tag) with an optional Pomodoro countdown and tray notification
+- Keyboard-friendly: Tab order, shortcuts and key hints (see [Keyboard](#keyboard))
 - Automatic tracking pause with retry on persistent write failures (no manual
   pause control yet)
-- ManicTime `.sdf` → JSON → SQLite importer
+- One-click ManicTime import straight from its `.sdf` database (Settings > Import)
 - ManicTime-compatible date semantics (`StartLocalDate` = days since 2000-01-01)
 
 Not implemented yet:
@@ -83,7 +85,37 @@ The UI is drawn with plain GDI (`user32` + `gdi32`, both system libraries), so n
 windowing toolkit ships with the binary. A running GUI window uses about 6 MB
 of private memory.
 
-The app writes `data\aika.db` by default. Override with `--db`.
+The database lives in `%LOCALAPPDATA%\aika\aika.db` by default. Settings > General >
+Data folder picks another folder and offers to move your existing files. Override
+everything with `--db <path>` (the folder option is then disabled).
+
+## Keyboard
+
+The main canvas (timeline lanes) is mouse-driven; everything else is reachable from
+the keyboard. Key hints are shown on the buttons themselves.
+
+| Where | Key | Action |
+|---|---|---|
+| Main window | `/` | Jump to the filter box |
+| Main window | `Tab` / `Shift+Tab` | Move between filter, date button and scrollbars |
+| Main window | `Ctrl+Enter` | Start / stop the task (Day view) |
+| Main window | `Alt+Enter` | Maximize / restore |
+| Main window | `Esc` | Cancel the current drag, zoom or tag interaction |
+| Filter box | `Esc` | Clear the filter and return focus to the window |
+| Filter box | `Ctrl+Backspace` | Delete the previous word |
+| Date calendar | `Enter` / `Esc` | Accept the date / close |
+| Tag picker | type | Search (typing from the list returns to the search box) |
+| Tag picker | `Down` | Move from search into the results list |
+| Tag picker | `Enter` | Use the selected tag, or create one if nothing matches |
+| Tag picker | `Esc` | Dismiss |
+| Start task picker | `Space` | Tick or untick a tag (multi-tag) |
+| Start task picker | `Enter` | Add the selected tag |
+| Start task picker | `Shift+Enter` | Create a tag from the search text |
+| Start task picker | `Ctrl+Enter` | Start the task |
+| Start task picker | `Ctrl+P` | Toggle Pomodoro mode and jump to its duration |
+| Pomodoro duration | `Enter` | Accept the duration and return to search |
+| Settings | `Tab` / `Shift+Tab` | Move between controls |
+| Settings | `Enter` / `Esc` | Accept / close |
 
 ## Tagging time
 
@@ -111,42 +143,30 @@ The tag name stays available in the picker for reuse.
 
 ## Importing existing ManicTime history
 
-ManicTime uses SQL Server Compact 4.0 (`.sdf`). Pure Odin cannot read that format,
-so the repo includes a read-only exporter that uses the SQL CE assemblies installed
-with ManicTime.
+aika reads ManicTime's SQL Server Compact 4.0 (`.sdf`) database directly, so
+importing is a single button:
 
-Export the last 7 days:
+1. Open **Settings** (top-right button or tray menu) and go to the **Import** page.
+2. Click **Import data from ManicTime**.
+3. Confirm the detected `ManicTime.sdf` path. A progress window shows reading and
+   writing, and has a Cancel button.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 7 -SourceId home-manictime-1
-```
+All history is imported. Re-importing is safe: existing data is updated, not
+duplicated. The reader is read-only and ManicTime can stay running, but closing it
+first gives the most consistent result. Only unencrypted databases are supported.
 
-Export only today:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\export-manictime.ps1 -Days 1 -SourceId home-manictime-1 -Out tools\manictime-today.json
-```
-
-Import into a fresh `aika` database:
+For scripting, the console build `aika-cli.exe` does the same without the GUI
+(`aika.exe` is the GUI build):
 
 ```bat
-build\aika-cli.exe --db data\aika.db --import tools\manictime-today.json --quiet
+build\aika-cli.exe --db data\aika.db --import-manictime [path\to\ManicTime.sdf]
 ```
 
-`aika-cli.exe` is the console-subsystem build of the same code, intended for
-imports and scripting. `aika.exe` is the GUI build.
+The path is optional and defaults to the local ManicTime database.
 
-The exporter opens `ManicTime.sdf` in read-only mode. ManicTime can usually keep
-running, but close it if SQL CE reports a file-write lock.
-
-Choose `SourceId` once per source database and reuse it for every export/date
-range. Use a new ID after replacing/resetting that database; don't use export
-filenames or timestamps as identities. New exports carry this ID in the JSON.
-Legacy exports (including the checked-in sample) require an explicit ID:
-
-```bat
-build\aika-cli.exe --db data\import-test.db --import tools\manictime-today.json --import-source manictime-sample --quiet
-```
+The older PowerShell exporter (`tools\export-manictime.ps1`) and JSON import
+(`--import <file.json>`, with `--import-source <id>` for legacy files) still work
+and share the same source ID, but they are no longer needed.
 
 Imports allocate local IDs, resolve groups by `(TimelineId, Key)`, and preserve
 existing group names/colors. Reimporting the same source does not duplicate rows;
@@ -235,9 +255,12 @@ src/
   interaction.odin one ui.interaction union, begin/end/cancel
   dpi.odin        central Per-Monitor V2 scaling
   palette.odin    named Palette struct and C_* mirror
-  importer.odin   JSON import command
+  importer.odin   JSON import command (import_apply)
+  sdf.odin        native read-only SQL Server Compact (.sdf) reader
+  import_sdf.odin ManicTime .sdf -> import_apply
+  import_ui.odin  Settings import button and progress window
 tools/
-  export-manictime.ps1
+  export-manictime.ps1   legacy exporter
 vendor/
   sqlite/         SQLite 3.54.1 amalgamation + static lib
 docs/
