@@ -106,12 +106,65 @@ draw_settings_tooltip :: proc(dc: windows.HDC, w: i32) {
 	draw_single_line_tooltip(dc, tab_tooltip_rect(w - dpi_px(42), width), "Settings")
 }
 
+settings_gear_icon: windows.HICON
+
+// Render the gear glyph into a small per-pixel-alpha icon for the title bar.
+// The glyph is drawn white-on-black into a DIB; its luminance becomes alpha.
+make_gear_icon :: proc() -> windows.HICON {
+	size := windows.GetSystemMetrics(windows.SM_CXSMICON)
+	if size <= 0 { size = 16 }
+	bmi := windows.BITMAPINFO{bmiHeader = {
+		biSize = size_of(windows.BITMAPINFOHEADER), biWidth = size, biHeight = -size,
+		biPlanes = 1, biBitCount = 32, biCompression = windows.BI_RGB}}
+	screen := windows.GetDC(nil)
+	defer windows.ReleaseDC(nil, screen)
+	dc := windows.CreateCompatibleDC(screen)
+	if dc == nil { return nil }
+	defer windows.DeleteDC(dc)
+	bits: rawptr
+	color := windows.CreateDIBSection(dc, &bmi, windows.DIB_RGB_COLORS, &bits, nil, 0)
+	if color == nil || bits == nil { return nil }
+	defer windows.DeleteObject(windows.HGDIOBJ(color))
+	old_bmp := windows.SelectObject(dc, windows.HGDIOBJ(color))
+	defer windows.SelectObject(dc, old_bmp)
+
+	px := ([^]u32)(bits)[:size * size]
+	for &p in px { p = 0 }
+	font := windows.CreateFontW(-size, 0, 0, 0, 400, 0, 0, 0, windows.DEFAULT_CHARSET,
+		0, 0, windows.ANTIALIASED_QUALITY, 0, wtext("Segoe UI Symbol"))
+	if font == nil { return nil }
+	defer windows.DeleteObject(windows.HGDIOBJ(font))
+	old_font := windows.SelectObject(dc, windows.HGDIOBJ(font))
+	defer windows.SelectObject(dc, old_font)
+	windows.SetBkMode(dc, .TRANSPARENT)
+	windows.SetTextColor(dc, windows.COLORREF(0xFFFFFF))
+	r := windows.RECT{0, 0, size, size}
+	windows.DrawTextW(dc, wtext("⚙"), -1, &r, windows.DrawTextFormat.DT_SINGLELINE |
+		windows.DrawTextFormat.DT_CENTER | windows.DrawTextFormat.DT_VCENTER | windows.DrawTextFormat.DT_NOPREFIX)
+
+	// Tint with the theme text colour (COLORREF is 0x00BBGGRR) using premultiplied alpha.
+	tr, tg, tb := u32(C_TXT) & 0xFF, (u32(C_TXT) >> 8) & 0xFF, (u32(C_TXT) >> 16) & 0xFF
+	for &p in px {
+		a := max((p >> 16) & 0xFF, max((p >> 8) & 0xFF, p & 0xFF))
+		p = (a << 24) | ((tr * a / 255) << 16) | ((tg * a / 255) << 8) | (tb * a / 255)
+	}
+	mask := windows.CreateBitmap(size, size, 1, 1, nil)
+	if mask == nil { return nil }
+	defer windows.DeleteObject(windows.HGDIOBJ(mask))
+	info := windows.ICONINFO{fIcon = windows.TRUE, hbmMask = mask, hbmColor = color}
+	return windows.CreateIconIndirect(&info)
+}
+
 settings_close :: proc() {
 	if settings_ui.hwnd == nil { return }
 	hwnd := settings_ui.hwnd
 	settings_ui = {}
 	windows.EnableWindow(ui.hwnd, windows.TRUE)
 	windows.DestroyWindow(hwnd)
+	if settings_gear_icon != nil {
+		windows.DestroyIcon(settings_gear_icon)
+		settings_gear_icon = nil
+	}
 	windows.SetForegroundWindow(ui.hwnd)
 }
 
@@ -334,6 +387,10 @@ settings_open :: proc() {
 	settings_ui.hwnd = windows.CreateWindowExW(0, wc.lpszClassName, wtext("Settings"), style,
 		x, y, width, height, ui.hwnd, nil, hi, nil)
 	if settings_ui.hwnd == nil { return }
+	settings_gear_icon = make_gear_icon()
+	if settings_gear_icon != nil {
+		windows.SendMessageW(settings_ui.hwnd, windows.WM_SETICON, 0, windows.LPARAM(uintptr(settings_gear_icon))) // ICON_SMALL
+	}
 	settings_ui.tracking_labels[0] = settings_control("STATIC", "Computer is not used for", 0, 176, 58, 146, 22, 0)
 	settings_ui.minutes = settings_control("EDIT", fmt.tprintf("%d", global_app.tracker.idle_threshold_ms / MS_PER_MINUTE),
 		windows.WS_BORDER | windows.WS_TABSTOP | windows.ES_NUMBER, 326, 54, 54, 24, SETTINGS_ID_MINUTES)
