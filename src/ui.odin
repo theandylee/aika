@@ -24,6 +24,8 @@ LIST_HDR  :: 22
 LIST_ROW  :: 20
 FILTER_H  :: 30
 STATUS_H  :: 22
+FILTER_LABEL_W :: 80 // "Filter [/]" label, then the EDIT starts
+TRACK_BTN_W    :: 240 // Start/Stop task button; fits "Stop task  00:00:00 [Ctrl+Enter]"
 SIDEBAR_W :: 320
 MARGIN    :: 8
 SPLITTER_W :: 8
@@ -104,9 +106,9 @@ compute_layout :: proc(w, h: i32) -> Layout {
 		lay.sidebar_x, lay.list_bottom}
 
 	lay.filter_y = bottom_limit
-	lay.filter_edit_x = dpi_px(56)
+	lay.filter_edit_x = dpi_px(FILTER_LABEL_W)
 	lay.filter_edit_y = bottom_limit + dpi_px(4)
-	lay.filter_edit_w = w - dpi_px(56) - dpi_px(16)
+	lay.filter_edit_w = w - dpi_px(FILTER_LABEL_W) - dpi_px(16)
 	lay.filter_edit_h = dpi_px(FILTER_H) - dpi_px(8)
 	lay.status_y = h - dpi_px(STATUS_H)
 
@@ -116,7 +118,7 @@ compute_layout :: proc(w, h: i32) -> Layout {
 	lay.btn_today = windows.RECT{left = dpi_px(MARGIN) + dpi_px(30), top = btn_y, right = dpi_px(MARGIN) + dpi_px(98), bottom = btn_y + btn_h}
 	lay.btn_next = windows.RECT{left = dpi_px(MARGIN) + dpi_px(102), top = btn_y, right = dpi_px(MARGIN) + dpi_px(128), bottom = btn_y + btn_h}
 	lay.date_pick = windows.RECT{left = dpi_px(MARGIN) + dpi_px(140), top = btn_y, right = dpi_px(MARGIN) + dpi_px(140) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
-	lay.btn_track = windows.RECT{left = dpi_px(MARGIN) + dpi_px(148) + dpi_px(DATE_PICK_W), top = btn_y, right = dpi_px(MARGIN) + dpi_px(280) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
+	lay.btn_track = windows.RECT{left = dpi_px(MARGIN) + dpi_px(148) + dpi_px(DATE_PICK_W), top = btn_y, right = dpi_px(MARGIN) + dpi_px(148) + dpi_px(TRACK_BTN_W) + dpi_px(DATE_PICK_W), bottom = btn_y + btn_h}
 
 	// Day start / day end / duration boxes anchored to the right.
 	day_box_w := min(dpi_px(108), (w - lay.btn_track.right - dpi_px(24)) / 3 - dpi_px(4))
@@ -282,8 +284,8 @@ draw_toolbar :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, lay: La
 	draw_button(dc, lay.btn_next, ">", .Btn_Next)
 	draw_button(dc, lay.btn_today, "Today", .Btn_Today)
 
-	label := "Start task"
-	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s", fmt_hms(app.task.end_ms - app.task.start_ms)) }
+	label := "Start task [Ctrl+Enter]"
+	if app.task.id != 0 { label = fmt.tprintf("Stop task  %s [Ctrl+Enter]", fmt_hms(app.task.end_ms - app.task.start_ms)) }
 	draw_button(dc, lay.btn_track, label, .Btn_Task)
 
 	// Day start / day end / duration, ManicTime-style.
@@ -763,27 +765,42 @@ free_totals_slice :: proc(list: []TotRow) {
 draw_filter_row :: proc(dc: windows.HDC, w, h: i32) {
 	lay := compute_layout(w, h)
 	fill_rect(dc, 0, lay.filter_y, w, dpi_px(FILTER_H), C_BG)
-	draw_string(dc, "Filter", 12, lay.filter_edit_y + 4, ui.font_normal, C_DIM)
+	draw_string(dc, "Filter [/]", 12, lay.filter_edit_y + 4, ui.font_normal, C_DIM)
 	// The EDIT child control draws itself between x=56 and the right edge.
+}
+
+// Y for draw_string so a line of `font` text is vertically centred in the status
+// bar below its 1 px top border. `top` is the bar's (or a clickable rect's) top.
+// draw_string places text 2 px above the y it is given, hence the + 2.
+status_text_y :: proc(top: i32, font: windows.HFONT) -> i32 {
+	body := dpi_px(STATUS_H) - 1
+	return top + 1 + (body - text_size("Ag", font).cy) / 2 + 2
+}
+
+// Top of a square of `size` px centred in the status bar body.
+status_box_y :: proc(top, size: i32) -> i32 {
+	return top + 1 + (dpi_px(STATUS_H) - 1 - size) / 2
 }
 
 draw_status_bar :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	lay := compute_layout(w, h)
 	fill_rect(dc, 0, lay.status_y, w, dpi_px(STATUS_H), C_PANEL)
 	line_h(dc, 0, lay.status_y, w, C_BORDER)
+	text_y := status_text_y(lay.status_y, ui.font_normal)
+	dot_y := status_box_y(lay.status_y, 8)
 
 	st: windows.SYSTEMTIME
 	GetLocalTime(&st)
 	clock := fmt.tprintf("%02d.%02d.%04d %02d:%02d:%02d", st.day, st.month, st.year, st.hour, st.minute, st.second)
-	draw_string(dc, clock, 8, lay.status_y + 4, ui.font_normal, C_TXT)
+	draw_string(dc, clock, 8, text_y, ui.font_normal, C_TXT)
 
 	dot: Colorref = C_GREEN if app.tracker.enabled else C_TRACKER_OFF
 	dot_x := 8 + text_pixel_width(clock, ui.font_normal) + 6
-	fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, dot)
+	fill_rect(dc, dot_x, dot_y, 8, 8, dot)
 	status := app_storage_status(app)
 	if status != "" {
-		fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, C_ORANGE)
-		draw_string(dc, status, dot_x + 16, lay.status_y + 4, ui.font_normal, C_TXT, status_right_limit(w, h) - dot_x - 24)
+		fill_rect(dc, dot_x, dot_y, 8, 8, C_ORANGE)
+		draw_string(dc, status, dot_x + 16, text_y, ui.font_normal, C_TXT, status_right_limit(w, h) - dot_x - 24)
 	}
 	draw_update(dc, w, h)
 	draw_version(dc, w, h)

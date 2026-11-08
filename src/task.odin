@@ -18,9 +18,21 @@ task_clear :: proc(task: ^RunningTask) {
 }
 
 task_start :: proc(app: ^App, group_id: i64, name: string, start: i64) -> bool {
-	if app.task.id != 0 { return false }
-	block, result := db_start_task(&app.db, group_id, name, start)
+	picks := [1]Tag_Pick{{group_id, name}}
+	return task_start_picks(app, picks[:], start)
+}
+
+// Starts a task carrying one or more distinct tags; its title is the joined names.
+task_start_picks :: proc(app: ^App, picks: []Tag_Pick, start: i64) -> bool {
+	if app.task.id != 0 || len(picks) == 0 { return false }
+	block, result := db_start_task_multi(&app.db, picks, start)
 	if result != .Ok { return false }
+	name := picks[0].name
+	if len(picks) > 1 {
+		names := make([]string, len(picks), context.temp_allocator)
+		for p, i in picks { names[i] = p.name }
+		name = strings.join(names, ", ", context.temp_allocator)
+	}
 	mono := tracker_monotonic(app)
 	app.task = RunningTask{id = block.id, start_ms = start, end_ms = start + 1,
 		last_wall = start, last_mono = mono, save_mono = mono,

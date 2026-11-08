@@ -206,6 +206,7 @@ run_gui :: proc(db: DB, db_path: string) -> bool {
 	tracker_init(&app)
 	loaded := settings_load(app.db_path)
 	update_set_policy(loaded.updates_on_start, loaded.updates_periodic)
+	tag_picker_size = {i32(loaded.picker_w), i32(loaded.picker_h)}
 	load_day(&app)
 
 	if !ui_bootstrap() {
@@ -238,6 +239,32 @@ dispatch_app_message :: proc(msg: ^windows.MSG) {
 	context.temp_allocator = scratch_begin(&scratch)
 	defer scratch_end(&scratch)
 	if !settings_key(msg) && !date_picker_key(msg) && !tag_picker_key(msg) {
+		// "/" jumps to the filter box from anywhere in the main window.
+		// Matched on WM_KEYDOWN: IsDialogMessage below would swallow the WM_CHAR.
+		if msg.message == windows.WM_KEYDOWN && (msg.wParam == windows.VK_OEM_2 || msg.wParam == windows.VK_DIVIDE) &&
+		   windows.GetKeyState(windows.VK_SHIFT) >= 0 && windows.GetKeyState(windows.VK_CONTROL) >= 0 &&
+		   windows.GetKeyState(windows.VK_MENU) >= 0 && ui.edit != nil &&
+		   (msg.hwnd == ui.hwnd || windows.IsChild(ui.hwnd, msg.hwnd)) &&
+		   msg.hwnd != ui.edit && windows.IsWindowVisible(ui.edit) && windows.IsWindowEnabled(ui.edit) {
+			windows.SetFocus(ui.edit)
+			return
+		}
+		// Alt+Enter toggles maximize. Alt makes this a WM_SYSKEYDOWN.
+		if msg.message == windows.WM_SYSKEYDOWN && msg.wParam == windows.VK_RETURN &&
+		   windows.GetKeyState(windows.VK_CONTROL) >= 0 && windows.GetKeyState(windows.VK_SHIFT) >= 0 &&
+		   (msg.hwnd == ui.hwnd || windows.IsChild(ui.hwnd, msg.hwnd)) {
+			windows.ShowWindow(ui.hwnd, windows.SW_RESTORE if windows.IsZoomed(ui.hwnd) else windows.SW_MAXIMIZE)
+			return
+		}
+		// Ctrl+Enter = the Start/Stop task button (Day view, where the button is shown).
+		if msg.message == windows.WM_KEYDOWN && msg.wParam == windows.VK_RETURN &&
+		   windows.GetKeyState(windows.VK_CONTROL) < 0 && windows.GetKeyState(windows.VK_SHIFT) >= 0 &&
+		   windows.GetKeyState(windows.VK_MENU) >= 0 && ui.tab == .Day &&
+		   (msg.hwnd == ui.hwnd || windows.IsChild(ui.hwnd, msg.hwnd)) {
+			task_button_activate(global_app)
+			windows.InvalidateRect(ui.hwnd, nil, windows.FALSE)
+			return
+		}
 		// Native Tab order for the main window (filter EDIT <-> date picker
 		// button <-> scrollbars). Custom canvas controls stay mouse-only.
 		if ui.hwnd != nil && bool(windows.IsDialogMessageW(ui.hwnd, msg)) {

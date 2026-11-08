@@ -28,6 +28,10 @@ settings_parse_minutes :: proc(text: string) -> (minutes: int, ok: bool) {
 //   [appearance]
 //   theme = "light"   # or "dark"
 //
+//   [tag_picker]      # written once the picker has been resized
+//   width = 420
+//   height = 350
+//
 // Missing or invalid keys keep their defaults. Older versions kept `<db>.settings`
 // (first a bare number, later TOML) and `<db>.theme`; settings_migrate_legacy
 // folds those into this file once and deletes them.
@@ -38,6 +42,8 @@ Settings :: struct {
 	updates_on_start: bool,
 	updates_periodic: bool,
 	dark:             bool,
+	picker_w:         int, // tag picker outer size in pixels; 0 = default
+	picker_h:         int,
 }
 
 SETTINGS_DEFAULT :: Settings{idle_minutes = DEFAULT_IDLE_MINUTES, updates_on_start = true, updates_periodic = true}
@@ -76,14 +82,25 @@ settings_parse_toml :: proc(text: string) -> (s: Settings) {
 			}
 		case "appearance":
 			if key == "theme" { s.dark = strings.trim(value, "\"") == "dark" }
+		case "tag_picker":
+			if n, ok := strconv.parse_int(value); ok && n >= 100 && n <= 10000 {
+				switch key {
+				case "width":  s.picker_w = n
+				case "height": s.picker_h = n
+				}
+			}
 		}
 	}
 	return
 }
 
 settings_format_toml :: proc(s: Settings) -> string {
-	return fmt.tprintf("[tracking]\nidle_minutes = %d\n\n[updates]\non_start = %v\nperiodic = %v\n\n[appearance]\ntheme = \"%s\"\n",
+	text := fmt.tprintf("[tracking]\nidle_minutes = %d\n\n[updates]\non_start = %v\nperiodic = %v\n\n[appearance]\ntheme = \"%s\"\n",
 		s.idle_minutes, s.updates_on_start, s.updates_periodic, "dark" if s.dark else "light")
+	if s.picker_w > 0 && s.picker_h > 0 {
+		text = fmt.tprintf("%s\n[tag_picker]\nwidth = %d\nheight = %d\n", text, s.picker_w, s.picker_h)
+	}
+	return text
 }
 
 // The settings file for a database: in the same folder, so a custom data folder
@@ -132,7 +149,7 @@ settings_load_minutes :: proc(db_path: string) -> int { return settings_load(db_
 settings_save_current :: proc(db_path: string, minutes: int) -> bool {
 	on_start, periodic := update_policy()
 	return settings_save(db_path, Settings{idle_minutes = minutes, updates_on_start = on_start,
-		updates_periodic = periodic, dark = ui.dark})
+		updates_periodic = periodic, dark = ui.dark, picker_w = int(tag_picker_size.x), picker_h = int(tag_picker_size.y)})
 }
 
 SettingsUi :: struct {
@@ -218,7 +235,9 @@ settings_gear_icon: windows.HICON
 
 // Render the gear glyph into a small per-pixel-alpha icon for the title bar.
 // The glyph is drawn white-on-black into a DIB; its luminance becomes alpha.
-make_gear_icon :: proc() -> windows.HICON {
+make_gear_icon :: proc() -> windows.HICON { return make_glyph_icon("⚙") }
+
+make_glyph_icon :: proc(glyph: string) -> windows.HICON {
 	size := windows.GetSystemMetrics(windows.SM_CXSMICON)
 	if size <= 0 { size = 16 }
 	bmi := windows.BITMAPINFO{bmiHeader = {
@@ -247,7 +266,7 @@ make_gear_icon :: proc() -> windows.HICON {
 	windows.SetBkMode(dc, .TRANSPARENT)
 	windows.SetTextColor(dc, windows.COLORREF(0xFFFFFF))
 	r := windows.RECT{0, 0, size, size}
-	windows.DrawTextW(dc, wtext("⚙"), -1, &r, windows.DrawTextFormat.DT_SINGLELINE |
+	windows.DrawTextW(dc, wtext(glyph), -1, &r, windows.DrawTextFormat.DT_SINGLELINE |
 		windows.DrawTextFormat.DT_CENTER | windows.DrawTextFormat.DT_VCENTER | windows.DrawTextFormat.DT_NOPREFIX)
 
 	// Tint with the theme text colour (COLORREF is 0x00BBGGRR) using premultiplied alpha.

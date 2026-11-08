@@ -124,8 +124,14 @@ db_create_tag_block_multi :: proc(db: ^DB, picks: []Tag_Pick, start, end: i64) -
 }
 
 db_start_task :: proc(db: ^DB, group_id: i64, name: string, start: i64) -> (DB_Tag_Block, DB_Tag_Result) {
+	picks := [1]Tag_Pick{{group_id, name}}
+	return db_start_task_multi(db, picks[:], start)
+}
+
+// A running task may carry several tags, like any tag block.
+db_start_task_multi :: proc(db: ^DB, picks: []Tag_Pick, start: i64) -> (DB_Tag_Block, DB_Tag_Result) {
 	if start == 0x7FFF_FFFF_FFFF_FFFF { return {}, .Invalid }
-	return db_create_tag_block(db, group_id, name, start, start + 1)
+	return db_create_tag_block_multi(db, picks, start, start + 1)
 }
 
 db_tag_color :: proc(db: ^DB, id: i64) -> (Argb, DB_Result) {

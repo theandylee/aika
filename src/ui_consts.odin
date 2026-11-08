@@ -109,6 +109,13 @@ TAG_ID_LIST   :: 102
 TAG_ID_USE    :: 103
 TAG_ID_CREATE :: 104
 TAG_ID_CANCEL :: 105
+TAG_ID_DESC   :: 106
+TAG_ID_HINT   :: 107
+TAG_ID_START  :: 108
+TAG_TASK_POPUP_W :: 580 // the Start task picker is wider: four buttons with key hints
+TAG_TASK_POPUP_H :: 440
+TAG_POPUP_W   :: 420
+TAG_POPUP_H   :: 350
 
 // --- More native constants not in core:sys/windows ---
 

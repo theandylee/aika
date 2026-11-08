@@ -1122,6 +1122,20 @@ read_filter :: proc() {
 	ui.list_scroll.pos = 0
 }
 
+// The Start/Stop task toolbar button: stops the running task, or opens the
+// picker to start one. Shared by the click and the Ctrl+Enter shortcut.
+task_button_activate :: proc(app: ^App) {
+	if app.task.id != 0 {
+		if !task_stop(app, now_ms()) {
+			message_box("Could not stop task. Please try again.", "aika", windows.MB_ICONERROR)
+		}
+	} else {
+		tag_ui.task_picker = true
+		tag_picker_open()
+	}
+	load_day(app)
+}
+
 handle_click :: proc(app: ^App, x, y: i32) {
 	w, h := client_size(ui.hwnd)
 	id := hit_test(x, y, w, h)
@@ -1159,15 +1173,7 @@ handle_click :: proc(app: ^App, x, y: i32) {
 		load_day(app)
 		sync_date_picker(app)
 	case .Btn_Task:
-		if app.task.id != 0 {
-			if !task_stop(app, now_ms()) {
-				message_box("Could not stop task. Please try again.", "aika", windows.MB_ICONERROR)
-			}
-		} else {
-			tag_ui.task_picker = true
-			tag_picker_open()
-		}
-		load_day(app)
+		task_button_activate(app)
 	case .Tab_Day, .Tab_Statistics:
 		ui.tab, _ = hit_as_tab(id)
 	case .Lane_Tags, .Lane_Computer, .Lane_Apps:
@@ -1355,11 +1361,7 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	if ui.font_normal != nil {
 		windows.SendMessageW(ui.edit, windows.WM_SETFONT, windows.WPARAM(ui.font_normal), 0)
 	}
-	if ui.edit != nil {
-		previous := windows.SetWindowLongPtrW(ui.edit, windows.GWLP_WNDPROC, transmute(windows.LONG_PTR)(windows.WNDPROC(filter_edit_proc)))
-		filter_edit_original = transmute(windows.WNDPROC)(previous)
-		if previous == 0 { return false }
-	}
+	if !edit_enable_word_delete(ui.edit) { return false }
 	if checkpoint != nil && !checkpoint(.Filter) { return false }
 
 	// Native owner-drawn button keeps keyboard activation and accessibility,

@@ -42,7 +42,7 @@ draw_version :: proc(dc: windows.HDC, w, h: i32) {
 	r := version_rect(w, h)
 	hovered := ui.mouse_valid && rect_hit(r, ui.mouse.x, ui.mouse.y)
 	color: Colorref = C_TXT if hovered else C_DIM
-	draw_string(dc, version_label(), r.left + dpi_px(VERSION_PAD), r.top + 4, ui.font_normal, color)
+	draw_string(dc, version_label(), r.left + dpi_px(VERSION_PAD), status_text_y(r.top, ui.font_normal), ui.font_normal, color)
 }
 
 open_releases_page :: proc() {

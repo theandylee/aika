@@ -33,7 +33,7 @@ settings_toml_parse_and_compat :: proc(t: ^testing.T) {
 	s = settings_parse_toml("[tracking]\nidle_minutes = 9000\n[updates]\nperiodic = maybe\n")
 	testing.expect(t, s == SETTINGS_DEFAULT, "invalid values are ignored")
 	// Format round trip.
-	for want in ([3]Settings{{5, false, false, true}, {500, true, false, false}, {1, false, true, true}}) {
+	for want in ([3]Settings{{idle_minutes = 5, dark = true}, {idle_minutes = 500, updates_on_start = true, picker_w = 600, picker_h = 480}, {idle_minutes = 1, updates_periodic = true, dark = true}}) {
 		testing.expect(t, settings_parse_toml(settings_format_toml(want)) == want)
 	}
 	testing.expect(t, !settings_save("x", Settings{idle_minutes = 0}))

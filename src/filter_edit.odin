@@ -20,6 +20,16 @@ filter_word_space :: proc(c: u16) -> bool {
 	       c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000
 }
 
+// Gives an EDIT control Ctrl+Backspace word deletion. Shared by the filter bar
+// and the tag picker; both are plain EDIT controls, so one original proc serves.
+edit_enable_word_delete :: proc(hwnd: windows.HWND) -> bool {
+	if hwnd == nil { return false }
+	previous := windows.SetWindowLongPtrW(hwnd, windows.GWLP_WNDPROC, transmute(windows.LONG_PTR)(windows.WNDPROC(filter_edit_proc)))
+	if previous == 0 { return false }
+	if filter_edit_original == nil { filter_edit_original = transmute(windows.WNDPROC)(previous) }
+	return true
+}
+
 filter_edit_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, lp: windows.LPARAM) -> windows.LRESULT {
 	context = rt.default_context()
 	scratch: Scratch

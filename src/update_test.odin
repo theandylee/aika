@@ -47,3 +47,19 @@ update_policy_scheduling :: proc(t: ^testing.T) {
 	testing.expect(t, update_next_after(1000, 50) == UPDATE_NEVER)
 	sync.mutex_unlock(&updater.mu)
 }
+
+@(test)
+update_tag_parsing_and_backoff :: proc(t: ^testing.T) {
+	testing.expect_value(t, update_tag_from_location("https://github.com/theandylee/aika/releases/tag/v0.1.1"), "v0.1.1")
+	testing.expect_value(t, update_tag_from_location("/theandylee/aika/releases/tag/v2.0.0-rc1?x=1"), "v2.0.0-rc1")
+	testing.expect_value(t, update_tag_from_location("https://github.com/theandylee/aika/releases"), "")
+	testing.expect_value(t, update_tag_from_location("https://github.com/theandylee/aika/releases/tag/"), "")
+	testing.expect_value(t, update_tag_from_location("https://github.com/x/y/releases/tag/v1%2F../evil"), "") // unexpected characters are rejected
+	testing.expect_value(t, update_tag_from_location(""), "")
+
+	testing.expect_value(t, update_retry_delay(1), 60_000)
+	testing.expect_value(t, update_retry_delay(2), 5 * 60_000)
+	testing.expect_value(t, update_retry_delay(3), 30 * 60_000)
+	testing.expect_value(t, update_retry_delay(50), 30 * 60_000)
+	testing.expect_value(t, update_retry_delay(0), 60_000)
+}

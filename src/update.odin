@@ -1,6 +1,5 @@
 package main
 
-import "core:encoding/json"
 import "core:fmt"
 import "core:strconv"
 import "core:strings"
@@ -9,8 +8,11 @@ import "core:sys/windows"
 import "core:thread"
 
 // Self-updater. A background thread asks GitHub for the latest release; when it
-// is newer than AIKA_VERSION the status bar shows an "Update to vX" label. A
-// click downloads the release's `aika.exe` next to the running one, then the UI
+// is newer than AIKA_VERSION the status bar shows an "Update to vX" label. It
+// uses only the plain github.com web endpoints (no REST API, so no API outages
+// or rate limits): `/releases/latest` redirects to `/releases/tag/<tag>`, and a
+// HEAD on `/releases/download/<tag>/aika.exe` confirms the asset and its size.
+// A click downloads that `aika.exe` next to the running one, then the UI
 // thread swaps the files (a running EXE can be renamed, not overwritten),
 // starts the new copy with --wait-pid and exits. The new process waits for this
 // one to die (single-instance mutex) and deletes the leftover `.old` file.
@@ -20,12 +22,13 @@ import "core:thread"
 // thread with a posted message.
 
 UPDATE_ASSET_NAME   :: "aika.exe"
-UPDATE_API_URL      :: "https://api.github.com/repos/theandylee/aika/releases/latest"
+UPDATE_RELEASES_URL :: "https://github.com/theandylee/aika/releases"
 UPDATE_FIRST_CHECK_MS :: i64(8_000)
 UPDATE_INTERVAL_MS  :: i64(6 * 60 * 60 * 1000)
-UPDATE_RETRY_MS     :: i64(30 * 60 * 1000)
-UPDATE_MAX_JSON     :: 1 << 20
+// Delays after consecutive failed checks: 1 min, 5 min, then 30 min.
+UPDATE_BACKOFF_MS   :: [3]i64{60 * 1000, 5 * 60 * 1000, 30 * 60 * 1000}
 UPDATE_MAX_EXE      :: 256 << 20
+UPDATE_MIN_EXE      :: 64 << 10
 UPDATE_WAIT_MS      :: 20_000
 
 UPDATE_CHECKED    :: windows.WM_APP + 3 // worker -> UI: a check finished; repaint
@@ -40,22 +43,12 @@ Updater :: struct {
 	asset_url: string, // heap-owned
 	asset_size: i64,
 	next_check_ms: i64,
+	failures:  int, // consecutive failed checks (drives the retry backoff)
 	started:   bool,
 	on_start, periodic: bool, // set from settings (update_set_policy)
 }
 
 updater := Updater{on_start = true, periodic = true}
-
-Release_Asset :: struct {
-	name:                 string,
-	size:                 i64,
-	browser_download_url: string,
-}
-
-Release_Info :: struct {
-	tag_name: string,
-	assets:   []Release_Asset,
-}
 
 foreign import aika_winhttp "system:winhttp.lib"
 
@@ -68,13 +61,18 @@ foreign aika_winhttp {
 	WinHttpSendRequest :: proc(req: rawptr, headers: windows.LPCWSTR, headers_len: u32, optional: rawptr, optional_len, total_len: u32, ctx: uintptr) -> windows.BOOL ---
 	WinHttpReceiveResponse :: proc(req: rawptr, reserved: rawptr) -> windows.BOOL ---
 	WinHttpQueryHeaders :: proc(req: rawptr, level: u32, name: windows.LPCWSTR, buf: rawptr, buf_len: ^u32, index: ^u32) -> windows.BOOL ---
+	WinHttpSetOption :: proc(h: rawptr, option: u32, buf: rawptr, len: u32) -> windows.BOOL ---
 	WinHttpReadData :: proc(req: rawptr, buf: rawptr, n: u32, read: ^u32) -> windows.BOOL ---
 	WinHttpCloseHandle :: proc(h: rawptr) -> windows.BOOL ---
 }
 
 WINHTTP_FLAG_SECURE        :: u32(0x00800000)
 WINHTTP_QUERY_STATUS_CODE  :: u32(19)
+WINHTTP_QUERY_LOCATION     :: u32(33)
+WINHTTP_QUERY_CONTENT_LENGTH :: u32(5)
 WINHTTP_QUERY_FLAG_NUMBER  :: u32(0x20000000)
+WINHTTP_OPTION_REDIRECT_POLICY :: u32(88)
+WINHTTP_OPTION_REDIRECT_POLICY_NEVER :: u32(0)
 
 // --- Version comparison ---
 
@@ -109,9 +107,20 @@ version_newer :: proc(latest, current: string) -> bool {
 
 // --- HTTP ---
 
-// GET an https URL (redirects are followed by WinHTTP). The body goes to `out`
-// when given, otherwise to the open file handle. Fails on non-200 or over `limit`.
-http_get :: proc(url: string, out: ^[dynamic]u8, file: windows.HANDLE, limit: int) -> (written: int, ok: bool) {
+Http_Response :: struct {
+	status:         u32,
+	location:       string, // Location header (temp allocator); "" when absent
+	content_length: i64,    // -1 when the server did not send one
+	written:        int,    // body bytes written to the file sink
+}
+
+// One https request. `follow` lets WinHTTP follow redirects; without it a 3xx is
+// returned as is, with its Location. When the final status is 200 and `file` is
+// set, the body is streamed into it (at most `limit` bytes). ok is false only
+// when the transport failed or the body was too large / not writable; callers
+// judge the HTTP status themselves.
+http_request :: proc(url, verb: string, follow: bool, file: windows.HANDLE = nil, limit := 0) -> (r: Http_Response, ok: bool) {
+	r.content_length = -1
 	if !strings.has_prefix(url, "https://") { return }
 	rest := url[len("https://"):]
 	slash := strings.index_byte(rest, '/')
@@ -125,32 +134,59 @@ http_get :: proc(url: string, out: ^[dynamic]u8, file: windows.HANDLE, limit: in
 	conn := WinHttpConnect(session, wtext(host), 443, 0)
 	if conn == nil { return }
 	defer WinHttpCloseHandle(conn)
-	req := WinHttpOpenRequest(conn, wtext("GET"), wtext(path), nil, nil, nil, WINHTTP_FLAG_SECURE)
+	req := WinHttpOpenRequest(conn, wtext(verb), wtext(path), nil, nil, nil, WINHTTP_FLAG_SECURE)
 	if req == nil { return }
 	defer WinHttpCloseHandle(req)
-
-	headers := wtext("Accept: application/vnd.github+json")
-	if !WinHttpSendRequest(req, headers, 0xFFFFFFFF, nil, 0, 0, 0) || !WinHttpReceiveResponse(req, nil) { return }
-	status, size := u32(0), u32(size_of(u32))
-	if !WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nil, &status, &size, nil) || status != 200 {
-		return
+	if !follow {
+		policy := WINHTTP_OPTION_REDIRECT_POLICY_NEVER
+		WinHttpSetOption(req, WINHTTP_OPTION_REDIRECT_POLICY, &policy, size_of(policy))
 	}
-	buf := make([]u8, 64 * 1024)
-	defer delete(buf)
-	for {
-		n: u32
-		if !WinHttpReadData(req, raw_data(buf), u32(len(buf)), &n) { return }
-		if n == 0 { break }
-		written += int(n)
-		if written > limit { return }
-		if out != nil {
-			append(out, ..buf[:n])
-		} else {
+
+	if !WinHttpSendRequest(req, nil, 0, nil, 0, 0, 0) || !WinHttpReceiveResponse(req, nil) { return }
+	number, number_size := u32(0), u32(size_of(u32))
+	if !WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nil, &number, &number_size, nil) { return }
+	r.status = number
+	number_size = size_of(u32)
+	if WinHttpQueryHeaders(req, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, nil, &number, &number_size, nil) {
+		r.content_length = i64(number)
+	}
+	loc: [2048]u16
+	loc_bytes := u32(size_of(loc))
+	if WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION, nil, &loc[0], &loc_bytes, nil) && loc_bytes >= 2 {
+		r.location, _ = windows.utf16_to_utf8(loc[:loc_bytes / 2], context.temp_allocator)
+	}
+
+	if r.status == 200 && file != nil {
+		buf := make([]u8, 64 * 1024)
+		defer delete(buf)
+		for {
+			n: u32
+			if !WinHttpReadData(req, raw_data(buf), u32(len(buf)), &n) { return }
+			if n == 0 { break }
+			r.written += int(n)
+			if r.written > limit { return }
 			done: u32
 			if !windows.WriteFile(file, raw_data(buf), n, &done, nil) || done != n { return }
 		}
 	}
-	return written, true
+	return r, true
+}
+
+// Release tag from the `/releases/latest` redirect target, e.g.
+// ".../releases/tag/v0.1.1" -> "v0.1.1". "" when it is not a tag URL (no releases
+// yet) or the tag has unexpected characters (it ends up in a download URL).
+update_tag_from_location :: proc(location: string) -> string {
+	marker :: "/releases/tag/"
+	i := strings.index(location, marker)
+	if i < 0 { return "" }
+	tag := location[i + len(marker):]
+	if q := strings.index_any(tag, "?#/"); q >= 0 { tag = tag[:q] }
+	if len(tag) == 0 || len(tag) > 64 { return "" }
+	for c in transmute([]u8)tag {
+		ok := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '-' || c == '_' || c == '+'
+		if !ok { return "" }
+	}
+	return tag
 }
 
 // --- Check ---
@@ -218,35 +254,47 @@ update_check_worker :: proc() {
 		updater.state = .Idle
 	case .Failed:
 		updater.state = .Idle
-		updater.next_check_ms = update_next_after(monotonic_ms(), UPDATE_RETRY_MS)
+		updater.failures += 1
+		// The first few failures always retry (backoff); afterwards only when
+		// periodic checking is on, every 30 minutes.
+		if updater.periodic || updater.failures <= len(UPDATE_BACKOFF_MS) {
+			updater.next_check_ms = monotonic_ms() + update_retry_delay(updater.failures)
+		} else {
+			updater.next_check_ms = UPDATE_NEVER
+		}
 	}
+	if result != .Failed { updater.failures = 0 }
 	sync.mutex_unlock(&updater.mu)
 	if hwnd != nil { windows.PostMessageW(hwnd, UPDATE_CHECKED, 0, 0) }
+}
+
+// Delay before the retry after the n-th consecutive failed check (1-based): 1 min,
+// 5 min, then 30 min for every later failure.
+update_retry_delay :: proc(failures: int) -> i64 {
+	steps := UPDATE_BACKOFF_MS
+	return steps[clamp(failures - 1, 0, len(steps) - 1)]
 }
 
 Fetch_Result :: enum { Failed, Up_To_Date, Found }
 
 // Found = a newer release with an aika.exe asset exists (latest/url are then
-// heap-owned by the caller).
+// heap-owned by the caller). Failed = GitHub unreachable or answered oddly.
 update_fetch_latest :: proc() -> (latest, url: string, size: i64, result: Fetch_Result) {
-	body: [dynamic]u8
-	defer delete(body)
-	if _, ok := http_get(UPDATE_API_URL, &body, nil, UPDATE_MAX_JSON); !ok { return }
-	info: Release_Info
-	if json.unmarshal(body[:], &info) != nil { return }
-	defer {
-		delete(info.tag_name)
-		for a in info.assets { delete(a.name); delete(a.browser_download_url) }
-		delete(info.assets)
+	// 1) Where does /releases/latest point? Not followed: the redirect is the answer.
+	r, ok := http_request(fmt.tprintf("%s/latest", UPDATE_RELEASES_URL), "GET", false)
+	if !ok || r.status < 300 || r.status >= 400 { return }
+	tag := update_tag_from_location(r.location)
+	if tag == "" {
+		// A redirect elsewhere (e.g. to /releases) means nothing is published yet.
+		return "", "", 0, .Up_To_Date
 	}
-	result = .Up_To_Date
-	if !version_newer(info.tag_name, AIKA_VERSION) { return }
-	for a in info.assets {
-		if a.name == UPDATE_ASSET_NAME && a.size > 0 && strings.has_prefix(a.browser_download_url, "https://") {
-			return strings.clone(strings.trim_prefix(info.tag_name, "v")), strings.clone(a.browser_download_url), a.size, .Found
-		}
-	}
-	return
+	if !version_newer(tag, AIKA_VERSION) { return "", "", 0, .Up_To_Date }
+
+	// 2) Is the asset really there, and how big is it? HEAD, following redirects to the CDN.
+	asset := fmt.tprintf("%s/download/%s/%s", UPDATE_RELEASES_URL, tag, UPDATE_ASSET_NAME)
+	h, head_ok := http_request(asset, "HEAD", true)
+	if !head_ok || h.status != 200 || h.content_length < UPDATE_MIN_EXE || h.content_length > UPDATE_MAX_EXE { return }
+	return strings.clone(strings.trim_prefix(tag, "v")), strings.clone(asset), h.content_length, .Found
 }
 
 // --- UI-facing state ---
@@ -285,7 +333,7 @@ draw_update :: proc(dc: windows.HDC, w, h: i32) {
 	hovered := state == .Available && ui.mouse_valid && rect_hit(r, ui.mouse.x, ui.mouse.y)
 	color: Colorref = C_TXT if hovered else C_GREEN
 	if state == .Downloading { color = C_DIM }
-	draw_string(dc, label, r.left + dpi_px(VERSION_PAD), r.top + 4, ui.font_bold, color)
+	draw_string(dc, label, r.left + dpi_px(VERSION_PAD), status_text_y(r.top, ui.font_bold), ui.font_bold, color)
 }
 
 // --- Download + swap ---
@@ -331,9 +379,20 @@ update_download_worker :: proc() {
 update_download_file :: proc(url, dest: string, size: i64) -> bool {
 	file := windows.CreateFileW(wtext(dest), windows.GENERIC_WRITE, 0, nil, windows.CREATE_ALWAYS, windows.FILE_ATTRIBUTE_NORMAL, nil)
 	if file == windows.INVALID_HANDLE_VALUE { return false }
-	n, ok := http_get(url, nil, file, UPDATE_MAX_EXE)
+	r, ok := http_request(url, "GET", true, file, UPDATE_MAX_EXE)
 	windows.CloseHandle(file)
-	return ok && i64(n) == size
+	// Whole file, exactly the size announced by the check, and a PE ("MZ") header.
+	return ok && r.status == 200 && i64(r.written) == size && (r.content_length < 0 || r.content_length == size) &&
+		update_has_pe_header(dest)
+}
+
+update_has_pe_header :: proc(path: string) -> bool {
+	file := windows.CreateFileW(wtext(path), windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, nil)
+	if file == windows.INVALID_HANDLE_VALUE { return false }
+	defer windows.CloseHandle(file)
+	magic: [2]u8
+	got: u32
+	return bool(windows.ReadFile(file, &magic[0], 2, &got, nil)) && got == 2 && magic[0] == 'M' && magic[1] == 'Z'
 }
 
 update_reset_available :: proc() {
