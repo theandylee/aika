@@ -134,6 +134,12 @@ These have caused bugs before. Do not break them casually.
 - `Activity` stores BOTH local and UTC timestamps.
 - `StartUtcMs` / `EndUtcMs` are aika extensions for fast rendering. They are not
   part of ManicTime's schema.
+- Tag blocks (timeline 1) carry several tags like ManicTime: `Activity.GroupListId` ->
+  `GroupList` -> ordered `GroupListItem` rows. `Activity.GroupId` is the first tag
+  (colour only), `DisplayName` is the joined names. Totals credit each tag the block's
+  full duration, but the Tags "Total:" footer counts each block once. Create blocks with
+  `db_create_tag_block_multi`; never synthesize "A, B" groups. Import carries lists via
+  `ImportFile.groupLists` / `ImportActivity.groupListId`.
 - Timeline IDs are fixed:
   - `1` = Tags
   - `2` = ComputerUsage

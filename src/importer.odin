@@ -23,6 +23,15 @@ ImportActivity :: struct {
 	startUtcMs:  i64    `json:"startUtcMs"`,
 	endUtcMs:    i64    `json:"endUtcMs"`,
 	textData:    string `json:"textData"`,
+	groupListId: i64    `json:"groupListId"`, // optional: tag list (several tags per block)
+}
+
+// An ordered set of tags, as in ManicTime's GroupList/GroupListItem.
+ImportGroupList :: struct {
+	groupListId: i64    `json:"groupListId"`,
+	timelineId:  i64    `json:"timelineId"`,
+	key:         string `json:"key"`,
+	groupIds:    []i64  `json:"groupIds"`,
 }
 
 Import_Stage :: enum { Reading, Writing }
@@ -34,6 +43,7 @@ ImportFile :: struct {
 	source:     string          `json:"source"`,
 	sourceId:   string          `json:"sourceId"`,
 	groups:     []ImportGroup    `json:"groups"`,
+	groupLists: []ImportGroupList `json:"groupLists"`,
 	activities: []ImportActivity `json:"activities"`,
 }
 
@@ -102,8 +112,32 @@ import_apply :: proc(db: ^DB, imp: ^ImportFile, source_override: string = "",
 		}
 		groups[g.groupId] = i
 	}
+	lists := make(map[i64]int)
+	for l, i in imp.groupLists {
+		if _, duplicate := lists[l.groupListId]; duplicate || l.groupListId <= 0 || len(l.groupIds) == 0 ||
+		   l.timelineId < TIMELINE_TAGS || l.timelineId > TIMELINE_DOCS ||
+		   strings.trim_space(l.key) == "" || strings.contains(l.key, "\x00") {
+			fmt.eprintln("invalid or duplicate source group list:", l.groupListId)
+			return false
+		}
+		for g in l.groupIds {
+			gi, found := groups[g]
+			if !found || imp.groups[gi].timelineId != l.timelineId {
+				fmt.eprintln("group list", l.groupListId, "references a missing or cross-timeline group:", g)
+				return false
+			}
+		}
+		lists[l.groupListId] = i
+	}
 	activities := make(map[i64]bool)
 	for a in imp.activities {
+		if a.groupListId > 0 {
+			li, found := lists[a.groupListId]
+			if !found || imp.groupLists[li].timelineId != a.timelineId {
+				fmt.eprintln("missing or cross-timeline group list for activity:", a.activityId)
+				return false
+			}
+		}
 		if activities[a.activityId] || a.activityId <= 0 || a.timelineId < TIMELINE_TAGS || a.timelineId > TIMELINE_DOCS ||
 		   a.startUtcMs <= 0 || a.endUtcMs < a.startUtcMs || a.endUtcMs > 253402300799999 || a.groupId < 0 {
 			fmt.eprintln("invalid or duplicate source activity:", a.activityId)
@@ -138,6 +172,19 @@ import_apply :: proc(db: ^DB, imp: ^ImportFile, source_override: string = "",
 		free_all(context.temp_allocator)
 	}
 
+	local_lists := make([]i64, len(imp.groupLists))
+	for l, i in imp.groupLists {
+		ids := make([]i64, len(l.groupIds), context.temp_allocator)
+		for g, k in l.groupIds { ids[k] = local_groups[groups[g]] }
+		id, result := db_ensure_group_list(db, l.timelineId, l.key, ids)
+		if result != .Ok {
+			fmt.eprintln("failed to import group list", l.groupListId)
+			return false
+		}
+		local_lists[i] = id
+		free_all(context.temp_allocator)
+	}
+
 	counts: [Import_Action]int
 	for a, n in imp.activities {
 		if progress != nil && n % 1024 == 0 && !progress(.Writing, n, len(imp.activities), progress_data) {
@@ -146,7 +193,9 @@ import_apply :: proc(db: ^DB, imp: ^ImportFile, source_override: string = "",
 		}
 		group: i64
 		if a.groupId > 0 { group = local_groups[groups[a.groupId]] }
-		action, result := db_import_activity(db, source, a, group)
+		list: i64
+		if a.groupListId > 0 { list = local_lists[lists[a.groupListId]] }
+		action, result := db_import_activity(db, source, a, group, list)
 		if result != .Ok {
 			fmt.eprintln("failed to import activity", a.activityId, result)
 			return false

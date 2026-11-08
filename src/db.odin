@@ -113,6 +113,26 @@ CREATE TABLE IF NOT EXISTS Activity (
 	UpdatedTimestamp INTEGER NOT NULL DEFAULT 0
 );
 
+-- ManicTime-shaped tag lists: one list per tag combination; a tag activity's
+-- GroupListId points at it and GroupId is its first (primary, colour) tag.
+CREATE TABLE IF NOT EXISTS GroupList (
+	GroupListId INTEGER PRIMARY KEY AUTOINCREMENT,
+	TimelineId INTEGER NOT NULL,
+	Key TEXT NOT NULL,
+	DeleteWhenNotUsed INTEGER NOT NULL DEFAULT 1,
+	UpdatedTimestamp INTEGER NOT NULL DEFAULT 0,
+	Color INTEGER,
+	UNIQUE(TimelineId, Key)
+);
+
+CREATE TABLE IF NOT EXISTS GroupListItem (
+	GroupListItemId INTEGER PRIMARY KEY AUTOINCREMENT,
+	GroupListId INTEGER NOT NULL REFERENCES GroupList(GroupListId) ON DELETE CASCADE,
+	GroupId INTEGER NOT NULL REFERENCES "Group"(GroupId),
+	DisplayOrder INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(GroupListId, GroupId)
+);
+
 CREATE INDEX IF NOT EXISTS IX_Activity_Timeline_Date ON Activity (TimelineId, StartLocalDate, EndLocalDate);
 CREATE INDEX IF NOT EXISTS IX_Activity_Timeline_Start ON Activity (TimelineId, StartUtcMs, ActivityId);
 CREATE INDEX IF NOT EXISTS IX_Activity_Updated ON Activity (UpdatedTimestamp);
@@ -440,24 +460,26 @@ db_ensure_group_id :: proc(db: ^DB, timeline_id: i64, key: string, display_name:
 	return id
 }
 
-db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, group_id: i64, start_ms, end_ms: i64) -> (i64, DB_Result) {
+db_insert_activity :: proc(db: ^DB, timeline_id: i64, display_name: string, group_id: i64, start_ms, end_ms: i64, list_id: i64 = 0) -> (i64, DB_Result) {
 	if end_ms < start_ms { return 0, .Failed }
 	lease, ok := db_lease(db, .Insert_Activity, `
 		INSERT INTO Activity (
 			TimelineId, DisplayName, GroupId,
 			StartLocalDate, StartLocalTime, StartUtcTime,
 			EndLocalDate, EndLocalTime, EndUtcTime,
-			StartUtcMs, EndUtcMs, TextData, UpdatedTimestamp
-		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12)
+			StartUtcMs, EndUtcMs, TextData, UpdatedTimestamp, GroupListId
+		) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, ?13)
 	`)
 	if !ok {
 		return 0, db_failure(db)
 	}
 	defer db_release(&lease)
 	stmt := lease.stmt
+	list_bound := bind_null(stmt, 13)
+	if list_id > 0 { list_bound = bind_i64(stmt, 13, list_id) }
 	bound := db_bind_result(
 		bind_i64(stmt, 1, timeline_id), bind_text(stmt, 2, display_name), bind_i64(stmt, 3, group_id),
-		bind_i64(stmt, 12, now_ms() / 1000))
+		bind_i64(stmt, 12, now_ms() / 1000), list_bound)
 	if bound != .Ok { return 0, bound }
 	bound = db_bind_time(stmt, start_ms, DB_Time_Columns{4, 5, 6, 10})
 	if bound != .Ok { return 0, bound }
@@ -658,6 +680,22 @@ Activity :: struct {
 	start_date:   int,
 	group_name:   string,
 	color:        Argb,
+	tags:         []Activity_Tag, // Tags lane only: every tag of the block, in order
+}
+
+Activity_Tag :: struct {
+	id:    i64,
+	name:  string,
+	color: Argb,
+}
+
+// Names of all tags on a tag activity; falls back to the activity's own group
+// for blocks that have no list (live task overlays, legacy rows).
+activity_tag_names :: proc(a: Activity, allocator := context.temp_allocator) -> []string {
+	if len(a.tags) == 0 { return nil }
+	names := make([]string, len(a.tags), allocator)
+	for t, i in a.tags { names[i] = t.name }
+	return names
 }
 
 // Day overlap is split by interval length so cost follows the day, not history:
@@ -727,7 +765,13 @@ db_load_activities :: proc(db: ^DB, date_int: int) -> ([]Activity, DB_Result) {
 	result := make([dynamic]Activity, 0, 256)
 	for {
 		rc := sqlite3_step(stmt)
-		if rc == SQLITE_DONE { return result[:], .Ok }
+		if rc == SQLITE_DONE {
+			if loaded := db_load_tag_lists(db, result[:]); loaded != .Ok {
+				free_activities(result[:])
+				return nil, loaded
+			}
+			return result[:], .Ok
+		}
 		if rc != SQLITE_ROW {
 			free_activities(result[:])
 			return nil, db_result(rc)
@@ -747,6 +791,36 @@ db_load_activities :: proc(db: ^DB, date_int: int) -> ([]Activity, DB_Result) {
 	}
 }
 
+// Fills Activity.tags for the day's tag blocks (one small query per block).
+db_load_tag_lists :: proc(db: ^DB, activities: []Activity) -> DB_Result {
+	stmt, ok := db_prepare(db, `SELECT g.GroupId, COALESCE(g.DisplayName, ''), COALESCE(g.Color, 0)
+		FROM Activity a
+		JOIN GroupListItem li ON li.GroupListId = a.GroupListId
+		JOIN "Group" g ON g.GroupId = li.GroupId
+		WHERE a.ActivityId = ?1 ORDER BY li.DisplayOrder, li.GroupListItemId`)
+	if !ok { return db_failure(db) }
+	defer sqlite3_finalize(stmt)
+	for &a in activities {
+		if a.timeline_id != TIMELINE_TAGS { continue }
+		sqlite3_reset(stmt)
+		bound := db_result(bind_i64(stmt, 1, a.id))
+		if bound != .Ok { return bound }
+		tags := make([dynamic]Activity_Tag)
+		for {
+			rc := sqlite3_step(stmt)
+			if rc == SQLITE_DONE { break }
+			if rc != SQLITE_ROW {
+				for t in tags { delete(t.name) }
+				delete(tags)
+				return db_result(rc)
+			}
+			append(&tags, Activity_Tag{id = col_i64(stmt, 0), name = col_text(stmt, 1), color = Argb(col_i64(stmt, 2))})
+		}
+		if len(tags) == 0 { delete(tags) } else { a.tags = tags[:] }
+	}
+	return .Ok
+}
+
 free_activities :: proc(activities: []Activity) {
 	for a in activities {
 		if len(a.display_name) > 0 {
@@ -754,6 +828,10 @@ free_activities :: proc(activities: []Activity) {
 		}
 		if len(a.group_name) > 0 {
 			delete(a.group_name)
+		}
+		if a.tags != nil {
+			for t in a.tags { delete(t.name) }
+			delete(a.tags)
 		}
 	}
 	if activities != nil {

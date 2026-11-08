@@ -56,8 +56,13 @@ import_hash :: proc(text: string) -> string {
 	return encoded
 }
 
-import_source_fingerprint :: proc(activity: ImportActivity, group: i64) -> string {
+import_source_fingerprint :: proc(activity: ImportActivity, group: i64, list: i64 = 0) -> string {
 	// Length prefixes preserve separators, Unicode and embedded NUL bytes.
+	if list > 0 { // list changes must reach already-imported rows; list-less rows keep their old fingerprint
+		return import_hash(fmt.tprintf("%d;%d;%d;%d;%d:%s;%d:%s;L%d", activity.timelineId, group,
+			activity.startUtcMs, activity.endUtcMs, len(activity.displayName), activity.displayName,
+			len(activity.textData), activity.textData, list))
+	}
 	return import_hash(fmt.tprintf("%d;%d;%d;%d;%d:%s;%d:%s", activity.timelineId, group,
 		activity.startUtcMs, activity.endUtcMs, len(activity.displayName), activity.displayName,
 		len(activity.textData), activity.textData))
@@ -89,19 +94,19 @@ db_import_local_fingerprint :: proc(db: ^DB, id: i64) -> (string, DB_Result) {
 
 // id==0 allocates a fresh local ID. A positive id may only come from a checked
 // provenance mapping, never directly from ImportActivity.activityId.
-db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, group: i64) -> (i64, DB_Result) {
+db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, group: i64, list: i64 = 0) -> (i64, DB_Result) {
 	if activity.endUtcMs < activity.startUtcMs { return 0, .Failed }
 	sql := `INSERT INTO Activity (TimelineId, DisplayName, GroupId,
 		StartLocalDate, StartLocalTime, StartUtcTime, EndLocalDate, EndLocalTime, EndUtcTime,
-		StartUtcMs, EndUtcMs, TextData, UpdatedTimestamp)
-		VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)`
+		StartUtcMs, EndUtcMs, TextData, UpdatedTimestamp, GroupListId)
+		VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)`
 	slot := Stmt_Slot.Import_Activity_Insert
 	if id > 0 {
 		slot = .Import_Activity_Update
 		sql = `UPDATE Activity SET TimelineId=?1, DisplayName=?2, GroupId=?3,
 			StartLocalDate=?4, StartLocalTime=?5, StartUtcTime=?6,
 			EndLocalDate=?7, EndLocalTime=?8, EndUtcTime=?9,
-			StartUtcMs=?10, EndUtcMs=?11, TextData=?12, UpdatedTimestamp=?13 WHERE ActivityId=?14`
+			StartUtcMs=?10, EndUtcMs=?11, TextData=?12, UpdatedTimestamp=?13, GroupListId=?14 WHERE ActivityId=?15`
 	}
 	lease, ok := db_lease(db, slot, sql)
 	if !ok { return 0, db_failure(db) }
@@ -109,7 +114,9 @@ db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, gro
 	stmt := lease.stmt
 	group_bound := bind_null(stmt, 3)
 	if group > 0 { group_bound = bind_i64(stmt, 3, group) }
-	bound := db_bind_result(bind_i64(stmt, 1, activity.timelineId), bind_text(stmt, 2, activity.displayName), group_bound,
+	list_bound := bind_null(stmt, 14)
+	if list > 0 { list_bound = bind_i64(stmt, 14, list) }
+	bound := db_bind_result(bind_i64(stmt, 1, activity.timelineId), bind_text(stmt, 2, activity.displayName), group_bound, list_bound,
 		bind_text(stmt, 12, activity.textData), bind_i64(stmt, 13, now_ms() / 1000))
 	if bound != .Ok { return 0, bound }
 	bound = db_bind_time(stmt, activity.startUtcMs, DB_Time_Columns{4, 5, 6, 10})
@@ -117,7 +124,7 @@ db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, gro
 	bound = db_bind_time(stmt, activity.endUtcMs, DB_Time_Columns{7, 8, 9, 11})
 	if bound != .Ok { return 0, bound }
 	if id > 0 {
-		bound = db_result(bind_i64(stmt, 14, id))
+		bound = db_result(bind_i64(stmt, 15, id))
 		if bound != .Ok { return 0, bound }
 	}
 	rc := sqlite3_step(stmt)
@@ -126,7 +133,7 @@ db_import_write_activity :: proc(db: ^DB, id: i64, activity: ImportActivity, gro
 	return id if id > 0 else sqlite3_last_insert_rowid(db.handle), .Ok
 }
 
-db_import_activity :: proc(db: ^DB, source: string, activity: ImportActivity, group: i64) -> (Import_Action, DB_Result) {
+db_import_activity :: proc(db: ^DB, source: string, activity: ImportActivity, group: i64, list: i64 = 0) -> (Import_Action, DB_Result) {
 	context.allocator = context.temp_allocator
 	lookup_lease, ok := db_lease(db, .Import_Map_Lookup, `SELECT LocalActivityId, SourceTimelineId, SourceStartUtcMs,
 		SourceFingerprint, LocalFingerprint FROM ImportActivityMap WHERE SourceId=?1 AND SourceActivityId=?2`)
@@ -137,7 +144,7 @@ db_import_activity :: proc(db: ^DB, source: string, activity: ImportActivity, gr
 	if bound != .Ok { return .Conflict, bound }
 	rc := sqlite3_step(lookup)
 	id: i64
-	source_fingerprint := import_source_fingerprint(activity, group)
+	source_fingerprint := import_source_fingerprint(activity, group, list)
 	existing := rc == SQLITE_ROW
 	if existing {
 		// These immutable anchors detect accidental reuse of a source identity
@@ -159,7 +166,7 @@ db_import_activity :: proc(db: ^DB, source: string, activity: ImportActivity, gr
 	} else if rc != SQLITE_DONE {
 		return .Conflict, db_result(rc)
 	}
-	local_id, written := db_import_write_activity(db, id, activity, group)
+	local_id, written := db_import_write_activity(db, id, activity, group, list)
 	if written != .Ok { return .Conflict, written }
 	local_fingerprint, read := db_import_local_fingerprint(db, local_id)
 	if read != .Ok { return .Conflict, read }

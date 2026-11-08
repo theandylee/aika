@@ -37,6 +37,7 @@ Manic_Reader :: struct {
 	groups:     [dynamic]ImportGroup,
 	activities: [dynamic]ImportActivity,
 	act_list:   [dynamic]i64, // GroupListId per activity, parallel to activities
+	lists:      [dynamic]ImportGroupList,
 	list_keys:  map[i64]string,
 	list_items: map[i64][dynamic]Manic_List_Item,
 	skipped:    int,
@@ -65,50 +66,50 @@ manic_list_item_row :: proc(t: ^Sdf_Table, row: []Sdf_Value, data: rawptr) -> bo
 	return true
 }
 
-// Gives list-only activities a group and name: the tag itself for one-tag
-// lists, a synthetic "A, B" tag (keyed by the list's key) for combinations.
+// Turns ManicTime's tag lists into import lists and names list-only tag
+// activities: GroupId becomes the list's first tag (colour) and an empty title
+// becomes the joined tag names, in ManicTime's order.
 manic_resolve_lists :: proc(r: ^Manic_Reader) {
 	index := make(map[i64]int)
-	next_id: i64 = 1
-	for g, i in r.groups { index[g.groupId] = i; next_id = max(next_id, g.groupId + 1) }
-	synthetic := make(map[i64]i64)
+	for g, i in r.groups { index[g.groupId] = i }
+	valid := make(map[i64]int) // source list id -> index into r.lists
 
 	for &a, i in r.activities {
 		list := r.act_list[i]
-		if a.groupId != 0 || list == 0 { continue }
-		items := r.list_items[list]
-		for j in 1 ..< len(items) { // insertion sort by DisplayOrder
-			for k := j; k > 0 && items[k - 1].order > items[k].order; k -= 1 { items[k - 1], items[k] = items[k], items[k - 1] }
-		}
-		if len(items) == 0 { continue }
-		first, found := index[items[0].group]
-		if !found || r.groups[first].timelineId != a.timelineId { continue }
-
-		gid := r.groups[first].groupId
-		name := r.groups[first].displayName
-		if len(items) > 1 {
-			known, made := synthetic[list]
-			if made {
-				gid = known
-			} else {
-				parts := make([dynamic]string)
-				for it in items {
-					if gi, ok := index[it.group]; ok { append(&parts, r.groups[gi].displayName) }
-				}
-				joined := strings.join(parts[:], ", ")
+		if list == 0 { continue }
+		at, known := valid[list]
+		if !known {
+			at = -1
+			items := r.list_items[list]
+			for j in 1 ..< len(items) { // insertion sort by DisplayOrder
+				for k := j; k > 0 && items[k - 1].order > items[k].order; k -= 1 { items[k - 1], items[k] = items[k], items[k - 1] }
+			}
+			ids := make([dynamic]i64)
+			timeline: i64
+			for it in items {
+				gi, found := index[it.group]
+				if !found { continue }
+				if len(ids) == 0 { timeline = r.groups[gi].timelineId }
+				if r.groups[gi].timelineId != timeline { continue }
+				append(&ids, it.group)
+			}
+			if len(ids) > 0 {
 				key := r.list_keys[list]
 				if key == "" { key = fmt.aprintf("list:%d", list) }
-				gid = next_id
-				next_id += 1
-				index[gid] = len(r.groups)
-				append(&r.groups, ImportGroup{groupId = gid, timelineId = a.timelineId, displayName = joined,
-					color = r.groups[first].color, key = key})
-				synthetic[list] = gid
+				at = len(r.lists)
+				append(&r.lists, ImportGroupList{groupListId = list, timelineId = timeline, key = key, groupIds = ids[:]})
 			}
-			name = r.groups[index[gid]].displayName
+			valid[list] = at
 		}
-		a.groupId = gid
-		if a.displayName == "" { a.displayName = name }
+		if at < 0 || r.lists[at].timelineId != a.timelineId { continue }
+		l := r.lists[at]
+		a.groupListId = list
+		if a.groupId == 0 { a.groupId = l.groupIds[0] }
+		if a.displayName == "" {
+			names := make([dynamic]string)
+			for g in l.groupIds { append(&names, r.groups[index[g]].displayName) }
+			a.displayName = strings.join(names[:], ", ")
+		}
 	}
 }
 
@@ -231,7 +232,7 @@ import_manictime_sdf :: proc(db: ^DB, path: string, progress: Import_Progress_Pr
 
 	imp := ImportFile{
 		source = "ManicTime", sourceId = MANICTIME_SOURCE_ID,
-		groups = reader.groups[:], activities = reader.activities[:],
+		groups = reader.groups[:], groupLists = reader.lists[:], activities = reader.activities[:],
 	}
 	cancelled: bool
 	if !import_apply(db, &imp, MANICTIME_SOURCE_ID, progress, progress_data, &cancelled) {

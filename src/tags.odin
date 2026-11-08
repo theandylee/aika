@@ -21,6 +21,8 @@ TagUi :: struct {
 	visible: [dynamic]int,
 	menu_open: bool,
 	task_picker: bool,
+	multi: bool,              // block pickers select several tags; task pickers one
+	selected: [dynamic]i64,   // ticked tag IDs, kept across search filtering
 	control_failed: bool,
 }
 
@@ -259,6 +261,25 @@ tag_search_text :: proc() -> string {
 	return strings.trim_space(s)
 }
 
+tag_is_selected :: proc(id: i64) -> bool {
+	for s in tag_ui.selected { if s == id { return true } }
+	return false
+}
+
+// Mirrors the listbox's ticks into tag_ui.selected for the visible rows;
+// ticks on rows hidden by the search stay selected.
+tag_selection_sync :: proc() {
+	if !tag_ui.multi || tag_ui.list == nil { return }
+	for index, row in tag_ui.visible {
+		id := tag_ui.tags[index].id
+		ticked := windows.SendMessageW(tag_ui.list, LB_GETSEL, windows.WPARAM(row), 0) > 0
+		at := -1
+		for s, i in tag_ui.selected { if s == id { at = i; break } }
+		if ticked && at < 0 { append(&tag_ui.selected, id) }
+		if !ticked && at >= 0 { ordered_remove(&tag_ui.selected, at) }
+	}
+}
+
 tag_picker_filter :: proc() {
 	query := strings.to_lower(tag_search_text(), context.temp_allocator)
 	clear(&tag_ui.visible)
@@ -268,11 +289,16 @@ tag_picker_filter :: proc() {
 		lower := strings.to_lower(tag.name, context.temp_allocator)
 		if lower == query { exact = true }
 		if strings.contains(lower, query) {
+			row := len(tag_ui.visible)
 			append(&tag_ui.visible, i)
 			windows.SendMessageW(tag_ui.list, LB_ADDSTRING, 0, transmute(windows.LPARAM)(wtext(tag.name)))
+			if tag_ui.multi && tag_is_selected(tag.id) { windows.SendMessageW(tag_ui.list, LB_SETSEL, 1, windows.LPARAM(row)) }
 		}
 	}
-	if len(tag_ui.visible) > 0 { windows.SendMessageW(tag_ui.list, LB_SETCURSEL, 0, 0) }
+	if len(tag_ui.visible) > 0 {
+		if tag_ui.multi { windows.SendMessageW(tag_ui.list, LB_SETCARETINDEX, 0, 0) } else { windows.SendMessageW(tag_ui.list, LB_SETCURSEL, 0, 0) }
+	}
+	// Creating is offered whenever the typed name is new; in multi mode it adds to the ticked tags.
 	windows.EnableWindow(tag_ui.create, windows.TRUE if query != "" && !exact else windows.FALSE)
 }
 
@@ -281,6 +307,9 @@ tag_picker_close :: proc() {
 	tag_ui.popup = nil
 	tag_ui.search, tag_ui.list, tag_ui.create = nil, nil, nil
 	tag_ui.task_picker = false
+	tag_ui.multi = false
+	delete(tag_ui.selected)
+	tag_ui.selected = nil
 	windows.EnableWindow(ui.hwnd, windows.TRUE)
 	if hwnd != nil { windows.DestroyWindow(hwnd) }
 	free_tags(tag_ui.tags)
@@ -295,7 +324,23 @@ tag_picker_accept :: proc(create: bool) {
 	app := global_app
 	name := tag_search_text()
 	id: i64
-	if !create {
+	picks := make([dynamic]Tag_Pick, context.temp_allocator)
+	if tag_ui.multi {
+		tag_selection_sync()
+		if !create && len(tag_ui.selected) == 0 {
+			// Nothing ticked: use the highlighted row.
+			row := int(windows.SendMessageW(tag_ui.list, LB_GETCARETINDEX, 0, 0))
+			if row >= 0 && row < len(tag_ui.visible) { append(&tag_ui.selected, tag_ui.tags[tag_ui.visible[row]].id) }
+		}
+		for tag in tag_ui.tags {
+			if tag_is_selected(tag.id) { append(&picks, Tag_Pick{tag.id, tag.name}) }
+		}
+		if create {
+			if name == "" { return }
+			append(&picks, Tag_Pick{0, name})
+		}
+		if len(picks) == 0 { return }
+	} else if !create {
 		index := int(windows.SendMessageW(tag_ui.list, LB_GETCURSEL, 0, 0))
 		if index < 0 || index >= len(tag_ui.visible) { return }
 		tag := tag_ui.tags[tag_ui.visible[index]]
@@ -314,7 +359,8 @@ tag_picker_accept :: proc(create: bool) {
 		sync_date_picker(app)
 		return
 	}
-	_, result := db_create_tag_block(&app.db, id, name, tag_ui.start_ms, tag_ui.end_ms)
+	if !tag_ui.multi { append(&picks, Tag_Pick{id, name}) }
+	_, result := db_create_tag_block_multi(&app.db, picks[:], tag_ui.start_ms, tag_ui.end_ms)
 	if result == .Overlap {
 		message_box("This time range is already tagged. Please select free time.", "aika", windows.MB_ICONERROR)
 		tag_picker_close()
@@ -347,7 +393,15 @@ tag_picker_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM,
 	case windows.WM_COMMAND:
 		id, code := u32(wp) & 0xFFFF, (u32(wp) >> 16) & 0xFFFF
 		if id == TAG_ID_SEARCH && code == windows.EN_CHANGE && tag_ui.list != nil { tag_picker_filter() }
-		if id == TAG_ID_LIST && code == LBN_DBLCLK { tag_picker_accept(false) }
+		if id == TAG_ID_LIST && code == LBN_SELCHANGE { tag_selection_sync() }
+		if id == TAG_ID_LIST && code == LBN_DBLCLK {
+			if tag_ui.multi {
+				// The double click toggled the row twice; keep it ticked and accept.
+				row := int(windows.SendMessageW(tag_ui.list, LB_GETCARETINDEX, 0, 0))
+				if row >= 0 { windows.SendMessageW(tag_ui.list, LB_SETSEL, 1, windows.LPARAM(row)) }
+			}
+			tag_picker_accept(false)
+		}
 		if id == TAG_ID_USE { tag_picker_accept(false) }
 		if id == TAG_ID_CREATE { tag_picker_accept(true) }
 		if id == TAG_ID_CANCEL { tag_picker_close() }
@@ -368,6 +422,9 @@ tag_picker_control :: proc(class, label: string, style: u32, x, y, w, h: i32, id
 tag_picker_open :: proc() {
 	if tag_ui.popup != nil { windows.SetForegroundWindow(tag_ui.popup); return }
 	tag_ui.control_failed = false
+	tag_ui.multi = !tag_ui.task_picker
+	delete(tag_ui.selected)
+	tag_ui.selected = nil
 	hi := windows.HINSTANCE(windows.GetModuleHandleW(nil))
 	wc := windows.WNDCLASSEXW{cbSize = size_of(windows.WNDCLASSEXW), lpfnWndProc = tag_picker_proc,
 		hInstance = hi, hCursor = system_cursor(IDC_ARROW),
@@ -383,11 +440,15 @@ tag_picker_open :: proc() {
 	tag_ui.list = nil
 	description := "Choose a tag to track from now." if tag_ui.task_picker else fmt.tprintf("%s - %s", fmt_clock_hm(tag_ui.start_ms), fmt_clock_hm(tag_ui.end_ms))
 	tag_picker_control("STATIC", description, 0, 12, 12, 380, 20, 0)
-	tag_picker_control("STATIC", "Search tags or enter a new tag name:", 0, 12, 36, 380, 20, 0)
+	hint := "Search tags or enter a new tag name:"
+	if tag_ui.multi { hint = "Tick one or more tags, or type a new one:" }
+	tag_picker_control("STATIC", hint, 0, 12, 36, 380, 20, 0)
 	tag_ui.search = tag_picker_control("EDIT", "", windows.WS_BORDER | windows.WS_TABSTOP | windows.ES_AUTOHSCROLL, 12, 58, 380, 24, TAG_ID_SEARCH)
-	tag_ui.list = tag_picker_control("LISTBOX", "", windows.WS_BORDER | windows.WS_TABSTOP | windows.WS_VSCROLL | LBS_NOTIFY, 12, 90, 380, 162, TAG_ID_LIST)
-	tag_picker_control("BUTTON", "Use tag", windows.WS_TABSTOP | windows.BS_DEFPUSHBUTTON, 12, 268, 100, 28, TAG_ID_USE)
-	tag_ui.create = tag_picker_control("BUTTON", "Create tag", windows.WS_TABSTOP, 120, 268, 140, 28, TAG_ID_CREATE)
+	list_style := u32(windows.WS_BORDER | windows.WS_TABSTOP | windows.WS_VSCROLL | LBS_NOTIFY)
+	if tag_ui.multi { list_style |= LBS_MULTIPLESEL }
+	tag_ui.list = tag_picker_control("LISTBOX", "", list_style, 12, 90, 380, 162, TAG_ID_LIST)
+	tag_picker_control("BUTTON", "Use tags" if tag_ui.multi else "Use tag", windows.WS_TABSTOP | windows.BS_DEFPUSHBUTTON, 12, 268, 100, 28, TAG_ID_USE)
+	tag_ui.create = tag_picker_control("BUTTON", "Add new tag" if tag_ui.multi else "Create tag", windows.WS_TABSTOP, 120, 268, 140, 28, TAG_ID_CREATE)
 	tag_picker_control("BUTTON", "Cancel", windows.WS_TABSTOP, 272, 268, 120, 28, TAG_ID_CANCEL)
 	if tag_ui.control_failed { tag_picker_close(); return }
 	tags, result := db_load_tags(&global_app.db)

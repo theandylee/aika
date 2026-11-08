@@ -652,6 +652,17 @@ build_totals :: proc(snapshot: Day_Snapshot, tl: i64, filter: string = "") -> []
 		if a.timeline_id != tl {
 			continue
 		}
+		if tl == TIMELINE_TAGS && len(a.tags) > 0 {
+			// A multi-tag block counts its full duration towards every tag.
+			for tag in a.tags {
+				if !snapshot_filter_matches(tag.name, filter) { continue }
+				entry, ok := m[tag.id]
+				if !ok { entry = TotRow{group_id = tag.id, name = tag.name, color = tag.color} }
+				entry.ms += row.end_ms - row.start_ms
+				m[tag.id] = entry
+			}
+			continue
+		}
 		name := a.group_name
 		if len(name) == 0 {
 			name = a.display_name
@@ -686,8 +697,17 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	defer free_totals_slice(totals)
 
 	total_ms: i64
-	for t in totals {
-		total_ms += t.ms
+	if lane_timeline(ui.lane) == TIMELINE_TAGS {
+		// Blocks, not tag rows: a multi-tag block must not count once per tag.
+		for row in snapshot.rows {
+			if row.activity.timeline_id != TIMELINE_TAGS { continue }
+			if ui.filter != "" && !snapshot_filter_matches(row.activity.display_name, ui.filter) { continue }
+			total_ms += row.end_ms - row.start_ms
+		}
+	} else {
+		for t in totals {
+			total_ms += t.ms
+		}
 	}
 
 	draw_string(dc, "Totals", x + 8, lay.list_top + 6, ui.font_bold, C_TXT)
