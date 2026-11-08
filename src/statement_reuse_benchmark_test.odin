@@ -13,7 +13,7 @@ import "core:time"
 // insert/update-end calls, (c) the task-tick transaction, and (d) the raw
 // prepare+finalize cost of the hot SQL, so the prepare share can be derived.
 
-STMT_BENCH_DIR :: `C:\Users\xatar\AppData\Local\Temp\opencode`
+
 
 stmt_bench_remove :: proc(path: string) {
 	for suffix in ([3]string{"", "-wal", "-shm"}) { os.remove(fmt.tprintf("%s%s", path, suffix)) }
@@ -61,7 +61,6 @@ statement_reuse_measurement :: proc(t: ^testing.T) {
 	flag := os.get_env("AIKA_STMT_BENCHMARK", context.allocator)
 	defer delete(flag)
 	if flag != "1" { return }
-	os.make_directory(STMT_BENCH_DIR)
 	GROUPS, ACTIVITIES :: 3000, 20000
 	data := stmt_bench_json(GROUPS, ACTIVITIES)
 	defer delete(data)
@@ -73,7 +72,7 @@ statement_reuse_measurement :: proc(t: ^testing.T) {
 	// (a) full import into a fresh file DB, then an unchanged re-import.
 	fresh, again: [5]f64
 	for i in 0 ..< len(fresh) {
-		path := fmt.aprintf("%s\\aika-stmt-import-%d.db", STMT_BENCH_DIR, i)
+		path := fmt.aprintf("%s\\aika-stmt-import-%d.db", test_temp_dir(), i)
 		defer delete(path)
 		stmt_bench_remove(path)
 		db, ok := db_open(path)
@@ -95,7 +94,7 @@ statement_reuse_measurement :: proc(t: ^testing.T) {
 	fmt.printf("STMT [%s] import %d groups/%d activities: fresh median=%.0f ms | unchanged re-import median=%.0f ms\n",
 		label, GROUPS, ACTIVITIES, stmt_bench_median(fresh[:]), stmt_bench_median(again[:]))
 
-	path := fmt.aprintf("%s\\aika-stmt-hot.db", STMT_BENCH_DIR)
+	path := fmt.aprintf("%s\\aika-stmt-hot.db", test_temp_dir())
 	defer delete(path)
 	stmt_bench_remove(path)
 	db, ok := db_open(path)
@@ -141,7 +140,7 @@ statement_reuse_measurement :: proc(t: ^testing.T) {
 	fmt.printf("STMT [%s] task tick (not converted): db_extend_task_until_boundary median=%.1f us (n=%d)\n", label, stmt_bench_median(ticks[:]), len(ticks))
 	}
 
-	path := fmt.aprintf("%s\\aika-stmt-hot.db", STMT_BENCH_DIR)
+	path := fmt.aprintf("%s\\aika-stmt-hot.db", test_temp_dir())
 	defer delete(path)
 	stmt_bench_remove(path)
 	db, ok := db_open(path)

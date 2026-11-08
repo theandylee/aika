@@ -1,7 +1,6 @@
 package main
 
 import "core:fmt"
-import "core:os"
 import "core:testing"
 
 // Audit #17: the fixed-slot statement cache (db_lease/db_release).
@@ -27,9 +26,7 @@ stmt_test_none_stepping :: proc(db: ^DB) -> bool {
 }
 
 stmt_test_path :: proc(name: string) -> string {
-	dir :: `C:\Users\xatar\AppData\Local\Temp\opencode`
-	os.make_directory(dir)
-	path := fmt.aprintf("%s\\aika-stmtcache-%s.db", dir, name)
+	path := fmt.aprintf("%s\\aika-stmtcache-%s.db", test_temp_dir(), name)
 	stmt_bench_remove(path)
 	return path
 }

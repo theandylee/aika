@@ -252,9 +252,7 @@ day_load_measurement :: proc(t: ^testing.T) {
 	context.temp_allocator = scratch_begin(&scratch)
 	defer scratch_end(&scratch)
 	rows := dayload_env_int("AIKA_DAYLOAD_ROWS", 500000)
-	dir :: `C:\Users\xatar\AppData\Local\Temp\opencode`
-	os.make_directory(dir)
-	path := fmt.aprintf("%s\\aika-dayload-%d.db", dir, rows)
+	path := fmt.aprintf("%s\\aika-dayload-%d.db", test_temp_dir(), rows)
 	defer delete(path)
 	for suffix in ([3]string{"", "-wal", "-shm"}) { os.remove(fmt.tprintf("%s%s", path, suffix)) }
 	db, opened := db_open(path)
