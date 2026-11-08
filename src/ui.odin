@@ -831,7 +831,9 @@ hit_test :: proc(x, y, w, h: i32) -> Hit {
 // cursor line never paint underneath them. Shared by draw_tooltip,
 // draw_cursor_line and hover tracking (hover.odin).
 tooltip_lane :: proc(x, y: i32, valid: bool, w, h: i32) -> (lane: Lane, ok: bool) {
-	if !valid || ui.tab != .Day || interaction_active() || tag_ui.popup != nil || tag_ui.menu_open ||
+	// A tag edge resize keeps the time hint: it shows the time under the edge.
+	resizing := tag_drag() == .Left_Edge || tag_drag() == .Right_Edge
+	if !valid || ui.tab != .Day || (interaction_active() && !resizing) || tag_ui.popup != nil || tag_ui.menu_open ||
 	   date_popup_open() || settings_popup_open() { return }
 	lay := compute_layout(w, h)
 	candidate, in_lane := lane_at(lay, x, y)
@@ -850,7 +852,7 @@ tooltip_title :: proc(a: Activity) -> string {
 // (no bar, or the filter hides its title).
 tooltip_bar_hit :: proc(snapshot: Day_Snapshot, x, y: i32, valid: bool, w, h: i32) -> int {
 	lane, in_lane := tooltip_lane(x, y, valid, w, h)
-	if !in_lane { return -1 }
+	if !in_lane || interaction_active() { return -1 } // mid-resize the snapshot block is stale
 	lay := compute_layout(w, h)
 	day_start, day_end := zoom_bounds(snapshot.day_start, snapshot.day_end)
 	index := snapshot_bar_hit(snapshot, lane_timeline(lane), x, lay.chart_x, lay.chart_w, day_start, day_end)
@@ -865,6 +867,21 @@ draw_tooltip :: proc(snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) {
 	day_start, day_end := zoom_bounds(snapshot.day_start, snapshot.day_end)
 	cursor_ms := tag_ms_for_x(ui.mouse.x, lay, day_start, day_end)
 	index := tooltip_bar_hit(snapshot, ui.mouse.x, ui.mouse.y, ui.mouse_valid, w, h)
+	if tag_drag() == .Left_Edge || tag_drag() == .Right_Edge {
+		// Resizing: show the resized block's info with its live range.
+		for row in snapshot.rows {
+			if row.activity.id != tag_drag_id() || row.activity.timeline_id != TIMELINE_TAGS { continue }
+			a := row.activity
+			draw_tooltip_lines(dc, w, h, []Tooltip_Line{
+				{fmt_snapshot_clock(snapshot, cursor_ms), ui.font_normal, C_TXT},
+				{a.group_name, ui.font_normal, C_TXT},
+				{tooltip_title(a), ui.font_normal, C_TXT},
+				{fmt.tprintf("%s - %s  (%s)", fmt_snapshot_clock(snapshot, tag_ui.start_ms), fmt_snapshot_clock(snapshot, tag_ui.end_ms),
+					fmt_span_hm(tag_ui.end_ms - tag_ui.start_ms)), ui.font_small, C_DIM},
+			})
+			return
+		}
+	}
 	if index < 0 {
 		draw_tooltip_lines(dc, w, h, []Tooltip_Line{{fmt_snapshot_clock(snapshot, cursor_ms), ui.font_normal, C_TXT}})
 		return
