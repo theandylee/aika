@@ -17,7 +17,7 @@ Day_Snapshot :: struct {
 }
 
 fmt_snapshot_clock :: proc(snapshot: Day_Snapshot, ms: i64) -> string {
-	return "24:00" if ms == snapshot.day_end else fmt_clock_hm(ms)
+	return "24:00" if ms == snapshot.day_end && day_shift_hours == 0 else fmt_clock_hm(ms)
 }
 
 snapshot_live_end :: proc(app: ^App, now, mono: i64) -> i64 {

@@ -322,17 +322,41 @@ date_label :: proc(date_int: int) -> string {
 	return fmt.tprintf("%s %02d %s %04d", weekdays[wd], d, months[m - 1], y)
 }
 
+// A logical day runs from local midnight + day_shift_hours to the next such
+// instant (Settings > General > "Shift day start by"). 0 = calendar days.
+DAY_SHIFT_MIN :: -11
+DAY_SHIFT_MAX :: 12
+day_shift_hours: int
+
+// Local wall-clock start of a logical day. The shift is applied to the civil
+// date/hour (not to milliseconds) so DST changes stay correct.
+day_start_systemtime :: proc(date_int: int) -> WIN_TIME {
+	st := date_systemtime(date_int)
+	if day_shift_hours >= 0 {
+		st.hour = windows.WORD(day_shift_hours)
+	} else {
+		st = date_systemtime(add_days(date_int, -1))
+		st.hour = windows.WORD(24 + day_shift_hours)
+	}
+	return st
+}
+
+// The logical date containing a local wall-clock time.
+logical_date_from_systemtime :: proc(st: WIN_TIME) -> int {
+	date := date_int_from_systemtime(st)
+	hour := int(st.hour) - day_shift_hours
+	if hour < 0 { return add_days(date, -1) }
+	if hour >= 24 { return add_days(date, 1) }
+	return date
+}
+
 today_date_int :: proc() -> int {
-	return date_int_from_systemtime(now_local())
+	return logical_date_from_systemtime(now_local())
 }
 
 day_bounds_ms :: proc(date_int: int, zone: ^windows.TIME_ZONE_INFORMATION = nil) -> (start_ms, end_ms: i64) {
-	local_start := date_systemtime(date_int)
-	start_ms = local_systemtime_to_unix_ms(local_start, zone)
-
-	next_date := add_days(date_int, 1)
-	local_next := date_systemtime(next_date)
-	end_ms = local_systemtime_to_unix_ms(local_next, zone)
+	start_ms = local_systemtime_to_unix_ms(day_start_systemtime(date_int), zone)
+	end_ms = local_systemtime_to_unix_ms(day_start_systemtime(add_days(date_int, 1)), zone)
 	return
 }
 

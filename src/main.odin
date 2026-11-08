@@ -203,8 +203,11 @@ run_gui :: proc(db: DB, db_path: string) -> bool {
 	// load_result still reports that the historical baseline could not be loaded.
 	app.loaded_date = app.date
 	settings_migrate_legacy(app.db_path) // before anything reads settings or theme
-	tracker_init(&app)
 	loaded := settings_load(app.db_path)
+	day_shift_hours = loaded.day_shift // day boundaries: before the first date/day load
+	app.date = today_date_int()
+	app.loaded_date = app.date
+	tracker_init(&app)
 	update_set_policy(loaded.updates_on_start, loaded.updates_periodic)
 	tag_picker_size = {i32(loaded.picker_w), i32(loaded.picker_h)}
 	pomodoro_on, pomodoro_minutes = loaded.pomodoro_on, loaded.pomodoro_minutes

@@ -376,7 +376,7 @@ draw_day :: proc(app: ^App, snapshot: Day_Snapshot, dc: windows.HDC, w, h: i32) 
 	for tick := first_tick; ruler_needed && tick <= view_end; tick += step {
 		x := x_for_ms(tick, view_start, view_end, lay.chart_x, lay.chart_w)
 		s := fmt_clock_hm(tick)
-		if tick >= day_end { s = "24:00" }
+		if tick >= day_end && day_shift_hours == 0 { s = "24:00" } // a midnight end reads 24:00, not 0:00
 		tw := text_pixel_width(s, ui.font_small)
 		draw_string(dc, s, clamp(x - tw / 2, lay.chart_x, lay.chart_x + lay.chart_w - tw),
 			lay.ruler_y + 6, ui.font_small, C_DIM)

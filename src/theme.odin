@@ -36,10 +36,15 @@ theme_load :: proc() {
 }
 
 theme_control_colors :: proc(wp: windows.WPARAM) -> windows.LRESULT {
+	return theme_control_colors_on(wp, C_PANEL)
+}
+
+// For labels/checkboxes sitting directly on a window background of colour `bg`.
+theme_control_colors_on :: proc(wp: windows.WPARAM, bg: windows.COLORREF) -> windows.LRESULT {
 	dc := windows.HDC(wp)
 	windows.SetTextColor(dc, C_TXT)
-	windows.SetBkColor(dc, C_PANEL)
-	windows.SetDCBrushColor(dc, C_PANEL)
+	windows.SetBkColor(dc, bg)
+	windows.SetDCBrushColor(dc, bg)
 	return windows.LRESULT(uintptr(windows.GetStockObject(windows.DC_BRUSH)))
 }
 

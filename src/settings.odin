@@ -29,6 +29,9 @@ settings_parse_minutes :: proc(text: string) -> (minutes: int, ok: bool) {
 //   [tracking]
 //   idle_minutes = 1
 //
+//   [day]             # written only when non-zero
+//   shift_hours = 0   # -11..12; the day starts this many hours after midnight
+//
 //   [updates]
 //   on_start = true
 //   periodic = true
@@ -66,6 +69,7 @@ Settings :: struct {
 	lane_permille:    int, // timeline height as 1/1000 of the span; 0 = default
 	totals_permille:  int, // totals panel width as 1/1000 of the chart width; 0 = default
 	maximized:        bool,
+	day_shift:        int, // DAY_SHIFT_MIN..DAY_SHIFT_MAX hours; 0 = midnight
 }
 
 SETTINGS_DEFAULT :: Settings{idle_minutes = DEFAULT_IDLE_MINUTES, updates_on_start = true, updates_periodic = true,
@@ -121,6 +125,10 @@ settings_parse_toml :: proc(text: string) -> (s: Settings) {
 			case "maximized":
 				if value == "true" || value == "false" { s.maximized = value == "true" }
 			}
+		case "day":
+			if key == "shift_hours" {
+				if n, ok := strconv.parse_int(value); ok && n >= DAY_SHIFT_MIN && n <= DAY_SHIFT_MAX { s.day_shift = n }
+			}
 		case "pomodoro":
 			switch key {
 			case "enabled":
@@ -144,6 +152,9 @@ settings_format_toml :: proc(s: Settings) -> string {
 	if s.lane_permille > 0 || s.totals_permille > 0 || s.maximized {
 		text = fmt.tprintf("%s\n[layout]\ntimeline_height = %d\ntotals_width = %d\nmaximized = %v\n",
 			text, s.lane_permille, s.totals_permille, s.maximized)
+	}
+	if s.day_shift != 0 && s.day_shift >= DAY_SHIFT_MIN && s.day_shift <= DAY_SHIFT_MAX {
+		text = fmt.tprintf("%s\n[day]\nshift_hours = %d\n", text, s.day_shift)
 	}
 	if s.pomodoro_minutes >= POMODORO_MIN_MINUTES && s.pomodoro_minutes <= POMODORO_MAX_MINUTES {
 		text = fmt.tprintf("%s\n[pomodoro]\nenabled = %v\nminutes = %d\n", text, s.pomodoro_on, s.pomodoro_minutes)
@@ -200,7 +211,17 @@ settings_save_current :: proc(db_path: string, minutes: int) -> bool {
 		updates_periodic = periodic, dark = ui.dark, picker_w = int(tag_picker_size.x), picker_h = int(tag_picker_size.y),
 		pomodoro_on = pomodoro_on, pomodoro_minutes = pomodoro_minutes,
 		lane_permille = int(ui.pane_lane_frac * 1000 + 0.5), totals_permille = int(ui.pane_totals_frac * 1000 + 0.5),
-		maximized = ui.maximized})
+		maximized = ui.maximized, day_shift = day_shift_hours})
+}
+
+// After day_shift_hours changed: a viewer on "today" stays on today, anyone
+// else keeps the logical date they were on. Cached intervals belong to the old
+// boundaries, so the day is reloaded.
+settings_reanchor_day :: proc(app: ^App, was_today: bool) {
+	if was_today { app.date = today_date_int() }
+	load_day(app)
+	sync_date_picker(app)
+	windows.InvalidateRect(ui.hwnd, nil, windows.TRUE)
 }
 
 // Persists pane proportions / maximize state, keeping the other saved values.
@@ -212,6 +233,8 @@ settings_save_layout :: proc() {
 SettingsUi :: struct {
 	hwnd, minutes, autostart, updates_start, updates_periodic, import_manictime: windows.HWND,
 	folder, folder_browse, folder_default, folder_open: windows.HWND,
+	day_shift: windows.HWND,          // combo box, items DAY_SHIFT_MIN..DAY_SHIFT_MAX
+	day_labels: [2]windows.HWND,      // "Shift day start by" / "hours"
 	tracking_labels: [2]windows.HWND, // static labels beside the minutes box
 	page: int,                        // index into SETTINGS_PAGES
 	control_failed: bool,
@@ -224,7 +247,7 @@ SETTINGS_PAGE_TRACKING :: 1
 SETTINGS_PAGE_IMPORT   :: 2
 
 settings_page_rect :: proc(i: int) -> windows.RECT {
-	y := i32(12 + 28 * i)
+	y := i32(9 + 28 * i) // first row sits right under the panel's 1px border at y = 8
 	return windows.RECT{10, y, 148, y + 26}
 }
 
@@ -245,6 +268,8 @@ settings_show_page :: proc(page: int) {
 	windows.ShowWindow(settings_ui.folder_browse, general)
 	windows.ShowWindow(settings_ui.folder_default, general)
 	windows.ShowWindow(settings_ui.folder_open, general)
+	windows.ShowWindow(settings_ui.day_shift, general)
+	for label in settings_ui.day_labels { windows.ShowWindow(label, general) }
 	windows.ShowWindow(settings_ui.import_manictime, windows.SW_SHOW if page == SETTINGS_PAGE_IMPORT else windows.SW_HIDE)
 	windows.InvalidateRect(settings_ui.hwnd, nil, windows.TRUE)
 }
@@ -381,13 +406,20 @@ settings_accept :: proc() {
 	want_start := windows.SendMessageW(settings_ui.updates_start, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
 	want_periodic := windows.SendMessageW(settings_ui.updates_periodic, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
 	update_set_policy(want_start, want_periodic) // settings_save_current writes the policy in effect
+	was_shift := day_shift_hours
+	was_today := global_app.date == today_date_int()
+	if sel := int(windows.SendMessageW(settings_ui.day_shift, windows.CB_GETCURSEL, 0, 0)); sel >= 0 {
+		day_shift_hours = DAY_SHIFT_MIN + sel
+	}
 	if !settings_save_current(global_app.db_path, minutes) {
+		day_shift_hours = was_shift
 		update_set_policy(was_start, was_periodic)
 		if want_autostart != was_autostart { autostart_set(was_autostart, global_app.db_path) }
 		windows.MessageBoxW(settings_ui.hwnd, wtext("Could not save settings beside the database. No changes were applied."), wtext("Settings"), windows.MB_ICONERROR)
 		return
 	}
 	global_app.tracker.idle_threshold_ms = i64(minutes) * MS_PER_MINUTE
+	if day_shift_hours != was_shift { settings_reanchor_day(global_app, was_today) }
 	if folder_changed && !settings_change_folder(new_dir, minutes) { return }
 	settings_close()
 }
@@ -500,6 +532,10 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 			fill_rect(dc, 172, 254, 70, 18, C_BG)
 			draw_string(dc, "Updates", 176, 256, ui.font_normal, C_TXT)
 			draw_string(dc, "Asks GitHub for the latest release; nothing else is sent.", 176, 342, ui.font_normal, C_DIM)
+			fill_frame(dc, 164, 390, 370, 82, C_BORDER)
+			fill_rect(dc, 172, 382, 40, 18, C_BG)
+			draw_string(dc, "Day", 176, 384, ui.font_normal, C_TXT)
+			draw_string(dc, "Hours after midnight at which a new day begins.", 176, 440, ui.font_normal, C_DIM)
 		} else if settings_ui.page == SETTINGS_PAGE_IMPORT {
 			fill_frame(dc, 164, 22, 370, 110, C_BORDER)
 			fill_rect(dc, 172, 14, 90, 18, C_BG)
@@ -514,8 +550,11 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		}
 		windows.EndPaint(hwnd, &ps)
 		return 0
-	case windows.WM_CTLCOLOREDIT, windows.WM_CTLCOLORSTATIC, windows.WM_CTLCOLORBTN:
+	case windows.WM_CTLCOLOREDIT:
 		return theme_control_colors(wp)
+	case windows.WM_CTLCOLORSTATIC, windows.WM_CTLCOLORBTN:
+		// Labels and checkboxes sit on the page background, not the field colour.
+		return theme_control_colors_on(wp, C_BG)
 	case windows.WM_DRAWITEM:
 		item := transmute(^Draw_Item)(lp)
 		if item != nil && (item.CtlID == SETTINGS_ID_OK || item.CtlID == SETTINGS_ID_CANCEL ||
@@ -573,7 +612,7 @@ settings_open :: proc() {
 		lpszClassName = wtext("aika_settings")}
 	windows.RegisterClassExW(&wc)
 	style := u32(windows.WS_CAPTION | windows.WS_SYSMENU | windows.WS_CLIPCHILDREN)
-	r := windows.RECT{0, 0, 546, 430}
+	r := windows.RECT{0, 0, 546, 526}
 	windows.AdjustWindowRectEx(&r, style, windows.FALSE, 0)
 	parent: windows.RECT
 	windows.GetWindowRect(ui.hwnd, &parent)
@@ -618,13 +657,21 @@ settings_open :: proc() {
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 280, 180, 110, 28, SETTINGS_ID_FOLDER_DEFAULT)
 	settings_ui.folder_open = settings_control("BUTTON", "Open folder",
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 398, 180, 110, 28, SETTINGS_ID_FOLDER_OPEN)
+	settings_ui.day_labels[0] = settings_control("STATIC", "Shift day start by", 0, 176, 412, 112, 22, 0)
+	settings_ui.day_shift = settings_control("COMBOBOX", "",
+		windows.WS_TABSTOP | windows.WS_VSCROLL | windows.CBS_DROPDOWNLIST, 292, 408, 68, 260, SETTINGS_ID_DAY_SHIFT)
+	settings_ui.day_labels[1] = settings_control("STATIC", "hours", 0, 368, 412, 60, 22, 0)
+	for h in DAY_SHIFT_MIN ..= DAY_SHIFT_MAX {
+		windows.SendMessageW(settings_ui.day_shift, windows.CB_ADDSTRING, 0, windows.LPARAM(uintptr(rawptr(wtext(fmt.tprintf("%d", h))))))
+	}
+	windows.SendMessageW(settings_ui.day_shift, windows.CB_SETCURSEL, windows.WPARAM(day_shift_hours - DAY_SHIFT_MIN), 0)
 	if db_path_overridden {
 		windows.EnableWindow(settings_ui.folder, windows.FALSE)
 		windows.EnableWindow(settings_ui.folder_browse, windows.FALSE)
 		windows.EnableWindow(settings_ui.folder_default, windows.FALSE)
 	}
-	settings_control("BUTTON", "OK", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 334, 394, 96, 28, SETTINGS_ID_OK)
-	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 438, 394, 96, 28, SETTINGS_ID_CANCEL)
+	settings_control("BUTTON", "OK", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 334, 490, 96, 28, SETTINGS_ID_OK)
+	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 438, 490, 96, 28, SETTINGS_ID_CANCEL)
 	if settings_ui.control_failed { settings_close(); return }
 	dark := windows.BOOL(ui.dark)
 	DwmSetWindowAttribute(settings_ui.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, size_of(dark))
@@ -633,6 +680,7 @@ settings_open :: proc() {
 	SetWindowTheme(settings_ui.updates_start, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	SetWindowTheme(settings_ui.updates_periodic, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	SetWindowTheme(settings_ui.folder, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
+	SetWindowTheme(settings_ui.day_shift, wtext("DarkMode_CFD") if ui.dark else nil, nil)
 	windows.EnableWindow(ui.hwnd, windows.FALSE)
 	settings_show_page(SETTINGS_PAGE_GENERAL)
 	windows.ShowWindow(settings_ui.hwnd, windows.SW_SHOW)

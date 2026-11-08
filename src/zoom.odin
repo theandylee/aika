@@ -131,7 +131,7 @@ draw_zoom_bar :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, day_
 		x := x_for_ms(tick, day_start, day_end, bar.left, width)
 		line_v(dc, x, bar.top + 2, 3, C_DIM)
 		text := fmt_clock_hm(tick)
-		if tick >= day_end { text = "24:00" }
+		if tick >= day_end && day_shift_hours == 0 { text = "24:00" }
 		tw := text_pixel_width(text, ui.font_small)
 		draw_string(dc, text, clamp(x - tw / 2, bar.left + 3, bar.right - tw - 3),
 			bar.top + 7, ui.font_small, C_TXT)
