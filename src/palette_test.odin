@@ -30,6 +30,10 @@ palette_matches_previous_values :: proc(t: ^testing.T) {
 	// Previously inline in zoom.odin: rgb(255,221,168) light, rgb(90,65,32) dark.
 	testing.expect(t, PALETTE_LIGHT.zoom_selection == rgb(255, 221, 168))
 	testing.expect(t, PALETTE_DARK.zoom_selection == rgb(90, 65, 32))
+	// Lane captions: dark keeps the lane colour; light is a distinct warm tint.
+	testing.expect(t, PALETTE_DARK.lane_caption_bg == PALETTE_DARK.lane_bg)
+	testing.expect(t, PALETTE_LIGHT.lane_caption_bg == rgb(255, 239, 213))
+	testing.expect(t, PALETTE_LIGHT.lane_caption_bg != PALETTE_LIGHT.lane_bg)
 	// Semantic aliases keep the value of the shared hover fill they replaced.
 	for p in ([2]Palette{PALETTE_LIGHT, PALETTE_DARK}) {
 		testing.expect(t, p.splitter_hot == p.button_hover && p.tag_preview == p.button_hover &&

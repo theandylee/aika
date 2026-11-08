@@ -36,6 +36,7 @@ Palette :: struct {
 	tag_preview:   windows.COLORREF, // range being dragged/picked on the Tags lane
 	section_head:  windows.COLORREF, // selected-section highlight in the Settings window
 	zoom_selection: windows.COLORREF, // visible range in the overview bar
+	lane_caption_bg: windows.COLORREF, // box behind a lane's title (Tags, Computer Usage, ...)
 }
 
 PALETTE_LIGHT :: Palette{
@@ -48,6 +49,7 @@ PALETTE_LIGHT :: Palette{
 	tooltip_bg = 0x00E1FFFF, tooltip_border = 0x008C8278,
 	splitter_hot = LIGHT_HOVER_FILL, tag_preview = LIGHT_HOVER_FILL, section_head = LIGHT_HOVER_FILL,
 	zoom_selection = 0x00A8DDFF, // rgb(255,221,168)
+	lane_caption_bg = 0x00D5EFFF, // rgb(255,239,213): warm peach, complements the pale-blue lane_bg
 }
 
 PALETTE_DARK :: Palette{
@@ -60,6 +62,7 @@ PALETTE_DARK :: Palette{
 	tooltip_bg = 0x00382F28, tooltip_border = 0x00907050,
 	splitter_hot = DARK_HOVER_FILL, tag_preview = DARK_HOVER_FILL, section_head = DARK_HOVER_FILL,
 	zoom_selection = 0x0020415A, // rgb(90,65,32)
+	lane_caption_bg = 0x00302820, // same as lane_bg
 }
 
 // Fixed accents: the same in both themes, typed like the palette variables.
@@ -93,6 +96,7 @@ C_SPLITTER_HOT:   windows.COLORREF = PALETTE_LIGHT.splitter_hot
 C_TAG_PREVIEW:    windows.COLORREF = PALETTE_LIGHT.tag_preview
 C_SECTION_HEAD:   windows.COLORREF = PALETTE_LIGHT.section_head
 C_ZOOM_SELECTION: windows.COLORREF = PALETTE_LIGHT.zoom_selection
+C_LANE_CAPTION_BG: windows.COLORREF = PALETTE_LIGHT.lane_caption_bg
 
 palette_apply :: proc(p: Palette) {
 	palette_active = p
@@ -105,6 +109,7 @@ palette_apply :: proc(p: Palette) {
 	C_TIP_BG, C_TIP_BORDER = p.tooltip_bg, p.tooltip_border
 	C_SPLITTER_HOT, C_TAG_PREVIEW, C_SECTION_HEAD = p.splitter_hot, p.tag_preview, p.section_head
 	C_ZOOM_SELECTION = p.zoom_selection
+	C_LANE_CAPTION_BG = p.lane_caption_bg
 }
 
 // True when every C_* variable holds the value of the active palette.
@@ -117,5 +122,5 @@ palette_is_applied :: proc() -> bool {
 		C_HEAD_BG == p.header_bg && C_ROW_ALT == p.row_alt && C_TIP_BG == p.tooltip_bg &&
 		C_TIP_BORDER == p.tooltip_border && C_SPLITTER_HOT == p.splitter_hot &&
 		C_TAG_PREVIEW == p.tag_preview && C_SECTION_HEAD == p.section_head &&
-		C_ZOOM_SELECTION == p.zoom_selection
+		C_ZOOM_SELECTION == p.zoom_selection && C_LANE_CAPTION_BG == p.lane_caption_bg
 }

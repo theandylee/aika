@@ -448,8 +448,8 @@ draw_lane :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, lane: La
 		// Box has 2px extra top padding and 1px-rounded corners (corner pixels left unpainted).
 		bx, by := x + 6, y + h / 2 - 9 - 1 - 2
 		bw, bh := sz.cx + pad * 2 - 2, sz.cy + 2 + 2
-		fill_rect(dc, bx + 1, by, bw - 2, bh, C_LANE_BG)
-		fill_rect(dc, bx, by + 1, bw, bh - 2, C_LANE_BG)
+		fill_rect(dc, bx + 1, by, bw - 2, bh, C_LANE_CAPTION_BG)
+		fill_rect(dc, bx, by + 1, bw, bh - 2, C_LANE_CAPTION_BG)
 		draw_string(dc, name, x + 6 + pad - 2 + 2, y + h / 2 - 9, ui.font_normal,
 			C_TXT)
 	}
