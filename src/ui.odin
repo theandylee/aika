@@ -707,6 +707,49 @@ build_totals :: proc(snapshot: Day_Snapshot, tl: i64, filter: string = "") -> []
 	return list[:]
 }
 
+TOTALS_DUR_W :: 60  // reserved right column for the duration (96-DPI px)
+TOTALS_PCT_W :: 96  // percentage column: progress bar + "NN%" text
+TOTALS_PCT_BAR_W :: 56
+TOTALS_PCT_MIN_ROW_W :: 300 // hide the column when the pane is narrower than this
+
+totals_pct_visible :: proc(row_w: i32) -> bool {
+	return row_w >= dpi_px(TOTALS_PCT_MIN_ROW_W)
+}
+
+// X of the left edge of the percentage column (relative to the pane's x).
+totals_pct_left :: proc(x, row_w: i32) -> i32 {
+	return x + row_w - 8 - dpi_px(TOTALS_DUR_W) - dpi_px(TOTALS_PCT_W)
+}
+
+// Right edge available to the title text.
+totals_title_right :: proc(x, row_w: i32) -> i32 {
+	if totals_pct_visible(row_w) { return totals_pct_left(x, row_w) - 6 }
+	return x + row_w
+}
+
+// Draws the 0..100% progress bar and its label for one totals row.
+draw_totals_percent :: proc(dc: windows.HDC, x, y, row_w: i32, ms, total_ms: i64) {
+	if !totals_pct_visible(row_w) { return }
+	frac: f64
+	if total_ms > 0 { frac = clamp(f64(ms) / f64(total_ms), 0, 1) }
+	left := totals_pct_left(x, row_w)
+	bar_w := dpi_px(TOTALS_PCT_BAR_W)
+	bar_h := dpi_px(8)
+	bar_y := y + (dpi_px(LIST_ROW) - bar_h) / 2
+	fill_rect(dc, left, bar_y, bar_w, bar_h, C_BORDER_SOFT)
+	fill_w := i32(f64(bar_w) * frac + 0.5)
+	if fill_w == 0 && ms > 0 { fill_w = 1 }
+	if fill_w > 0 { fill_rect(dc, left, bar_y, fill_w, bar_h, C_ACCENT) }
+	label_buf: [16]u8
+	label: string
+	if frac > 0 && frac < 0.01 {
+		label = "<1%"
+	} else {
+		label = fmt.bprintf(label_buf[:], "%d%%", int(frac * 100 + 0.5))
+	}
+	draw_string(dc, label, left + bar_w + dpi_px(6), y + 2, ui.font_normal, C_DIM)
+}
+
 draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	x := lay.sidebar_x
 	w := lay.sidebar_w
@@ -752,7 +795,7 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 	n_totals := i32(row_count)
 	for i := skip; i < n_totals && i < skip + visible; i += 1 {
 		if ui.totals_tree {
-			draw_totals_tree_row(dc, tree_rows[i], x, y, row_w)
+			draw_totals_tree_row(dc, tree_rows[i], x, y, row_w, total_ms)
 			y += dpi_px(LIST_ROW)
 			continue
 		}
@@ -762,7 +805,8 @@ draw_totals :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout) {
 			color = activity_colorref(Activity{group_id = t.group_id})
 		}
 		fill_rect(dc, x + 8, y + 4, 10, 10, color)
-		draw_string(dc, t.name, x + 24, y + 2, ui.font_normal, C_TXT, row_w - 90)
+		draw_string(dc, t.name, x + 24, y + 2, ui.font_normal, C_TXT, totals_title_right(x, row_w) - (x + 24))
+		draw_totals_percent(dc, x, y, row_w, t.ms, total_ms)
 		dur := fmt_span_hm(t.ms)
 		dw := text_pixel_width(dur, ui.font_normal)
 		draw_string(dc, dur, x + row_w - 8 - dw, y + 2, ui.font_normal, C_DIM)

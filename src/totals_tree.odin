@@ -100,7 +100,7 @@ draw_totals_mode_tooltip :: proc(dc: windows.HDC, lay: Layout) {
 	draw_single_line_tooltip(dc, totals_mode_tooltip_rect(lay, w), label)
 }
 
-draw_totals_tree_row :: proc(dc: windows.HDC, node: ^Totals_Node, x, y, w: i32) {
+draw_totals_tree_row :: proc(dc: windows.HDC, node: ^Totals_Node, x, y, w: i32, total_ms: i64) {
 	dur := fmt_span_hm(node.ms)
 	dw := text_pixel_width(dur, ui.font_normal)
 	indent := min(node.depth * 14, max(0, w - dw - 80))
@@ -122,7 +122,9 @@ draw_totals_tree_row :: proc(dc: windows.HDC, node: ^Totals_Node, x, y, w: i32) 
 		fill_rect(dc, left + 1, y + 4, 10, 10, color)
 	}
 	font := ui.font_bold if len(node.children) > 0 else ui.font_normal
-	draw_string(dc, node.name, left + 16, y + 2, font, C_TXT, x + w - dw - 16 - (left + 16))
+	title_right := totals_title_right(x, w) if totals_pct_visible(w) else x + w - dw - 16
+	draw_string(dc, node.name, left + 16, y + 2, font, C_TXT, title_right - (left + 16))
+	draw_totals_percent(dc, x, y, w, node.ms, total_ms)
 	draw_string(dc, dur, x + w - 8 - dw, y + 2, ui.font_normal, C_DIM)
 }
 
