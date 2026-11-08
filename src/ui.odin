@@ -436,12 +436,22 @@ draw_lane :: proc(snapshot: Day_Snapshot, dc: windows.HDC, lay: Layout, lane: La
 	for tick := first_tick; tick < day_end; tick += step {
 		line_v(dc, x_for_ms(tick, day_start, day_end, x, w), y, h, C_LANE_GRID)
 	}
-	draw_string(dc, lane_name(lane), x + 10, y + h / 2 - 9, ui.font_normal,
-		C_DIM if ui.lane == lane else C_LANE_TXT)
-
 	tl := lane_timeline(lane)
 	if tl != 0 {
 		draw_lane_bars(snapshot, dc, lane, tl, x, y, w, h, day_start, day_end)
+	}
+	// Caption goes after the bars so dense lanes don't paint over it.
+	{
+		name := lane_name(lane)
+		sz := measure_text_dc(dc, name, ui.font_normal)
+		pad := dpi_px(4)
+		// Box has 2px extra top padding and 1px-rounded corners (corner pixels left unpainted).
+		bx, by := x + 6, y + h / 2 - 9 - 1 - 2
+		bw, bh := sz.cx + pad * 2 - 2, sz.cy + 2 + 2
+		fill_rect(dc, bx + 1, by, bw - 2, bh, C_LANE_BG)
+		fill_rect(dc, bx, by + 1, bw, bh - 2, C_LANE_BG)
+		draw_string(dc, name, x + 6 + pad - 2 + 2, y + h / 2 - 9, ui.font_normal,
+			C_TXT)
 	}
 
 	border := windows.COLORREF(C_BORDER)
