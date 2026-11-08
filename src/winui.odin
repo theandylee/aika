@@ -586,7 +586,9 @@ sync_date_picker :: proc(app: ^App) {
 	}
 	st := date_systemtime(app.date)
 	windows.SetWindowTextW(ui.date_picker, wtext(date_label(app.date)))
-	if ui.date_calendar != nil {
+	// While the popup is open the user is browsing months/years; the periodic
+	// day reload must not snap the calendar back to the loaded date.
+	if ui.date_calendar != nil && !date_popup_open() {
 		windows.SendMessageW(ui.date_calendar, MCM_SETCURSEL, 0, windows.LPARAM(uintptr(&st)))
 	}
 	windows.InvalidateRect(ui.date_picker, nil, windows.TRUE)
