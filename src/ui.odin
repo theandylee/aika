@@ -131,15 +131,14 @@ compute_layout :: proc(w, h: i32) -> Layout {
 }
 
 compute_tabs :: proc(tab: Tab) -> windows.RECT {
-	txs := [Tab]i32{.Day = dpi_px(2), .Timesheet = dpi_px(58), .Statistics = dpi_px(148)}
-	tws := [Tab]i32{.Day = dpi_px(54), .Timesheet = dpi_px(88), .Statistics = dpi_px(92)}
+	txs := [Tab]i32{.Day = dpi_px(2), .Statistics = dpi_px(58)}
+	tws := [Tab]i32{.Day = dpi_px(54), .Statistics = dpi_px(92)}
 	return windows.RECT{left = txs[tab], top = 0, right = txs[tab] + tws[tab], bottom = dpi_px(TAB_H)}
 }
 
 tab_name :: proc(tab: Tab) -> string {
 	switch tab {
 	case .Day: return "Day"
-	case .Timesheet: return "Timesheet"
 	case .Statistics: return "Statistics"
 	}
 	return "Day"
@@ -218,10 +217,8 @@ draw_frame :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	switch ui.tab {
 	case .Day:
 		draw_day(app, snapshot, dc, w, h)
-	case .Timesheet:
-		draw_placeholder(dc, w, h, "Timesheet", "Timesheets are not implemented yet (see docs/ROADMAP.md).")
 	case .Statistics:
-		draw_placeholder(dc, w, h, "Statistics", "Statistics are not implemented yet (see docs/ROADMAP.md).")
+		draw_placeholder(dc, w, h, "Statistics", "Under construction.")
 	}
 	draw_filter_row(dc, w, h)
 	draw_status_bar(app, dc, w, h)
@@ -786,8 +783,10 @@ draw_status_bar :: proc(app: ^App, dc: windows.HDC, w, h: i32) {
 	status := app_storage_status(app)
 	if status != "" {
 		fill_rect(dc, dot_x, lay.status_y + 7, 8, 8, C_ORANGE)
-		draw_string(dc, status, dot_x + 16, lay.status_y + 4, ui.font_normal, C_TXT, w - dot_x - 24)
+		draw_string(dc, status, dot_x + 16, lay.status_y + 4, ui.font_normal, C_TXT, status_right_limit(w, h) - dot_x - 24)
 	}
+	draw_update(dc, w, h)
+	draw_version(dc, w, h)
 }
 
 // --- Hit testing ---
@@ -799,6 +798,8 @@ rect_hit :: proc(r: windows.RECT, x, y: i32) -> bool {
 hit_test :: proc(x, y, w, h: i32) -> Hit {
 	if rect_hit(theme_switch_rect(w), x, y) { return .Theme }
 	if rect_hit(settings_switch_rect(w), x, y) { return .Settings }
+	if rect_hit(version_rect(w, h), x, y) { return .Version }
+	if update_clickable() && rect_hit(update_rect(w, h), x, y) { return .Update }
 	for tab in Tab {
 		if rect_hit(compute_tabs(tab), x, y) {
 			return hit_tab(tab)

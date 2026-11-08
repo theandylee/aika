@@ -54,6 +54,17 @@ system_cursor :: proc(id: u64) -> windows.HCURSOR {
 	return windows.LoadCursorW(nil, transmute(cstring16)(id))
 }
 
+APP_ICON_RESOURCE :: u64(1) // `1 ICON "aika.ico"` in assets/aika.rc
+
+// Embedded app icon at an exact pixel size (shared, so never destroyed). Falls back to the
+// stock icon if the resource is missing (e.g. test binaries built without the .rc).
+app_icon :: proc(cx, cy: i32) -> windows.HICON {
+	h := windows.LoadImageW(windows.HINSTANCE(windows.GetModuleHandleW(nil)),
+		transmute(cstring16)(APP_ICON_RESOURCE), windows.IMAGE_ICON, cx, cy, windows.LR_SHARED)
+	if h == nil { return windows.LoadIconW(nil, transmute(cstring16)(IDI_APPLICATION)) }
+	return windows.HICON(h)
+}
+
 // --- Native control styles, messages and notifications not in core:sys/windows ---
 
 SBS_VERT   :: 1

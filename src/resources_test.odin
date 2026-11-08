@@ -134,11 +134,13 @@ ui_visibility_and_cancellation :: proc(t: ^testing.T) {
 	g := ui_test_begin()
 	defer ui_test_end(&g)
 	lay := compute_layout(1320, 860)
-	for tab in ([2]Tab{.Timesheet, .Statistics}) {
+	for tab in ([1]Tab{.Statistics}) {
 		ui.tab = tab
 		for y := i32(dpi_px(TAB_H)); y < 860; y += 4 {
 			for x := i32(0); x < 1320; x += 4 {
-				testing.expect(t, hit_test(x, y, 1320, 860) == .None)
+				// The status-bar version link is the only always-visible target here.
+				hit := hit_test(x, y, 1320, 860)
+				testing.expect(t, hit == .None || hit == .Version)
 			}
 		}
 		testing.expect(t, !zoom_pointer_down(lay.chart_x + 100, lay.zoom_y + 10, lay))

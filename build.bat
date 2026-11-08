@@ -13,7 +13,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-odin build src -out:build\aika.exe -subsystem:windows -resource:assets/aika.rc
+:: Optional: set AIKA_VERSION (e.g. 1.2.3) to stamp the version shown in the status bar.
+set "VERSION_FLAG="
+if defined AIKA_VERSION set "VERSION_FLAG=-define:AIKA_VERSION=%AIKA_VERSION%"
+
+odin build src -out:build\aika.exe -subsystem:windows -resource:assets/aika.rc %VERSION_FLAG%
 if errorlevel 1 (
   echo BUILD FAILED: GUI build. If build\aika.exe is currently running, Exit it
   echo from the tray icon first - Windows locks a running EXE - then retry.
@@ -21,7 +25,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-odin build src -out:build\aika-cli.exe -resource:assets/aika.rc
+odin build src -out:build\aika-cli.exe -resource:assets/aika.rc %VERSION_FLAG%
 if errorlevel 1 (
   echo BUILD FAILED: CLI build.
   pause

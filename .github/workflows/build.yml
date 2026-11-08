@@ -1,0 +1,67 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ODIN_VERSION: dev-2026-11a
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write # needed to create the release on tag pushes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Odin
+        shell: pwsh
+        run: |
+          $url = "https://github.com/odin-lang/Odin/releases/download/$env:ODIN_VERSION/odin-windows-amd64-$env:ODIN_VERSION.zip"
+          Invoke-WebRequest $url -OutFile odin.zip
+          Expand-Archive odin.zip -DestinationPath "$env:RUNNER_TEMP\odin-zip"
+          $exe = Get-ChildItem "$env:RUNNER_TEMP\odin-zip" -Recurse -Filter odin.exe | Select-Object -First 1
+          Add-Content $env:GITHUB_PATH $exe.DirectoryName
+
+      - name: Odin version
+        run: odin version
+
+      - name: Check
+        run: odin check src -vet
+
+      - name: Test
+        run: odin test src -vet -define:ODIN_TEST_THREADS=1
+
+      # Sequential: both builds share assets/aika.res.
+      - name: Build
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:AIKA_VERSION = $env:GITHUB_REF_NAME.TrimStart('v') }
+          cmd /c ".\build.bat < nul"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item build\aika.exe, README.md dist\
+          Compress-Archive dist\* aika-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aika-windows-x64
+          path: aika-windows-x64.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" aika-windows-x64.zip build\aika.exe --generate-notes --title "${{ github.ref_name }}"

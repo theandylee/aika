@@ -30,7 +30,7 @@ PaneScroll :: struct {
 Zoom_Drag :: enum { None, Left, Right, Overview, Timeline }
 
 // Declaration order is the former numeric order (0, 1, 2).
-Tab :: enum { Day, Timesheet, Statistics }
+Tab :: enum { Day, Statistics }
 Lane :: enum { Tags, Computer, Apps } // timeline lanes, top to bottom
 Pane_Drag :: enum { None, Timeline_Height, List_Width }
 
@@ -88,8 +88,8 @@ Hit :: enum {
 	None,
 	Btn_Prev, Btn_Today, Btn_Next, Btn_Task,
 	Zoom_Out, Zoom_In, Zoom_Reset,
-	Theme, Settings, Totals_Tree, Totals_Row,
-	Tab_Day, Tab_Timesheet, Tab_Statistics,
+	Theme, Settings, Version, Update, Totals_Tree, Totals_Row,
+	Tab_Day, Tab_Statistics,
 	Lane_Tags, Lane_Computer, Lane_Apps,
 }
 
@@ -98,9 +98,9 @@ Hit :: enum {
 hit_is_pressable :: proc(hit: Hit) -> bool {
 	switch hit {
 	case .Btn_Prev, .Btn_Today, .Btn_Next, .Btn_Task, .Zoom_Out, .Zoom_In, .Zoom_Reset,
-	     .Theme, .Settings, .Totals_Tree:
+	     .Theme, .Settings, .Version, .Update, .Totals_Tree:
 		return true
-	case .None, .Totals_Row, .Tab_Day, .Tab_Timesheet, .Tab_Statistics,
+	case .None, .Totals_Row, .Tab_Day, .Tab_Statistics,
 	     .Lane_Tags, .Lane_Computer, .Lane_Apps:
 		return false
 	}
@@ -110,7 +110,6 @@ hit_is_pressable :: proc(hit: Hit) -> bool {
 hit_tab :: proc(tab: Tab) -> Hit {
 	switch tab {
 	case .Day: return .Tab_Day
-	case .Timesheet: return .Tab_Timesheet
 	case .Statistics: return .Tab_Statistics
 	}
 	return .None
@@ -119,7 +118,6 @@ hit_tab :: proc(tab: Tab) -> Hit {
 hit_as_tab :: proc(hit: Hit) -> (tab: Tab, ok: bool) {
 	#partial switch hit {
 	case .Tab_Day: return .Day, true
-	case .Tab_Timesheet: return .Timesheet, true
 	case .Tab_Statistics: return .Statistics, true
 	}
 	return
@@ -160,7 +158,7 @@ ui_add_tray :: proc() -> bool {
 		cbSize = size_of(windows.NOTIFYICONDATAW), hWnd = ui.tray_hwnd,
 		uID = TRAY_ICON_ID, uFlags = windows.NIF_MESSAGE | windows.NIF_ICON | windows.NIF_TIP,
 		uCallbackMessage = TRAY_MESSAGE,
-		hIcon = windows.LoadIconW(nil, transmute(cstring16)(IDI_APPLICATION)), // shared icon
+		hIcon = app_icon(windows.GetSystemMetrics(windows.SM_CXSMICON), windows.GetSystemMetrics(windows.SM_CYSMICON)),
 	}
 	copy(data.szTip[:], windows.utf8_to_utf16("aika", context.temp_allocator))
 	ui.tray_added = bool(windows.Shell_NotifyIconW(windows.NIM_ADD, &data))
@@ -745,6 +743,10 @@ on_set_cursor :: proc(app: ^App) -> bool {
 	mx, my, valid := _cursor_client()
 	if !valid { return false }
 	w, h := client_size(ui.hwnd)
+	if (rect_hit(version_rect(w, h), mx, my) || (update_clickable() && rect_hit(update_rect(w, h), mx, my))) && !interaction_active() {
+		windows.SetCursor(system_cursor(IDC_HAND))
+		return true
+	}
 	split := pane_drag()
 	if split == .None { split = pane_split_hit(mx, my, compute_layout(w, h)) }
 	if split != .None {
@@ -911,6 +913,19 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 	case windows.WM_TIMER:
 		if int(wparam) == APP_TIMER_ID {
 			app_tick(app)
+			update_tick()
+		}
+		return 0
+	case UPDATE_CHECKED:
+		windows.InvalidateRect(hwnd, nil, windows.FALSE)
+		return 0
+	case UPDATE_DOWNLOADED:
+		if wparam == 1 {
+			update_finish(app)
+		} else {
+			update_reset_available()
+			windows.InvalidateRect(hwnd, nil, windows.FALSE)
+			message_box("Could not download the update. Please try again later.", "aika", windows.MB_ICONERROR)
 		}
 		return 0
 	case windows.WM_SIZE:
@@ -1121,6 +1136,10 @@ handle_click :: proc(app: ^App, x, y: i32) {
 		theme_toggle()
 	case .Settings:
 		settings_open()
+	case .Version:
+		open_releases_page()
+	case .Update:
+		update_start()
 	case .Zoom_Out:
 		zoom_scale(1.5, 0.5)
 	case .Zoom_In:
@@ -1149,7 +1168,7 @@ handle_click :: proc(app: ^App, x, y: i32) {
 			tag_picker_open()
 		}
 		load_day(app)
-	case .Tab_Day, .Tab_Timesheet, .Tab_Statistics:
+	case .Tab_Day, .Tab_Statistics:
 		ui.tab, _ = hit_as_tab(id)
 	case .Lane_Tags, .Lane_Computer, .Lane_Apps:
 		lane, _ := hit_as_lane(id)
@@ -1252,6 +1271,8 @@ ui_bootstrap :: proc(checkpoint: proc(stage: Ui_Startup_Stage) -> bool = nil) ->
 	wc.lpfnWndProc = wnd_proc
 	wc.hInstance = windows.HINSTANCE(hinstance)
 	wc.hCursor = system_cursor(IDC_ARROW)
+	wc.hIcon = app_icon(windows.GetSystemMetrics(windows.SM_CXICON), windows.GetSystemMetrics(windows.SM_CYICON))
+	wc.hIconSm = app_icon(windows.GetSystemMetrics(windows.SM_CXSMICON), windows.GetSystemMetrics(windows.SM_CYSMICON))
 	wc.lpszClassName = class_name
 	if windows.RegisterClassExW(&wc) == 0 {
 		return false

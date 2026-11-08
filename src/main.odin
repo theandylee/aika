@@ -3,6 +3,7 @@
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:strconv"
 import "core:sys/windows"
 import "core:strings"
 
@@ -36,6 +37,9 @@ load_day :: proc(app: ^App) -> bool {
 // Set by --hidden: the GUI starts in the system tray instead of showing.
 start_hidden := false
 
+// Set by --wait-pid (relaunch after an update): previous process to wait for.
+wait_pid: u32
+
 main :: proc() {
 	scratch: Scratch
 	context.temp_allocator = scratch_begin(&scratch)
@@ -55,6 +59,12 @@ main :: proc() {
 			quiet = true
 		case "--hidden":
 			start_hidden = true
+		case "--wait-pid": // set by the updater: wait for the old process to exit first
+			if i + 1 >= len(args) { fmt.eprintln("--wait-pid requires a process id"); os.exit(2) }
+			i += 1
+			pid, pid_ok := strconv.parse_int(args[i])
+			if !pid_ok || pid <= 0 { fmt.eprintln("--wait-pid requires a process id"); os.exit(2) }
+			wait_pid = u32(pid)
 		case "--db":
 			if i + 1 >= len(args) || strings.has_prefix(args[i + 1], "--") || args[i + 1] == "" {
 				fmt.eprintln("--db requires a path")
@@ -104,10 +114,12 @@ main :: proc() {
 		fmt.eprintln("--import and --import-manictime are mutually exclusive")
 		os.exit(2)
 	}
+	if wait_pid != 0 { update_wait_for_pid(wait_pid) }
 	if import_path == "" && !import_manictime && !acquire_single_instance() {
 		activate_existing_instance()
 		return
 	}
+	if import_path == "" && !import_manictime { update_cleanup_old() }
 
 	// Create the database's own directory (not the cwd's "data"): autostart
 	// launches with an unrelated working directory and an absolute --db.

@@ -206,8 +206,6 @@ interaction_wheel_routing :: proc(t: ^testing.T) {
 	tag_begin(.Left_Edge, 0)
 	ignored(t, lay, "tag drag", before)
 	interaction_end()
-	ui.tab = .Timesheet
-	ignored(t, lay, "timesheet tab", before)
 	ui.tab = .Statistics
 	ignored(t, lay, "statistics tab", before)
 }
@@ -289,7 +287,7 @@ interaction_blocked_off_day_tab :: proc(t: ^testing.T) {
 	testing.expect(t, tag_pointer_down(&app, lane.left + 100, lane.top + 10, lay))
 	ui_cancel_interaction()
 
-	for tab in ([2]Tab{.Timesheet, .Statistics}) {
+	for tab in ([1]Tab{.Statistics}) {
 		ui.tab = tab
 		testing.expect(t, !pane_pointer_down(100, lay.list_top - 4, lay))
 		testing.expect(t, !pane_pointer_down(lay.sidebar_x - 4, lay.list_top + 40, lay))
@@ -303,7 +301,7 @@ interaction_blocked_off_day_tab :: proc(t: ^testing.T) {
 		for y := i32(0); y < 860; y += 6 {
 			for x := i32(0); x < 1320; x += 6 {
 				hit := hit_test(x, y, 1320, 860)
-				testing.expect(t, !hit_is_pressable(hit) || hit == .Theme || hit == .Settings)
+				testing.expect(t, !hit_is_pressable(hit) || hit == .Theme || hit == .Settings || hit == .Version)
 			}
 		}
 	}

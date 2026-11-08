@@ -13,7 +13,7 @@ pane_resize_behavior :: proc(t: ^testing.T) {
 	testing.expect(t, pane_split_hit(100, lay.list_top - 4, lay) == .Timeline_Height)
 	testing.expect(t, pane_split_hit(lay.sidebar_x - 4, lay.list_top + 40, lay) == .List_Width)
 	testing.expect(t, pane_split_hit(100, lay.lane_y + 10, lay) == .None)
-	ui.tab = .Timesheet
+	ui.tab = .Statistics
 	testing.expect(t, pane_split_hit(100, lay.list_top - 4, lay) == .None)
 	ui.tab = .Day
 

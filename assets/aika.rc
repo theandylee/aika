@@ -1,2 +1,5 @@
 // RT_MANIFEST = 24; executable activation-context resource = 1.
 1 24 "aika.manifest"
+
+// Application icon (generated from aika.svg by tools\make-icon.py); id 1 is also the Explorer icon.
+1 ICON "aika.ico"

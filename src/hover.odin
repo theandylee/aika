@@ -18,10 +18,12 @@ Hover_Signature :: struct {
 // tooltip) and the pane splitters. They are the same rectangles the draw code
 // tests, so a bit flips exactly when a hover visual can change.
 hover_targets :: proc(x, y, w, h: i32) -> u32 {
-	rects: [16]windows.RECT
+	rects: [18]windows.RECT
 	n := 0
 	rects[n] = theme_switch_rect(w); n += 1
 	rects[n] = settings_switch_rect(w); n += 1
+	rects[n] = version_rect(w, h); n += 1
+	rects[n] = update_rect(w, h); n += 1 // empty (never hit) when no update is offered
 	for tab in Tab {
 		rects[n] = compute_tabs(tab); n += 1
 	}
