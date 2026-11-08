@@ -239,6 +239,12 @@ dispatch_app_message :: proc(msg: ^windows.MSG) {
 	context.temp_allocator = scratch_begin(&scratch)
 	defer scratch_end(&scratch)
 	if !settings_key(msg) && !date_picker_key(msg) && !tag_picker_key(msg) {
+		// Escape in the filter clears it and hands focus back to the main window.
+		if msg.message == windows.WM_KEYDOWN && msg.wParam == windows.VK_ESCAPE && ui.edit != nil && msg.hwnd == ui.edit {
+			windows.SetWindowTextW(ui.edit, wtext("")) // EN_CHANGE re-reads the filter
+			windows.SetFocus(ui.hwnd)
+			return
+		}
 		// "/" jumps to the filter box from anywhere in the main window.
 		// Matched on WM_KEYDOWN: IsDialogMessage below would swallow the WM_CHAR.
 		if msg.message == windows.WM_KEYDOWN && (msg.wParam == windows.VK_OEM_2 || msg.wParam == windows.VK_DIVIDE) &&
