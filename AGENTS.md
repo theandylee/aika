@@ -36,8 +36,12 @@ Build outputs:
 | `build\aika.exe` | GUI build, Windows subsystem (no console) |
 | `build\aika-cli.exe` | Console build for imports/scripting |
 
-Default database: `data\aika.db` (relative to the working directory).
-Override with `--db <path>`.
+Default database: `%LOCALAPPDATA%\aika\aika.db`. Settings > General > Data folder
+picks a custom folder (remembered in `%LOCALAPPDATA%\aika\data-folder.txt`) and asks
+whether to move the existing files; `src/datadir.odin` does the live switch (flush
+tracker, close DB, copy, reopen, delete originals only after the new DB opened).
+Override everything with `--db <path>` (the folder option is then disabled).
+Commands below that say `data\aika.db` pass `--db` explicitly.
 
 Import ManicTime history directly from its database (no PowerShell, no ManicTime
 DLLs; also available as Settings > Import in the GUI):
@@ -199,6 +203,7 @@ src/
   date_picker.odin  Native owner-drawn date button and calendar popup
   theme.odin      Light/dark toggle, palette/native control colors
   settings.odin   Native Tracking settings window and .settings file
+  datadir.odin    Default/custom data folder, pointer file, live move/switch, folder picker
   tags.odin       Time-range dragging, native searchable tag picker, tag resizing
   task.odin       Running-task lifecycle (tick/stop/flush, clock jumps)
   totals_tree.odin  Hierarchical totals from slash-separated names

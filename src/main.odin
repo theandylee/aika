@@ -41,7 +41,7 @@ main :: proc() {
 	context.temp_allocator = scratch_begin(&scratch)
 	defer scratch_end(&scratch)
 	args := os.args
-	db_path := "data/aika.db"
+	db_path := fmt.tprintf("%s\\%s", datadir_resolve(), DATA_DB_NAME)
 	import_path := ""
 	import_source := ""
 	import_manictime := false
@@ -62,6 +62,7 @@ main :: proc() {
 			}
 			i += 1
 			db_path = args[i]
+			db_path_overridden = true
 		case "--import":
 			if i + 1 >= len(args) || strings.has_prefix(args[i + 1], "--") || args[i + 1] == "" {
 				fmt.eprintln("--import requires a path")
@@ -111,7 +112,7 @@ main :: proc() {
 	// Create the database's own directory (not the cwd's "data"): autostart
 	// launches with an unrelated working directory and an absolute --db.
 	if dir := filepath.dir(db_path); dir != "" && dir != "." {
-		_ = os.make_directory(dir)
+		_ = datadir_make(datadir_norm(dir))
 	}
 
 	db, ok := db_open(db_path)

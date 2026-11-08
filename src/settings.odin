@@ -32,6 +32,7 @@ settings_save_minutes :: proc(db_path: string, minutes: int) -> bool {
 
 SettingsUi :: struct {
 	hwnd, minutes, autostart, import_manictime: windows.HWND,
+	folder, folder_browse, folder_default: windows.HWND,
 	tracking_labels: [2]windows.HWND, // static labels beside the minutes box
 	page: int,                        // index into SETTINGS_PAGES
 	control_failed: bool,
@@ -57,7 +58,11 @@ settings_show_page :: proc(page: int) {
 	for label in settings_ui.tracking_labels {
 		windows.ShowWindow(label, windows.SW_SHOW if tracking else windows.SW_HIDE)
 	}
-	windows.ShowWindow(settings_ui.autostart, windows.SW_SHOW if page == SETTINGS_PAGE_GENERAL else windows.SW_HIDE)
+	general := windows.SW_SHOW if page == SETTINGS_PAGE_GENERAL else windows.SW_HIDE
+	windows.ShowWindow(settings_ui.autostart, general)
+	windows.ShowWindow(settings_ui.folder, general)
+	windows.ShowWindow(settings_ui.folder_browse, general)
+	windows.ShowWindow(settings_ui.folder_default, general)
 	windows.ShowWindow(settings_ui.import_manictime, windows.SW_SHOW if page == SETTINGS_PAGE_IMPORT else windows.SW_HIDE)
 	windows.InvalidateRect(settings_ui.hwnd, nil, windows.TRUE)
 }
@@ -121,6 +126,14 @@ settings_accept :: proc() {
 		settings_focus_page()
 		return
 	}
+	// Validate the folder before anything is applied, so a bad path changes nothing.
+	new_dir, folder_changed, folder_ok := settings_read_folder()
+	if !folder_ok {
+		settings_show_page(SETTINGS_PAGE_GENERAL)
+		windows.MessageBoxW(settings_ui.hwnd, wtext("Enter a full folder path, such as C:\\Users\\you\\aika-data."), wtext("Data folder"), windows.MB_ICONWARNING)
+		windows.SetFocus(settings_ui.folder)
+		return
+	}
 	was_autostart := autostart_enabled()
 	want_autostart := windows.SendMessageW(settings_ui.autostart, windows.BM_GETCHECK, 0, 0) == windows.BST_CHECKED
 	if want_autostart != was_autostart && !autostart_set(want_autostart, global_app.db_path) {
@@ -133,7 +146,61 @@ settings_accept :: proc() {
 		return
 	}
 	global_app.tracker.idle_threshold_ms = i64(minutes) * MS_PER_MINUTE
+	if folder_changed && !settings_change_folder(new_dir, minutes) { return }
 	settings_close()
+}
+
+// Folder text from the edit box. `changed` compares against the open database's
+// folder; `ok` is false for text that is not a full path.
+settings_read_folder :: proc() -> (dir: string, changed, ok: bool) {
+	if db_path_overridden { return "", false, true }
+	buf: [1024]u16
+	n := windows.GetWindowTextW(settings_ui.folder, &buf[0], len(buf))
+	text, _ := windows.utf16_to_utf8(buf[:max(0, n)], context.temp_allocator)
+	dir = datadir_norm(text)
+	if !datadir_is_abs(dir) { return dir, false, false }
+	return dir, !strings.equal_fold(dir, datadir_current(global_app)), true
+}
+
+// Asks whether to move the data, then switches. Returns false to stay in settings.
+settings_change_folder :: proc(new_dir: string, minutes: int) -> bool {
+	owner := settings_ui.hwnd
+	caption := wtext("Data folder")
+	old_dir := datadir_current(global_app)
+	answer := windows.MessageBoxW(owner, wtext(fmt.tprintf(
+		"Move your existing data to the new folder?\n\nFrom: %s\nTo: %s\n\nYes: copy your data there and remove it from the old folder.\nNo: switch folders without moving. aika uses what is already in the new folder, or starts a new database.\nCancel: keep the current folder.",
+		old_dir, new_dir)), caption, windows.MB_YESNOCANCEL | windows.MB_ICONQUESTION)
+	if answer != windows.IDYES && answer != windows.IDNO { return false }
+
+	was_autostart := autostart_enabled()
+	result := datadir_switch(global_app, new_dir, answer == windows.IDYES)
+	text: string
+	switch result {
+	case .Ok:
+		// Settings and the startup entry follow the database.
+		settings_save_minutes(global_app.db_path, minutes)
+		global_app.tracker.idle_threshold_ms = i64(minutes) * MS_PER_MINUTE
+		if was_autostart { autostart_set(true, global_app.db_path) }
+		windows.InvalidateRect(ui.hwnd, nil, windows.TRUE)
+		return true
+	case .Unusable_Folder: text = "aika cannot create or write to that folder. Choose another one."
+	case .Has_Data:        text = "That folder already contains an aika database, so it cannot be overwritten. Choose No to use it, or pick another folder."
+	case .Pointer_Failed:  text = "Could not remember the new folder. Nothing was changed."
+	case .Flush_Failed:    text = "Could not save the activity in progress. Nothing was changed; try again."
+	case .Copy_Failed:     text = "Could not copy your data to the new folder. Nothing was moved."
+	case .Open_Failed:     text = "Could not open a database in the new folder. Nothing was moved."
+	}
+	windows.MessageBoxW(owner, wtext(text), caption, windows.MB_ICONERROR)
+	return false
+}
+
+settings_folder_browse :: proc() {
+	buf: [1024]u16
+	n := windows.GetWindowTextW(settings_ui.folder, &buf[0], len(buf))
+	text, _ := windows.utf16_to_utf8(buf[:max(0, n)], context.temp_allocator)
+	if path, ok := datadir_browse(settings_ui.hwnd, datadir_norm(text)); ok {
+		windows.SetWindowTextW(settings_ui.folder, wtext(path))
+	}
 }
 
 // OK/Cancel are owner-drawn with the same flat face/border as the date button,
@@ -182,6 +249,11 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 			fill_rect(dc, 172, 14, 62, 18, C_BG)
 			draw_string(dc, "Startup", 176, 16, ui.font_normal, C_TXT)
 			draw_string(dc, "Runs from this folder; toggle again if you move aika.", 176, 76, ui.font_normal, C_DIM)
+			fill_frame(dc, 164, 124, 370, 118, C_BORDER)
+			fill_rect(dc, 172, 116, 92, 18, C_BG)
+			draw_string(dc, "Data folder", 176, 118, ui.font_normal, C_TXT)
+			note := "Set by --db for this run; it cannot be changed here." if db_path_overridden else "Your database and settings are kept here."
+			draw_string(dc, note, 176, 214, ui.font_normal, C_DIM)
 		} else if settings_ui.page == SETTINGS_PAGE_IMPORT {
 			fill_frame(dc, 164, 22, 370, 110, C_BORDER)
 			fill_rect(dc, 172, 14, 90, 18, C_BG)
@@ -201,7 +273,8 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 	case windows.WM_DRAWITEM:
 		item := transmute(^Draw_Item)(lp)
 		if item != nil && (item.CtlID == SETTINGS_ID_OK || item.CtlID == SETTINGS_ID_CANCEL ||
-		   item.CtlID == SETTINGS_ID_IMPORT_MANICTIME) {
+		   item.CtlID == SETTINGS_ID_IMPORT_MANICTIME || item.CtlID == SETTINGS_ID_FOLDER_BROWSE ||
+		   item.CtlID == SETTINGS_ID_FOLDER_DEFAULT) {
 			draw_settings_button(item)
 			return 1
 		}
@@ -223,6 +296,9 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		case SETTINGS_ID_OK: settings_accept()
 		case SETTINGS_ID_CANCEL: settings_close()
 		case SETTINGS_ID_IMPORT_MANICTIME: settings_import_manictime()
+		case SETTINGS_ID_FOLDER_BROWSE: settings_folder_browse()
+		case SETTINGS_ID_FOLDER_DEFAULT:
+			windows.SetWindowTextW(settings_ui.folder, wtext(datadir_default()))
 		}
 		return 0
 	}
@@ -270,6 +346,17 @@ settings_open :: proc() {
 	}
 	settings_ui.import_manictime = settings_control("BUTTON", "Import data from ManicTime",
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 176, 44, 220, 28, SETTINGS_ID_IMPORT_MANICTIME)
+	settings_ui.folder = settings_control("EDIT", datadir_current(global_app),
+		windows.WS_BORDER | windows.WS_TABSTOP | windows.ES_AUTOHSCROLL, 176, 148, 348, 24, SETTINGS_ID_FOLDER)
+	settings_ui.folder_browse = settings_control("BUTTON", "Browse…",
+		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 176, 180, 96, 28, SETTINGS_ID_FOLDER_BROWSE)
+	settings_ui.folder_default = settings_control("BUTTON", "Use default",
+		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 280, 180, 110, 28, SETTINGS_ID_FOLDER_DEFAULT)
+	if db_path_overridden {
+		windows.EnableWindow(settings_ui.folder, windows.FALSE)
+		windows.EnableWindow(settings_ui.folder_browse, windows.FALSE)
+		windows.EnableWindow(settings_ui.folder_default, windows.FALSE)
+	}
 	settings_control("BUTTON", "OK", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 334, 394, 96, 28, SETTINGS_ID_OK)
 	settings_control("BUTTON", "Cancel", windows.WS_TABSTOP | windows.BS_OWNERDRAW, 438, 394, 96, 28, SETTINGS_ID_CANCEL)
 	if settings_ui.control_failed { settings_close(); return }
@@ -277,6 +364,7 @@ settings_open :: proc() {
 	DwmSetWindowAttribute(settings_ui.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, size_of(dark))
 	SetWindowTheme(settings_ui.minutes, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	SetWindowTheme(settings_ui.autostart, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
+	SetWindowTheme(settings_ui.folder, wtext("DarkMode_Explorer") if ui.dark else nil, nil)
 	windows.EnableWindow(ui.hwnd, windows.FALSE)
 	settings_show_page(SETTINGS_PAGE_GENERAL)
 	windows.ShowWindow(settings_ui.hwnd, windows.SW_SHOW)
