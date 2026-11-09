@@ -232,6 +232,7 @@ settings_save_layout :: proc() {
 
 SettingsUi :: struct {
 	hwnd, minutes, autostart, updates_start, updates_periodic, import_manictime: windows.HWND,
+	updates_check, updates_status: windows.HWND, // "Check for updates" button + result label
 	folder, folder_browse, folder_default, folder_open: windows.HWND,
 	day_shift: windows.HWND,          // combo box, items DAY_SHIFT_MIN..DAY_SHIFT_MAX
 	day_labels: [2]windows.HWND,      // "Shift day start by" / "hours"
@@ -241,10 +242,11 @@ SettingsUi :: struct {
 }
 settings_ui: SettingsUi
 
-SETTINGS_PAGES :: [3]string{"General", "Tracking", "Import"}
+SETTINGS_PAGES :: [4]string{"General", "Tracking", "Updates", "Import"}
 SETTINGS_PAGE_GENERAL  :: 0
 SETTINGS_PAGE_TRACKING :: 1
-SETTINGS_PAGE_IMPORT   :: 2
+SETTINGS_PAGE_UPDATES  :: 2
+SETTINGS_PAGE_IMPORT   :: 3
 
 settings_page_rect :: proc(i: int) -> windows.RECT {
 	y := i32(9 + 28 * i) // first row sits right under the panel's 1px border at y = 8
@@ -262,8 +264,11 @@ settings_show_page :: proc(page: int) {
 	}
 	general := windows.SW_SHOW if page == SETTINGS_PAGE_GENERAL else windows.SW_HIDE
 	windows.ShowWindow(settings_ui.autostart, general)
-	windows.ShowWindow(settings_ui.updates_start, general)
-	windows.ShowWindow(settings_ui.updates_periodic, general)
+	updates := windows.SW_SHOW if page == SETTINGS_PAGE_UPDATES else windows.SW_HIDE
+	windows.ShowWindow(settings_ui.updates_start, updates)
+	windows.ShowWindow(settings_ui.updates_periodic, updates)
+	windows.ShowWindow(settings_ui.updates_check, updates)
+	windows.ShowWindow(settings_ui.updates_status, updates)
 	windows.ShowWindow(settings_ui.folder, general)
 	windows.ShowWindow(settings_ui.folder_browse, general)
 	windows.ShowWindow(settings_ui.folder_default, general)
@@ -278,6 +283,8 @@ settings_focus_page :: proc() {
 	if settings_ui.page == SETTINGS_PAGE_TRACKING {
 		windows.SetFocus(settings_ui.minutes)
 		windows.SendMessageW(settings_ui.minutes, windows.EM_SETSEL, 0, -1)
+	} else if settings_ui.page == SETTINGS_PAGE_UPDATES {
+		windows.SetFocus(settings_ui.updates_start)
 	} else if settings_ui.page == SETTINGS_PAGE_IMPORT {
 		windows.SetFocus(settings_ui.import_manictime)
 	} else {
@@ -528,14 +535,15 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 			draw_string(dc, "Data folder", 176, 118, ui.font_normal, C_TXT)
 			note := "Set by --db for this run; it cannot be changed here." if db_path_overridden else "Your database and settings are kept here."
 			draw_string(dc, note, 176, 214, ui.font_normal, C_DIM)
-			fill_frame(dc, 164, 262, 370, 108, C_BORDER)
-			fill_rect(dc, 172, 254, 70, 18, C_BG)
-			draw_string(dc, "Updates", 176, 256, ui.font_normal, C_TXT)
-			draw_string(dc, "Asks GitHub for the latest release; nothing else is sent.", 176, 342, ui.font_normal, C_DIM)
-			fill_frame(dc, 164, 390, 370, 82, C_BORDER)
-			fill_rect(dc, 172, 382, 40, 18, C_BG)
-			draw_string(dc, "Day", 176, 384, ui.font_normal, C_TXT)
-			draw_string(dc, "Hours after midnight at which a new day begins.", 176, 440, ui.font_normal, C_DIM)
+			fill_frame(dc, 164, 262, 370, 82, C_BORDER)
+			fill_rect(dc, 172, 254, 40, 18, C_BG)
+			draw_string(dc, "Day", 176, 256, ui.font_normal, C_TXT)
+			draw_string(dc, "Hours after midnight at which a new day begins.", 176, 312, ui.font_normal, C_DIM)
+		} else if settings_ui.page == SETTINGS_PAGE_UPDATES {
+			fill_frame(dc, 164, 22, 370, 142, C_BORDER)
+			fill_rect(dc, 172, 14, 70, 18, C_BG)
+			draw_string(dc, "Updates", 176, 16, ui.font_normal, C_TXT)
+			draw_string(dc, "Asks GitHub for the latest release; nothing else is sent.", 176, 39, ui.font_normal, C_DIM)
 		} else if settings_ui.page == SETTINGS_PAGE_IMPORT {
 			fill_frame(dc, 164, 22, 370, 110, C_BORDER)
 			fill_rect(dc, 172, 14, 90, 18, C_BG)
@@ -559,7 +567,8 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 		item := transmute(^Draw_Item)(lp)
 		if item != nil && (item.CtlID == SETTINGS_ID_OK || item.CtlID == SETTINGS_ID_CANCEL ||
 		   item.CtlID == SETTINGS_ID_IMPORT_MANICTIME || item.CtlID == SETTINGS_ID_FOLDER_BROWSE ||
-		   item.CtlID == SETTINGS_ID_FOLDER_DEFAULT || item.CtlID == SETTINGS_ID_FOLDER_OPEN) {
+		   item.CtlID == SETTINGS_ID_FOLDER_DEFAULT || item.CtlID == SETTINGS_ID_FOLDER_OPEN ||
+		   item.CtlID == SETTINGS_ID_UPDATES_CHECK) {
 			draw_settings_button(item)
 			return 1
 		}
@@ -576,8 +585,14 @@ settings_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wp: windows.WPARAM, l
 	case windows.WM_CLOSE:
 		settings_close()
 		return 0
+	case UPDATE_CHECKED:
+		windows.SetWindowTextW(settings_ui.updates_status, wtext(update_status_text()))
+		return 0
 	case windows.WM_COMMAND:
 		switch u32(wp) & 0xFFFF {
+		case SETTINGS_ID_UPDATES_CHECK:
+			update_check_now()
+			windows.SetWindowTextW(settings_ui.updates_status, wtext(update_status_text()))
 		case SETTINGS_ID_OK: settings_accept()
 		case SETTINGS_ID_CANCEL: settings_close()
 		case SETTINGS_ID_IMPORT_MANICTIME: settings_import_manictime()
@@ -638,15 +653,18 @@ settings_open :: proc() {
 	}
 	on_start, periodic := update_policy()
 	settings_ui.updates_start = settings_control("BUTTON", "Check for updates on start",
-		windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 176, 284, 340, 24, SETTINGS_ID_UPDATES_START)
+		windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 176, 60, 340, 24, SETTINGS_ID_UPDATES_START)
 	settings_ui.updates_periodic = settings_control("BUTTON", "Check for updates every 6 hours while running",
-		windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 176, 312, 340, 24, SETTINGS_ID_UPDATES_PERIODIC)
+		windows.WS_TABSTOP | windows.BS_AUTOCHECKBOX, 176, 92, 340, 24, SETTINGS_ID_UPDATES_PERIODIC)
 	if settings_ui.updates_start != nil && on_start {
 		windows.SendMessageW(settings_ui.updates_start, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
 	}
 	if settings_ui.updates_periodic != nil && periodic {
 		windows.SendMessageW(settings_ui.updates_periodic, windows.BM_SETCHECK, windows.WPARAM(windows.BST_CHECKED), 0)
 	}
+	settings_ui.updates_check = settings_control("BUTTON", "Check now",
+		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 176, 124, 110, 28, SETTINGS_ID_UPDATES_CHECK)
+	settings_ui.updates_status = settings_control("STATIC", update_status_text(), 0, 296, 128, 230, 22, 0)
 	settings_ui.import_manictime = settings_control("BUTTON", "Import data from ManicTime",
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 176, 44, 220, 28, SETTINGS_ID_IMPORT_MANICTIME)
 	settings_ui.folder = settings_control("EDIT", datadir_current(global_app),
@@ -657,10 +675,10 @@ settings_open :: proc() {
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 280, 180, 110, 28, SETTINGS_ID_FOLDER_DEFAULT)
 	settings_ui.folder_open = settings_control("BUTTON", "Open folder",
 		windows.WS_TABSTOP | windows.BS_OWNERDRAW, 398, 180, 110, 28, SETTINGS_ID_FOLDER_OPEN)
-	settings_ui.day_labels[0] = settings_control("STATIC", "Shift day start by", 0, 176, 412, 112, 22, 0)
+	settings_ui.day_labels[0] = settings_control("STATIC", "Shift day start by", 0, 176, 284, 112, 22, 0)
 	settings_ui.day_shift = settings_control("COMBOBOX", "",
-		windows.WS_TABSTOP | windows.WS_VSCROLL | windows.CBS_DROPDOWNLIST, 292, 408, 68, 260, SETTINGS_ID_DAY_SHIFT)
-	settings_ui.day_labels[1] = settings_control("STATIC", "hours", 0, 368, 412, 60, 22, 0)
+		windows.WS_TABSTOP | windows.WS_VSCROLL | windows.CBS_DROPDOWNLIST, 292, 280, 68, 260, SETTINGS_ID_DAY_SHIFT)
+	settings_ui.day_labels[1] = settings_control("STATIC", "hours", 0, 368, 284, 60, 22, 0)
 	for h in DAY_SHIFT_MIN ..= DAY_SHIFT_MAX {
 		windows.SendMessageW(settings_ui.day_shift, windows.CB_ADDSTRING, 0, windows.LPARAM(uintptr(rawptr(wtext(fmt.tprintf("%d", h))))))
 	}

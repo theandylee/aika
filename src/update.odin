@@ -45,6 +45,8 @@ Updater :: struct {
 	next_check_ms: i64,
 	failures:  int, // consecutive failed checks (drives the retry backoff)
 	started:   bool,
+	has_result: bool,         // a check has finished since launch
+	last_result: Fetch_Result, // outcome of that check (for the Settings status line)
 	on_start, periodic: bool, // set from settings (update_set_policy)
 }
 
@@ -264,8 +266,37 @@ update_check_worker :: proc() {
 		}
 	}
 	if result != .Failed { updater.failures = 0 }
+	updater.has_result, updater.last_result = true, result
 	sync.mutex_unlock(&updater.mu)
 	if hwnd != nil { windows.PostMessageW(hwnd, UPDATE_CHECKED, 0, 0) }
+	if shwnd := settings_ui.hwnd; shwnd != nil { windows.PostMessageW(shwnd, UPDATE_CHECKED, 0, 0) }
+}
+
+// Settings "Check for updates": runs a check now unless one is already running.
+update_check_now :: proc() {
+	if AIKA_VERSION == "dev" { return }
+	sync.mutex_lock(&updater.mu)
+	defer sync.mutex_unlock(&updater.mu)
+	if updater.state != .Idle { return }
+	updater.state = .Checking
+	thread.create_and_start(update_check_worker, self_cleanup = true)
+}
+
+// One-line result of the latest check for the Settings page.
+update_status_text :: proc() -> string {
+	if AIKA_VERSION == "dev" { return "Dev build: updates off." }
+	sync.mutex_lock(&updater.mu)
+	defer sync.mutex_unlock(&updater.mu)
+	switch updater.state {
+	case .Checking:    return "Checking…"
+	case .Available:   return fmt.tprintf("Version v%s is available.", updater.latest)
+	case .Downloading: return "Updating…"
+	case .Idle:
+		if !updater.has_result { return "" }
+		if updater.last_result == .Failed { return "Could not reach GitHub." }
+		return "You're up to date."
+	}
+	return ""
 }
 
 // Delay before the retry after the n-th consecutive failed check (1-based): 1 min,
