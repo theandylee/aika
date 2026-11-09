@@ -40,6 +40,7 @@ UiState :: struct {
 	tray_hwnd:    windows.HWND,
 	tray_menu_open: bool,
 	tray_added:   bool,
+	tray_error:   u32, // last GetLastError from a failed NIM_ADD (diagnostics)
 	taskbar_created: u32,
 	edit:         windows.HWND,
 	date_picker:  windows.HWND,
@@ -162,7 +163,20 @@ ui_add_tray :: proc() -> bool {
 		hIcon = app_icon(windows.GetSystemMetrics(windows.SM_CXSMICON), windows.GetSystemMetrics(windows.SM_CYSMICON)),
 	}
 	copy(data.szTip[:], windows.utf8_to_utf16("aika", context.temp_allocator))
-	ui.tray_added = bool(windows.Shell_NotifyIconW(windows.NIM_ADD, &data))
+	// The shell can time out or still be starting (NIM_ADD then fails even though the
+	// icon may exist). Retry a few times and fall back to NIM_MODIFY for an existing icon.
+	for _ in 0..<4 {
+		if bool(windows.Shell_NotifyIconW(windows.NIM_ADD, &data)) {
+			ui.tray_added = true
+			break
+		}
+		ui.tray_error = u32(windows.GetLastError())
+		if bool(windows.Shell_NotifyIconW(windows.NIM_MODIFY, &data)) {
+			ui.tray_added = true
+			break
+		}
+		windows.Sleep(250)
+	}
 	return ui.tray_added
 }
 
@@ -891,7 +905,7 @@ wnd_proc :: proc "std" (hwnd: windows.HWND, msg: u32, wparam: windows.WPARAM, lp
 		if ui.tray_added || ui_add_tray() {
 			windows.ShowWindow(hwnd, windows.SW_HIDE)
 		} else {
-			message_box("Could not create the system tray icon. aika will stay open.", "aika", windows.MB_ICONWARNING)
+			message_box(fmt.tprintf("Could not create the system tray icon (error %d). aika will stay open.", ui.tray_error), "aika", windows.MB_ICONWARNING)
 		}
 		return 0
 	case TRAY_MESSAGE:
